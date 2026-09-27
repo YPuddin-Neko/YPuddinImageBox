@@ -17,14 +17,23 @@ interface ShimmerImageProps {
  */
 export function ShimmerImage({ src, alt, className, loading = "lazy", fit = "cover" }: ShimmerImageProps) {
   const [state, setState] = useState<LoadState>(src ? "loading" : "failed");
+  /** 挂载时图已经在缓存里（例如瀑布流里滚出去又滚回来的卡片）：直接显示，不再淡入一次。 */
+  const [instant, setInstant] = useState(false);
 
   // 已在内存缓存里的图可能在事件绑定前就完成加载，挂载时补查一次。
   const probe = useCallback((img: HTMLImageElement | null) => {
-    if (img?.complete) setState(img.naturalWidth > 0 ? "loaded" : "failed");
+    if (!img?.complete) return;
+    setInstant(true);
+    setState(img.naturalWidth > 0 ? "loaded" : "failed");
   }, []);
 
   return (
-    <span className={`shimmer-img ${className ?? ""}`} data-state={state} data-fit={fit}>
+    <span
+      className={`shimmer-img ${className ?? ""}`}
+      data-state={state}
+      data-fit={fit}
+      data-instant={instant || undefined}
+    >
       {src && (
         <img
           ref={probe}
