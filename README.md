@@ -5,6 +5,18 @@
 - 技术方案与进度：[docs/architecture.md](docs/architecture.md)
 - 界面设计稿：`design/`（风格提案、夜幕画廊配色）
 
+## 下载安装包
+
+每次推送到 GitHub 都会自动构建（[Actions → 构建](https://github.com/YPuddin-Neko/YPuddinImageBox/actions/workflows/build.yml)），打开某次运行，在页面底部的 Artifacts 里下载：
+
+- `ImageBox-macos-universal`：macOS 12 以上，Apple 芯片和 Intel 通用的 .dmg
+- `ImageBox-windows-x64`：Windows 10 / 11 安装程序（.exe）
+
+安装包没有做开发者签名：
+
+- **macOS**：第一次打开会提示无法验证开发者。到「系统设置 → 隐私与安全性」底部点「仍要打开」，之后就能正常打开。
+- **Windows**：SmartScreen 提示时点「更多信息 → 仍要运行」。
+
 ## 开发环境
 
 - Node.js 20 以上、pnpm
