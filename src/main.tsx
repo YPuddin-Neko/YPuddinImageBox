@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "@fontsource-variable/manrope";
 
 import App from "./App";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./styles/themes.css";
 import "./styles/app.css";
 import { applyTheme, loadPrefs, resolveThemeId, systemDarkQuery } from "./theme/themes";
@@ -13,6 +14,8 @@ document.documentElement.classList.toggle("is-mac", /Mac/.test(navigator.userAge
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>,
 );

@@ -7,7 +7,7 @@ import { formatCount, formatTime } from "../../lib/format";
 import { errorMessage, SOURCE_LABEL } from "../../lib/ipc";
 import { EASE_OUT } from "../../lib/motion";
 import type { Navigate } from "../../lib/nav";
-import { useDownloads } from "./DownloadsProvider";
+import { useDownloads } from "./context";
 
 type Notes = ItemNote[] | "loading" | "failed";
 

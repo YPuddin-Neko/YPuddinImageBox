@@ -26,7 +26,7 @@ import {
 import type { PostRef } from "../../lib/library";
 import type { Navigate } from "../../lib/nav";
 import { INTERVALS, subscriptionCreate, subscriptionTitle } from "../../lib/subscriptions";
-import { useDownloads } from "../downloads/DownloadsProvider";
+import { useDownloads } from "../downloads/context";
 import { Inspector } from "./Inspector";
 
 interface Criteria {

@@ -15,7 +15,7 @@ import { libraryDelete, libraryList, type LocalPost, type PostRef } from "../../
 import type { Navigate } from "../../lib/nav";
 import { revealLabel, trashLabel } from "../../lib/platform";
 import { Inspector } from "../discover/Inspector";
-import { useDownloads } from "../downloads/DownloadsProvider";
+import { useDownloads } from "../downloads/context";
 
 interface Filter {
   source: Source | "all";

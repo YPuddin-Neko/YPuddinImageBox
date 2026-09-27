@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import {
   clearFinishedJobs,
@@ -9,25 +9,10 @@ import {
   jobAction,
   listJobs,
   type Job,
-  type JobAction,
 } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
 import { errorMessage, type Post, type SearchParams } from "../../lib/ipc";
-
-interface DownloadsValue {
-  /** 新加入的在前。 */
-  jobs: Job[];
-  loaded: boolean;
-  loadError: string | null;
-  /** 排队中和下载中的任务数，侧栏角标用。 */
-  activeCount: number;
-  act: (id: number, action: JobAction) => Promise<void>;
-  clearFinished: () => Promise<void>;
-  addPosts: (posts: Post[]) => Promise<Job>;
-  addQuery: (params: SearchParams, maxPosts: number | null) => Promise<Job>;
-}
-
-const DownloadsContext = createContext<DownloadsValue | null>(null);
+import { DownloadsContext, type DownloadsValue } from "./context";
 
 /** 只接受不比手上旧的数据：列表请求和实时事件可能交错到达。 */
 function upsert(jobs: Map<number, Job>, job: Job): Map<number, Job> {
@@ -92,10 +77,4 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
   }, [jobs, loaded, loadError, addPosts, addQuery]);
 
   return <DownloadsContext.Provider value={value}>{children}</DownloadsContext.Provider>;
-}
-
-export function useDownloads(): DownloadsValue {
-  const value = useContext(DownloadsContext);
-  if (!value) throw new Error("useDownloads 需要放在 DownloadsProvider 里面");
-  return value;
 }

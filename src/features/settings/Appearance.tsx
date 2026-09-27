@@ -1,5 +1,5 @@
 import { Icon } from "../../components/Icon";
-import { useTheme } from "../../theme/ThemeProvider";
+import { useTheme } from "../../theme/context";
 import { findTheme, THEMES, type ThemeInfo } from "../../theme/themes";
 
 const MODE_LABEL = { dark: "深色", light: "浅色" } as const;

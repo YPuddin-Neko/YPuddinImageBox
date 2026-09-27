@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import {
   findTheme,
@@ -9,16 +9,7 @@ import {
   systemDarkQuery,
   type AppearancePrefs,
 } from "./themes";
-
-interface ThemeContextValue {
-  prefs: AppearancePrefs;
-  activeId: string;
-  /** 不跟随系统时直接换主题；跟随系统时替换该主题所属明暗那一套。 */
-  chooseTheme: (id: string) => void;
-  setFollowSystem: (follow: boolean) => void;
-}
-
-const ThemeContext = createContext<ThemeContextValue | null>(null);
+import { ThemeContext } from "./context";
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<AppearancePrefs>(loadPrefs);
@@ -59,10 +50,4 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     [prefs, activeId, chooseTheme, setFollowSystem],
   );
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
-}
-
-export function useTheme(): ThemeContextValue {
-  const value = useContext(ThemeContext);
-  if (!value) throw new Error("useTheme must be used inside ThemeProvider");
-  return value;
 }
