@@ -269,6 +269,25 @@ impl Accounts {
     fn gelbooru(&self) -> Result<&gelbooru::Credentials, AppError> {
         self.gelbooru.as_ref().ok_or(AppError::CredentialsMissing("Gelbooru"))
     }
+
+    pub fn api_key(&self, source: Source) -> Option<&str> {
+        match source {
+            Source::Danbooru => self.danbooru.as_ref().map(|c| c.api_key.as_str()),
+            Source::Gelbooru => self.gelbooru.as_ref().map(|c| c.api_key.as_str()),
+        }
+    }
+
+    /// 设置或清除某个站点的账号。
+    pub fn set(&mut self, source: Source, account: Option<(String, String)>) {
+        match source {
+            Source::Danbooru => {
+                self.danbooru = account.map(|(username, api_key)| danbooru::Credentials { username, api_key })
+            }
+            Source::Gelbooru => {
+                self.gelbooru = account.map(|(user_id, api_key)| gelbooru::Credentials { user_id, api_key })
+            }
+        }
+    }
 }
 
 /// 运行中可以修改的账号：设置页保存后，之后发出的请求立即使用新账号。

@@ -1,9 +1,11 @@
 mod commands;
 pub mod downloader;
 pub mod error;
+mod keys;
 pub mod library;
 pub mod net;
 mod protocol;
+mod sealed;
 mod secrets;
 pub mod settings;
 pub mod sources;
@@ -18,8 +20,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use downloader::{Downloader, Event, EventSink};
 use error::AppError;
 use library::Library;
-use settings::{AccountNames, ProxySettings, Settings};
-use sources::{danbooru, gelbooru, AccountStore, Accounts, Source};
+use settings::{ProxySettings, Settings};
+use sources::{AccountStore, Source};
 use storage::{Defaults, Storage, StorageKind};
 
 pub struct AppState {
@@ -67,28 +69,6 @@ impl AppState {
     pub fn clear_accounts_error(&self) {
         *self.accounts_error.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
-}
-
-/// 按设置里记着的账号去钥匙串取 API Key。没登录的站点不访问钥匙串。
-fn load_accounts(names: &AccountNames) -> (Accounts, Option<String>) {
-    let mut accounts = Accounts::default();
-    let mut error = None;
-    for source in [Source::Danbooru, Source::Gelbooru] {
-        let Some(saved) = names.get(source) else { continue };
-        match secrets::read(source, &saved.name) {
-            Ok(Some(api_key)) => match source {
-                Source::Danbooru => {
-                    accounts.danbooru = Some(danbooru::Credentials { username: saved.name.clone(), api_key })
-                }
-                Source::Gelbooru => {
-                    accounts.gelbooru = Some(gelbooru::Credentials { user_id: saved.name.clone(), api_key })
-                }
-            },
-            Ok(None) => {}
-            Err(err) => error = Some(err.to_string()),
-        }
-    }
-    (accounts, error)
 }
 
 #[derive(Clone, Serialize)]
@@ -141,7 +121,7 @@ pub fn run() {
             // 存下来的代理地址失效时先用系统代理启动，设置页里还能看到原来填的地址。
             let net = net::Net::new(&settings.proxy).or_else(|_| net::Net::new(&ProxySettings::default()))?;
             let net = Arc::new(net);
-            let (accounts, accounts_error) = load_accounts(&settings.accounts);
+            let (accounts, accounts_error) = keys::load(&settings);
             let accounts = Arc::new(AccountStore::new(accounts));
             let library = tauri::async_runtime::block_on(async {
                 let library = Library::open(&db_dir).await?;
@@ -192,6 +172,7 @@ pub fn run() {
             commands::accounts_info,
             commands::account_save,
             commands::account_remove,
+            commands::account_key_storage,
             commands::proxy_info,
             commands::proxy_save,
             commands::proxy_test,

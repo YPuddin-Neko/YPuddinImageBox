@@ -5,7 +5,15 @@ import { Icon } from "../../components/Icon";
 import { Toast, useToast } from "../../components/Toast";
 import { errorMessage, SOURCE_LABEL, type Source } from "../../lib/ipc";
 import { isMac } from "../../lib/platform";
-import { accountRemove, accountSave, accountsInfo, type AccountsInfo, type AccountView } from "../../lib/settings";
+import {
+  accountKeyStorage,
+  accountRemove,
+  accountSave,
+  accountsInfo,
+  type AccountsInfo,
+  type AccountView,
+  type KeyStorage,
+} from "../../lib/settings";
 
 interface SiteText {
   nameLabel: string;
@@ -36,6 +44,19 @@ const SITES: Record<Source, SiteText> = {
 };
 
 const KEYCHAIN = isMac ? "钥匙串" : "Windows 凭据管理器";
+
+const STORAGE_OPTIONS: { value: KeyStorage; title: string; description: string }[] = [
+  {
+    value: "keychain",
+    title: isMac ? "系统钥匙串" : "凭据管理器",
+    description: `交给系统的${KEYCHAIN}保管，最安全，推荐使用。`,
+  },
+  {
+    value: "file",
+    title: "设置文件",
+    description: "用这台电脑专属的密钥加密后存在设置文件里；文件被复制到别的电脑上解不开，换电脑需要重新填写。",
+  },
+];
 
 function AccountCard({
   account,
@@ -177,22 +198,38 @@ function AccountCard({
 export function AccountsSettings() {
   const [info, setInfo] = useState<AccountsInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
   const [notice, setNotice] = useToast();
 
   useEffect(() => {
     accountsInfo().then(setInfo, (err) => setError(errorMessage(err)));
   }, []);
 
+  const changeStorage = async (storage: KeyStorage) => {
+    setSwitching(true);
+    setError(null);
+    try {
+      setInfo(await accountKeyStorage(storage));
+      setNotice(storage === "file" ? "API Key 已改为加密保存在设置文件里" : `API Key 已改为保存在系统${KEYCHAIN}里`);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  const where = info?.keyStorage === "file" ? "加密后存在设置文件里" : `存在系统${KEYCHAIN}里`;
+
   return (
     <div className="settings-page">
       <header className="settings-head">
         <h1>账号</h1>
-        <p>保存前会先用填写的账号访问一次站点。API Key 存在系统{KEYCHAIN}里，不写进任何文件。</p>
+        <p>保存前会先用填写的账号访问一次站点。API Key {where}。</p>
       </header>
 
       {(error ?? info?.error) && (
         <div className="alert" role="alert">
-          <span>{error ?? `读取${KEYCHAIN}失败：${info?.error}`}</span>
+          <span>{error ?? `读取 API Key 失败：${info?.error}`}</span>
         </div>
       )}
 
@@ -205,6 +242,30 @@ export function AccountsSettings() {
             onNotice={setNotice}
           />
         ))}
+
+        {info && (
+          <section className="set-card" aria-labelledby="key-storage-title">
+            <div className="set-title">
+              <h2 id="key-storage-title">API Key 的保存方式</h2>
+            </div>
+            <p className="set-desc">切换后，已经保存的 API Key 会一起搬过去。</p>
+            <div className="options" role="radiogroup" aria-labelledby="key-storage-title">
+              {STORAGE_OPTIONS.map((option) => (
+                <label key={option.value} className="option" data-checked={info.keyStorage === option.value || undefined}>
+                  <input
+                    type="radio"
+                    name="key-storage"
+                    checked={info.keyStorage === option.value}
+                    disabled={switching}
+                    onChange={() => void changeStorage(option.value)}
+                  />
+                  <span className="option-title">{option.title}</span>
+                  <span className="option-desc">{option.description}</span>
+                </label>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
 
       <Toast message={notice} />

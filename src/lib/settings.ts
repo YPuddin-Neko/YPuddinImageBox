@@ -11,9 +11,13 @@ export interface AccountView {
   keyMissing: boolean;
 }
 
+/** API Key 的保存方式：系统钥匙串，或加密后存在设置文件里。 */
+export type KeyStorage = "keychain" | "file";
+
 export interface AccountsInfo {
   accounts: AccountView[];
-  /** 启动时读取钥匙串失败的原因。 */
+  keyStorage: KeyStorage;
+  /** 启动时读取 API Key 失败的原因。 */
   error: string | null;
 }
 
@@ -28,6 +32,8 @@ export const accountsInfo = () => invoke<AccountsInfo>("accounts_info");
 export const accountSave = (source: Source, name: string, apiKey: string) =>
   invoke<AccountsInfo>("account_save", { source, name, apiKey });
 export const accountRemove = (source: Source) => invoke<AccountsInfo>("account_remove", { source });
+/** 切换保存方式，已保存的 Key 一起搬过去。 */
+export const accountKeyStorage = (storage: KeyStorage) => invoke<AccountsInfo>("account_key_storage", { storage });
 
 export const proxyInfo = () => invoke<ProxySettings>("proxy_info");
 export const proxySave = (proxy: ProxySettings) => invoke<ProxySettings>("proxy_save", { proxy });

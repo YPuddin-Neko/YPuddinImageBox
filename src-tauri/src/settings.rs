@@ -1,7 +1,8 @@
 //! 软件设置：存在「软件数据」位置的 settings.json。
 //!
-//! 只放不敏感的内容：代理、各站点的用户名。API Key 存在系统钥匙串里（见 [`crate::secrets`]），
-//! 这里记下用户名，启动时才知道要去钥匙串取哪一项；没填账号的用户完全不会访问钥匙串。
+//! 代理、各站点的用户名，以及 API Key 的保存方式。API Key 默认存在系统钥匙串里（见 [`crate::secrets`]），
+//! 这里只记用户名；用户选了「加密保存在设置文件」时，这里存的是密文（见 [`crate::sealed`]）。
+//! 没填账号的用户完全不会访问钥匙串。
 
 use std::fs;
 use std::io;
@@ -22,6 +23,22 @@ pub struct Settings {
     pub proxy: ProxySettings,
     #[serde(default)]
     pub accounts: AccountNames,
+    /// 新保存的 API Key 放在哪。
+    #[serde(default)]
+    pub key_storage: KeyStorage,
+    /// 加密保存 API Key 用的随机盐，第一次需要时生成。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_salt: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyStorage {
+    /// 系统钥匙串（macOS 钥匙串 / Windows 凭据管理器）。
+    #[default]
+    Keychain,
+    /// 加密后存在设置文件里。
+    File,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +81,13 @@ impl AccountNames {
         }
     }
 
+    pub fn get_mut(&mut self, source: Source) -> Option<&mut SavedAccount> {
+        match source {
+            Source::Danbooru => self.danbooru.as_mut(),
+            Source::Gelbooru => self.gelbooru.as_mut(),
+        }
+    }
+
     pub fn set(&mut self, source: Source, account: Option<SavedAccount>) {
         match source {
             Source::Danbooru => self.danbooru = account,
@@ -79,6 +103,9 @@ pub struct SavedAccount {
     pub name: String,
     #[serde(default)]
     pub level: Option<String>,
+    /// 加密后的 API Key；为空表示存在系统钥匙串里。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed_key: Option<String>,
 }
 
 impl Settings {
@@ -155,9 +182,11 @@ mod tests {
         let settings = Settings {
             proxy: ProxySettings { mode: ProxyMode::Manual, url: "socks5://127.0.0.1:1080".into() },
             accounts: AccountNames {
-                danbooru: Some(SavedAccount { name: "sora".into(), level: Some("Gold".into()) }),
-                gelbooru: None,
+                danbooru: Some(SavedAccount { name: "sora".into(), level: Some("Gold".into()), sealed_key: None }),
+                gelbooru: Some(SavedAccount { name: "42".into(), level: None, sealed_key: Some("v1.abc".into()) }),
             },
+            key_storage: KeyStorage::File,
+            key_salt: Some("salt".into()),
         };
         settings.save(&dir.path().join("nested")).unwrap();
         assert_eq!(Settings::load(&dir.path().join("nested")), settings);

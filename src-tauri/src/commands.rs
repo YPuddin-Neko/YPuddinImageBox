@@ -5,10 +5,10 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
 use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery};
-use crate::settings::{ProxySettings, SavedAccount};
+use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
 use crate::sources::{self, danbooru, gelbooru, Page, Post, SearchPage, SearchParams, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
-use crate::{net, secrets, thumbs, AppState};
+use crate::{keys, net, secrets, thumbs, AppState};
 
 /// 瀑布流每页条数。下载任务另按站点上限（200 / 100）分页。
 const PAGE_SIZE: u32 = 40;
@@ -179,7 +179,9 @@ pub struct AccountView {
 #[serde(rename_all = "camelCase")]
 pub struct AccountsInfo {
     accounts: Vec<AccountView>,
-    /// 启动时读取钥匙串失败的原因。
+    /// 新保存的 API Key 放在哪。
+    key_storage: KeyStorage,
+    /// 启动时读取 API Key 失败的原因。
     error: Option<String>,
 }
 
@@ -197,6 +199,7 @@ fn accounts_info_of(state: &AppState) -> AccountsInfo {
             view(Source::Danbooru, &settings.accounts.danbooru, accounts.danbooru.is_some()),
             view(Source::Gelbooru, &settings.accounts.gelbooru, accounts.gelbooru.is_some()),
         ],
+        key_storage: settings.key_storage,
         error: state.accounts_error(),
     }
 }
@@ -241,39 +244,64 @@ pub async fn account_save(
         }
     };
 
-    let previous = state.settings().accounts.get(source).map(|a| a.name.clone());
+    let snapshot = state.settings().clone();
+    let previous = snapshot.accounts.get(source).cloned();
     let (key_name, key) = (name.clone(), api_key.clone());
-    blocking(move || {
-        secrets::write(source, &key_name, &key)?;
+    let (key_salt, sealed_key) = blocking(move || {
+        let mut draft = snapshot;
+        let sealed = keys::store(&mut draft, source, &key_name, &key)?;
         // 换了账号时删掉旧账号的 Key，删不掉也不影响新账号使用。
-        if let Some(old) = previous.filter(|old| *old != key_name) {
-            let _ = secrets::delete(source, &old);
+        if let Some(old) = previous.filter(|old| old.name != key_name) {
+            let _ = keys::forget(source, &old);
         }
-        Ok(())
+        Ok((draft.key_salt, sealed))
     })
     .await?;
 
-    state.update_settings(|settings| settings.accounts.set(source, Some(SavedAccount { name: name.clone(), level })))?;
-    state.accounts.update(|accounts| match source {
-        Source::Danbooru => accounts.danbooru = Some(danbooru::Credentials { username: name, api_key }),
-        Source::Gelbooru => accounts.gelbooru = Some(gelbooru::Credentials { user_id: name, api_key }),
-    });
+    state.update_settings(|settings| {
+        settings.key_salt = key_salt;
+        settings.accounts.set(source, Some(SavedAccount { name: name.clone(), level, sealed_key }));
+    })?;
+    state.accounts.update(|accounts| accounts.set(source, Some((name, api_key))));
     state.clear_accounts_error();
     Ok(accounts_info_of(&state))
 }
 
-/// 退出登录：删掉钥匙串里的 API Key 和设置里的用户名。
+/// 退出登录：删掉保存的 API Key 和设置里的用户名。
 #[tauri::command]
 pub async fn account_remove(state: State<'_, AppState>, source: Source) -> Result<AccountsInfo, AppError> {
-    let saved = state.settings().accounts.get(source).map(|a| a.name.clone());
-    if let Some(name) = saved {
-        blocking(move || secrets::delete(source, &name)).await?;
+    let saved = state.settings().accounts.get(source).cloned();
+    if let Some(saved) = saved {
+        blocking(move || keys::forget(source, &saved)).await?;
     }
     state.update_settings(|settings| settings.accounts.set(source, None))?;
-    state.accounts.update(|accounts| match source {
-        Source::Danbooru => accounts.danbooru = None,
-        Source::Gelbooru => accounts.gelbooru = None,
-    });
+    state.accounts.update(|accounts| accounts.set(source, None));
+    Ok(accounts_info_of(&state))
+}
+
+/// 切换 API Key 的保存方式，已保存的 Key 一起搬过去。
+#[tauri::command]
+pub async fn account_key_storage(state: State<'_, AppState>, storage: KeyStorage) -> Result<AccountsInfo, AppError> {
+    let snapshot = state.settings().clone();
+    if snapshot.key_storage == storage {
+        return Ok(accounts_info_of(&state));
+    }
+    let accounts = state.accounts.get();
+    let migration = blocking(move || keys::migrate(&snapshot, &accounts, storage)).await?;
+    let stale = migration.stale.clone();
+    state.update_settings(|settings| {
+        settings.key_storage = storage;
+        settings.key_salt = migration.key_salt;
+        settings.accounts = migration.accounts;
+    })?;
+    // 新位置已经写好、设置也保存了，再删钥匙串里的旧项；删不掉不影响使用。
+    blocking(move || {
+        for (source, name) in stale {
+            let _ = secrets::delete(source, &name);
+        }
+        Ok(())
+    })
+    .await?;
     Ok(accounts_info_of(&state))
 }
 
