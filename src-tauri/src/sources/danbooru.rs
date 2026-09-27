@@ -11,10 +11,26 @@ use crate::net::{user_agent, Net};
 const BASE: &str = "https://danbooru.donmai.us";
 const SITE: &str = "Danbooru";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Credentials {
     pub username: String,
     pub api_key: String,
+}
+
+/// 调试输出里不打印 API Key。
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials").field("username", &self.username).field("api_key", &"***").finish()
+    }
+}
+
+/// 账号信息，验证账号时用。
+#[derive(Debug, Deserialize)]
+pub struct Profile {
+    pub id: Option<u64>,
+    pub name: Option<String>,
+    /// Member / Gold / Platinum / Builder 等。
+    pub level_string: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -77,7 +93,7 @@ pub async fn search(
     credentials: Option<&Credentials>,
 ) -> Result<(Vec<Post>, usize), AppError> {
     let request = net
-        .client
+        .client()
         .get(format!("{BASE}/posts.json"))
         .query(&[("tags", query.to_string()), ("page", page.to_param()), ("limit", limit.min(200).to_string())]);
     parse(&get(net, request, credentials).await?)
@@ -86,11 +102,24 @@ pub async fn search(
 /// 查询条件的结果总数；查询太复杂时站点不给数字，返回 `None`。
 /// 注意这个接口不检查 tag 数量上限，超限的查询也会返回数字。
 pub async fn count(net: &Net, query: &str, credentials: Option<&Credentials>) -> Result<Option<u64>, AppError> {
-    let request = net.client.get(format!("{BASE}/counts/posts.json")).query(&[("tags", query)]);
+    let request = net.client().get(format!("{BASE}/counts/posts.json")).query(&[("tags", query)]);
     let body = get(net, request, credentials).await?;
     let parsed: CountBody =
         serde_json::from_slice(&body).map_err(|e| AppError::Parse { site: SITE, detail: e.to_string() })?;
     Ok(parsed.counts.posts)
+}
+
+/// 验证账号：带账号读取 profile.json。Key 不对时站点返回 401。
+pub async fn verify(net: &Net, credentials: &Credentials) -> Result<Profile, AppError> {
+    let request = net.client().get(format!("{BASE}/profile.json"));
+    let body = get(net, request, Some(credentials)).await?;
+    let profile: Profile =
+        serde_json::from_slice(&body).map_err(|e| AppError::Parse { site: SITE, detail: e.to_string() })?;
+    // 认证没生效时站点按匿名用户返回（id 为空）。
+    if profile.id.is_none() {
+        return Err(AppError::BadCredentials { site: SITE });
+    }
+    Ok(profile)
 }
 
 async fn get(
@@ -114,6 +143,10 @@ async fn get(
 }
 
 fn upstream_error(status: u16, body: &[u8]) -> AppError {
+    // 403 只有带 JSON 时才是账号问题；Cloudflare 拦截返回的是 HTML 页面。
+    if status == 401 || (status == 403 && body.starts_with(b"{")) {
+        return AppError::BadCredentials { site: SITE };
+    }
     let message = serde_json::from_slice::<ErrorBody>(body).ok().and_then(|e| e.message);
     match message {
         // "You cannot search for more than 2 tags at a time."
@@ -200,6 +233,17 @@ mod tests {
             other => panic!("unexpected: {other:?}"),
         }
         assert!(matches!(upstream_error(500, b"<html>"), AppError::Http { status: 500, .. }));
+        let bad_key = br#"{"success":false,"error":"SessionLoader::AuthenticationFailure","message":"Invalid API key"}"#;
+        assert!(matches!(upstream_error(401, bad_key), AppError::BadCredentials { .. }));
+        // Cloudflare 拦截页也是 403，但不是账号问题。
+        assert!(matches!(upstream_error(403, b"<!DOCTYPE html>"), AppError::Http { status: 403, .. }));
+    }
+
+    #[test]
+    fn debug_output_hides_api_key() {
+        let creds = Credentials { username: "sora".into(), api_key: "secret-key".into() };
+        let printed = format!("{creds:?}");
+        assert!(printed.contains("sora") && !printed.contains("secret-key"));
     }
 
     #[test]

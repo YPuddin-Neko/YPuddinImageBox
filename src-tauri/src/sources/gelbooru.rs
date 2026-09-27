@@ -13,10 +13,17 @@ use crate::net::Net;
 const BASE: &str = "https://gelbooru.com";
 const SITE: &str = "Gelbooru";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Credentials {
     pub user_id: String,
     pub api_key: String,
+}
+
+/// 调试输出里不打印 API Key。
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials").field("user_id", &self.user_id).field("api_key", &"***").finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -85,6 +92,11 @@ pub async fn search(
     parse(&index(net, query, page.saturating_sub(1), limit.min(100), credentials).await?)
 }
 
+/// 验证账号：带账号取 1 条帖子，账号或 Key 不对时站点返回 401。
+pub async fn verify(net: &Net, credentials: &Credentials) -> Result<(), AppError> {
+    index(net, "", 0, 1, credentials).await.map(|_| ())
+}
+
 /// 结果总数取自列表接口的 `@attributes.count`，只取 1 条。
 pub async fn count(net: &Net, query: &str, credentials: &Credentials) -> Result<Option<u64>, AppError> {
     let body = index(net, query, 0, 1, credentials).await?;
@@ -93,7 +105,7 @@ pub async fn count(net: &Net, query: &str, credentials: &Credentials) -> Result<
 
 async fn index(net: &Net, query: &str, pid: u32, limit: u32, credentials: &Credentials) -> Result<Vec<u8>, AppError> {
     let request = net
-        .client
+        .client()
         .get(format!("{BASE}/index.php"))
         .query(&[
             ("page", "dapi".to_string()),
@@ -110,7 +122,7 @@ async fn index(net: &Net, query: &str, pid: u32, limit: u32, credentials: &Crede
     let response = net.api.send(request).await?;
     let status = response.status();
     if status.as_u16() == 401 || status.as_u16() == 403 {
-        return Err(AppError::CredentialsMissing(SITE));
+        return Err(AppError::BadCredentials { site: SITE });
     }
     if !status.is_success() {
         return Err(AppError::Http { site: SITE, status: status.as_u16() });

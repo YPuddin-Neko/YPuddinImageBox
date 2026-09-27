@@ -67,7 +67,7 @@ async fn load<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<(Vec<u8>, &'
     }
 
     let state = app.state::<AppState>();
-    let request = state.net.client.get(url.clone()).header(REFERER, source.referer());
+    let request = state.net.client().get(url.clone()).header(REFERER, source.referer());
     let mut response = state.net.preview.send(request).await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
     if !response.status().is_success() {
         return Err((StatusCode::BAD_GATEWAY, format!("{} 返回 HTTP {}", source.site_name(), response.status().as_u16())));

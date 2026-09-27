@@ -21,7 +21,7 @@ use crate::error::AppError;
 use crate::library::{now_ms, ItemStatus, JobInfo, JobItem, JobKind, JobStatus, Library};
 use crate::net::Net;
 use crate::protocol::sniff;
-use crate::sources::{self, Accounts, Page, Post, Source};
+use crate::sources::{self, AccountStore, Page, Post, Source};
 use crate::storage::{Storage, StorageKind};
 use crate::thumbs;
 
@@ -86,7 +86,7 @@ impl Outcome {
 pub struct Downloader {
     library: Library,
     net: Arc<Net>,
-    accounts: Arc<Accounts>,
+    accounts: Arc<AccountStore>,
     storage: Arc<RwLock<Storage>>,
     /// 图片位置整体移动时拿写锁；每张图从选定目录到写进图库期间拿读锁，
     /// 保证新图不会写进正在搬走的目录。
@@ -104,7 +104,7 @@ impl Downloader {
     pub fn new(
         library: Library,
         net: Arc<Net>,
-        accounts: Arc<Accounts>,
+        accounts: Arc<AccountStore>,
         storage: Arc<RwLock<Storage>>,
         images_gate: Arc<tokio::sync::RwLock<()>>,
         events: EventSink,
@@ -166,7 +166,7 @@ impl Downloader {
         max_posts: Option<i64>,
     ) -> Result<JobInfo, AppError> {
         // 总数只用来显示进度，查不到也照样开始；缺账号则直接提示，不建一个注定失败的任务。
-        let estimate = match sources::count(&self.net, &self.accounts, source, query).await {
+        let estimate = match sources::count(&self.net, &self.accounts.get(), source, query).await {
             Ok(count) => count.map(|n| n as i64),
             Err(err @ AppError::CredentialsMissing(_)) => return Err(err),
             Err(_) => None,
@@ -375,7 +375,8 @@ impl Downloader {
         let query = job.query.as_deref().unwrap_or_default();
         let page = Page::parse(cursor).unwrap_or(Page::Number(1));
         let limit = job.source.max_page_size();
-        let (mut posts, fetched) = sources::fetch(&self.net, &self.accounts, job.source, query, &page, limit).await?;
+        let accounts = self.accounts.get();
+        let (mut posts, fetched) = sources::fetch(&self.net, &accounts, job.source, query, &page, limit).await?;
         let min_id = posts.iter().map(|post| post.id).min();
         // 未登录时站点会从结果里隐去部分帖子，一页不满不代表翻完了，取到空页才算。
         let mut exhausted = fetched == 0 || min_id.is_none();
@@ -518,7 +519,7 @@ impl FetchError {
 impl std::fmt::Display for FetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FetchError::Network(err) => write!(f, "网络错误：{err}"),
+            FetchError::Network(err) => write!(f, "网络错误：{}", crate::net::network_detail(err)),
             FetchError::Status(code) => write!(f, "服务器返回 HTTP {code}"),
             FetchError::Incomplete => f.write_str("文件没有下载完整"),
             FetchError::Checksum => f.write_str("文件校验不通过（md5 不一致）"),
@@ -555,7 +556,7 @@ impl Drop for PartFile {
 }
 
 async fn fetch_file(net: &Net, url: &Url, post: &Post, target: &Path) -> Result<(), FetchError> {
-    let request = net.client.get(url.clone()).header(REFERER, post.source.referer()).timeout(FILE_TIMEOUT);
+    let request = net.client().get(url.clone()).header(REFERER, post.source.referer()).timeout(FILE_TIMEOUT);
     let mut response = net.file.send(request).await.map_err(|err| match err {
         AppError::Network(err) => FetchError::Network(err),
         other => FetchError::Other(other.to_string()),
@@ -602,6 +603,7 @@ async fn fetch_file(net: &Net, url: &Url, post: &Post, target: &Path) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::ProxySettings;
     use crate::sources::{PostTags, Rating};
     use crate::storage::Defaults;
 
@@ -684,8 +686,8 @@ mod tests {
         });
         let downloader = Downloader::new(
             library.clone(),
-            Arc::new(Net::new().unwrap()),
-            Arc::new(Accounts::default()),
+            Arc::new(Net::new(&ProxySettings::default()).unwrap()),
+            Arc::new(AccountStore::default()),
             Arc::new(RwLock::new(storage)),
             Arc::new(tokio::sync::RwLock::new(())),
             sink,

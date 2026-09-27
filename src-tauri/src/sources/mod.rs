@@ -3,6 +3,8 @@
 pub mod danbooru;
 pub mod gelbooru;
 
+use std::sync::{PoisonError, RwLock};
+
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -264,23 +266,27 @@ pub struct Accounts {
 }
 
 impl Accounts {
-    /// 账号设置（存系统钥匙串）完成之前，先从环境变量读取，方便本地验证：
-    /// IMAGEBOX_DANBOORU_USERNAME / IMAGEBOX_DANBOORU_API_KEY，
-    /// IMAGEBOX_GELBOORU_USER_ID / IMAGEBOX_GELBOORU_API_KEY。
-    pub fn from_env() -> Self {
-        let var = |name: &str| std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-        Self {
-            danbooru: var("IMAGEBOX_DANBOORU_USERNAME")
-                .zip(var("IMAGEBOX_DANBOORU_API_KEY"))
-                .map(|(username, api_key)| danbooru::Credentials { username, api_key }),
-            gelbooru: var("IMAGEBOX_GELBOORU_USER_ID")
-                .zip(var("IMAGEBOX_GELBOORU_API_KEY"))
-                .map(|(user_id, api_key)| gelbooru::Credentials { user_id, api_key }),
-        }
-    }
-
     fn gelbooru(&self) -> Result<&gelbooru::Credentials, AppError> {
         self.gelbooru.as_ref().ok_or(AppError::CredentialsMissing("Gelbooru"))
+    }
+}
+
+/// 运行中可以修改的账号：设置页保存后，之后发出的请求立即使用新账号。
+#[derive(Debug, Default)]
+pub struct AccountStore(RwLock<Accounts>);
+
+impl AccountStore {
+    pub fn new(accounts: Accounts) -> Self {
+        Self(RwLock::new(accounts))
+    }
+
+    /// 当前账号的副本，请求期间不持锁。
+    pub fn get(&self) -> Accounts {
+        self.0.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    pub fn update(&self, change: impl FnOnce(&mut Accounts)) {
+        change(&mut self.0.write().unwrap_or_else(PoisonError::into_inner));
     }
 }
 

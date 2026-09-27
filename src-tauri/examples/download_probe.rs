@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use imagebox_lib::downloader::{Downloader, Event, EventSink};
 use imagebox_lib::library::{JobStatus, Library, LibraryQuery};
 use imagebox_lib::net::Net;
-use imagebox_lib::sources::{self, Accounts, Page, Source};
+use imagebox_lib::settings::ProxySettings;
+use imagebox_lib::sources::{self, AccountStore, Page, Source};
 use imagebox_lib::storage::{Defaults, Storage};
 
 // 小图，免得探测时下载太多流量。
@@ -24,8 +25,8 @@ async fn main() {
     };
     let storage = Storage::load(dir.path().join("storage.json"), defaults);
     let library = Library::open(&dir.path().join("database")).await.expect("打开数据库");
-    let net = Arc::new(Net::new().expect("HTTP 客户端"));
-    let accounts = Arc::new(Accounts::default());
+    let net = Arc::new(Net::new(&ProxySettings::default()).expect("HTTP 客户端"));
+    let accounts = Arc::new(AccountStore::default());
     let events: EventSink = Arc::new(|event| {
         if let Event::Job(job) = event {
             println!(
@@ -44,7 +45,7 @@ async fn main() {
     );
     tokio::spawn(Arc::clone(&downloader).run());
 
-    let (posts, _) = sources::fetch(&net, &accounts, Source::Danbooru, QUERY, &Page::Number(1), 3)
+    let (posts, _) = sources::fetch(&net, &accounts.get(), Source::Danbooru, QUERY, &Page::Number(1), 3)
         .await
         .expect("搜索");
     println!("选中下载 {} 张", posts.len());

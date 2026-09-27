@@ -5,9 +5,10 @@ use tauri::{AppHandle, State};
 
 use crate::error::AppError;
 use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery};
-use crate::sources::{self, Page, Post, SearchPage, SearchParams};
+use crate::settings::{ProxySettings, SavedAccount};
+use crate::sources::{self, danbooru, gelbooru, Page, Post, SearchPage, SearchParams, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
-use crate::AppState;
+use crate::{net, secrets, AppState};
 
 /// 瀑布流每页条数。下载任务另按站点上限（200 / 100）分页。
 const PAGE_SIZE: u32 = 40;
@@ -16,8 +17,9 @@ const PAGE_SIZE: u32 = 40;
 pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> Result<SearchPage, AppError> {
     let query = sources::build_query(params.source, &params.tags, &params.ratings);
     let page = params.page.max(1);
+    let accounts = state.accounts.get();
     let (posts, fetched) =
-        sources::fetch(&state.net, &state.accounts, params.source, &query, &Page::Number(page), PAGE_SIZE).await?;
+        sources::fetch(&state.net, &accounts, params.source, &query, &Page::Number(page), PAGE_SIZE).await?;
     let ids: Vec<u64> = posts.iter().map(|post| post.id).collect();
     let owned = state.library.owned(params.source, &ids).await?.into_iter().collect();
     Ok(SearchPage { posts, page, has_more: fetched >= PAGE_SIZE as usize, query, owned })
@@ -27,7 +29,7 @@ pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> 
 #[tauri::command]
 pub async fn count_remote(state: State<'_, AppState>, params: SearchParams) -> Result<Option<u64>, AppError> {
     let query = sources::build_query(params.source, &params.tags, &params.ratings);
-    sources::count(&state.net, &state.accounts, params.source, &query).await
+    sources::count(&state.net, &state.accounts.get(), params.source, &query).await
 }
 
 #[tauri::command]
@@ -93,6 +95,144 @@ pub async fn library_list(state: State<'_, AppState>, query: LibraryQuery) -> Re
 
 fn join_error(err: tauri::Error) -> AppError {
     AppError::Internal(err.to_string())
+}
+
+// ---------- 账号 ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountView {
+    source: Source,
+    /// 用户名（Gelbooru 是 User ID）；未登录时为空。
+    name: Option<String>,
+    level: Option<String>,
+    /// 设置里记着账号，但钥匙串里找不到 API Key（例如换了电脑、钥匙串被清理）。
+    key_missing: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountsInfo {
+    accounts: Vec<AccountView>,
+    /// 启动时读取钥匙串失败的原因。
+    error: Option<String>,
+}
+
+fn accounts_info_of(state: &AppState) -> AccountsInfo {
+    let settings = state.settings();
+    let accounts = state.accounts.get();
+    let view = |source: Source, saved: &Option<SavedAccount>, loaded: bool| AccountView {
+        source,
+        name: saved.as_ref().map(|a| a.name.clone()),
+        level: saved.as_ref().and_then(|a| a.level.clone()),
+        key_missing: saved.is_some() && !loaded,
+    };
+    AccountsInfo {
+        accounts: vec![
+            view(Source::Danbooru, &settings.accounts.danbooru, accounts.danbooru.is_some()),
+            view(Source::Gelbooru, &settings.accounts.gelbooru, accounts.gelbooru.is_some()),
+        ],
+        error: state.accounts_error(),
+    }
+}
+
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, AppError> + Send + 'static,
+) -> Result<T, AppError> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(join_error)?
+}
+
+#[tauri::command]
+pub fn accounts_info(state: State<'_, AppState>) -> AccountsInfo {
+    accounts_info_of(&state)
+}
+
+/// 先用填写的账号访问一次站点，通过了才把 API Key 存进钥匙串。
+#[tauri::command]
+pub async fn account_save(
+    state: State<'_, AppState>,
+    source: Source,
+    name: String,
+    api_key: String,
+) -> Result<AccountsInfo, AppError> {
+    let name = name.trim().to_string();
+    let api_key = api_key.trim().to_string();
+    if name.is_empty() {
+        let field = if source == Source::Danbooru { "用户名" } else { "User ID" };
+        return Err(AppError::InvalidInput(format!("请填写{field}")));
+    }
+    if api_key.is_empty() {
+        return Err(AppError::InvalidInput("请填写 API Key".into()));
+    }
+    let level = match source {
+        Source::Danbooru => {
+            let creds = danbooru::Credentials { username: name.clone(), api_key: api_key.clone() };
+            danbooru::verify(&state.net, &creds).await?.level_string
+        }
+        Source::Gelbooru => {
+            let creds = gelbooru::Credentials { user_id: name.clone(), api_key: api_key.clone() };
+            gelbooru::verify(&state.net, &creds).await?;
+            None
+        }
+    };
+
+    let previous = state.settings().accounts.get(source).map(|a| a.name.clone());
+    let (key_name, key) = (name.clone(), api_key.clone());
+    blocking(move || {
+        secrets::write(source, &key_name, &key)?;
+        // 换了账号时删掉旧账号的 Key，删不掉也不影响新账号使用。
+        if let Some(old) = previous.filter(|old| *old != key_name) {
+            let _ = secrets::delete(source, &old);
+        }
+        Ok(())
+    })
+    .await?;
+
+    state.update_settings(|settings| settings.accounts.set(source, Some(SavedAccount { name: name.clone(), level })))?;
+    state.accounts.update(|accounts| match source {
+        Source::Danbooru => accounts.danbooru = Some(danbooru::Credentials { username: name, api_key }),
+        Source::Gelbooru => accounts.gelbooru = Some(gelbooru::Credentials { user_id: name, api_key }),
+    });
+    state.clear_accounts_error();
+    Ok(accounts_info_of(&state))
+}
+
+/// 退出登录：删掉钥匙串里的 API Key 和设置里的用户名。
+#[tauri::command]
+pub async fn account_remove(state: State<'_, AppState>, source: Source) -> Result<AccountsInfo, AppError> {
+    let saved = state.settings().accounts.get(source).map(|a| a.name.clone());
+    if let Some(name) = saved {
+        blocking(move || secrets::delete(source, &name)).await?;
+    }
+    state.update_settings(|settings| settings.accounts.set(source, None))?;
+    state.accounts.update(|accounts| match source {
+        Source::Danbooru => accounts.danbooru = None,
+        Source::Gelbooru => accounts.gelbooru = None,
+    });
+    Ok(accounts_info_of(&state))
+}
+
+// ---------- 网络 ----------
+
+#[tauri::command]
+pub fn proxy_info(state: State<'_, AppState>) -> ProxySettings {
+    state.settings().proxy.clone()
+}
+
+/// 保存代理设置并立即生效。
+#[tauri::command]
+pub fn proxy_save(state: State<'_, AppState>, proxy: ProxySettings) -> Result<ProxySettings, AppError> {
+    proxy.validate()?;
+    state.net.apply_proxy(&proxy)?;
+    state.update_settings(|settings| settings.proxy = proxy.clone())?;
+    Ok(proxy)
+}
+
+/// 用还没保存的代理设置试连一次 Danbooru，返回耗时（毫秒）。
+#[tauri::command]
+pub async fn proxy_test(proxy: ProxySettings) -> Result<u64, AppError> {
+    proxy.validate()?;
+    Ok(net::test_connection(&proxy).await?.as_millis() as u64)
 }
 
 #[tauri::command]

@@ -4,14 +4,17 @@
 //!   拦成验证页（403），描述性 UA 可以正常访问，也符合 Danbooru 对 API 客户端的要求。
 //! - 按用途分三条通道，各自限速、限并发：接口（搜索、计数）、预览图、原图下载。
 //! - 收到 429 进入 60 秒退避，并把该通道速率永久减半一次；503 只退避 15 秒。
+//! - 代理按设置生成客户端；改代理时换一个新客户端，正在进行的请求不受影响。
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use reqwest::{RequestBuilder, Response, StatusCode};
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::error::AppError;
+use crate::settings::{parse_proxy_url, ProxyMode, ProxySettings};
 
 pub const APP_UA: &str = concat!("ImageBox/", env!("CARGO_PKG_VERSION"));
 
@@ -106,7 +109,7 @@ impl Lane {
 }
 
 pub struct Net {
-    pub client: reqwest::Client,
+    client: RwLock<reqwest::Client>,
     /// 搜索、计数等接口：2 次/秒，最多 4 个并发。
     pub api: Lane,
     /// 缩略图、预览图：10 次/秒，最多 6 个并发，保证瀑布流加载不卡。
@@ -116,20 +119,74 @@ pub struct Net {
 }
 
 impl Net {
-    pub fn new() -> Result<Self, reqwest::Error> {
-        // reqwest 默认读取系统代理和 HTTP(S)_PROXY 环境变量；手动代理设置在设置页实现后接入。
-        let client = reqwest::Client::builder()
-            .user_agent(user_agent(None))
-            .gzip(true)
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
-            .build()?;
+    pub fn new(proxy: &ProxySettings) -> Result<Self, AppError> {
         Ok(Self {
-            client,
+            client: RwLock::new(build_client(proxy)?),
             api: Lane::new("接口", 2.0, 4),
             preview: Lane::new("预览", 10.0, 6),
             file: Lane::new("下载", 5.0, 4),
         })
+    }
+
+    /// 当前的 HTTP 客户端（内部是共享的连接池，复制很便宜）。
+    pub fn client(&self) -> reqwest::Client {
+        self.client.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// 按新的代理设置换客户端，之后发出的请求生效。
+    pub fn apply_proxy(&self, proxy: &ProxySettings) -> Result<(), AppError> {
+        let client = build_client(proxy)?;
+        *self.client.write().unwrap_or_else(PoisonError::into_inner) = client;
+        Ok(())
+    }
+}
+
+/// 「跟随系统」时 reqwest 读取系统代理设置和 HTTP(S)_PROXY 环境变量；手动设置了代理就只用它。
+pub fn build_client(proxy: &ProxySettings) -> Result<reqwest::Client, AppError> {
+    let builder = reqwest::Client::builder()
+        .user_agent(user_agent(None))
+        .gzip(true)
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60));
+    let builder = match proxy.mode {
+        ProxyMode::System => builder,
+        ProxyMode::None => builder.no_proxy(),
+        ProxyMode::Manual => {
+            let url = parse_proxy_url(&proxy.url)?;
+            let proxy = reqwest::Proxy::all(url.as_str())
+                .map_err(|e| AppError::InvalidInput(format!("代理地址无效：{}", network_detail(&e))))?;
+            builder.proxy(proxy)
+        }
+    };
+    Ok(builder.build()?)
+}
+
+/// 用给定的代理设置访问一次 Danbooru，返回耗时。只发一个很小的请求，不经过限速通道。
+pub async fn test_connection(proxy: &ProxySettings) -> Result<Duration, AppError> {
+    let client = build_client(proxy)?;
+    let start = Instant::now();
+    let response =
+        client.get("https://danbooru.donmai.us/robots.txt").timeout(Duration::from_secs(15)).send().await?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AppError::Http { site: "Danbooru", status: status.as_u16() });
+    }
+    Ok(start.elapsed())
+}
+
+/// 网络错误的说明：超时、连不上直接说清楚，其余给出最底层的原因（例如 dns error）。
+pub fn network_detail(err: &reqwest::Error) -> String {
+    if err.is_timeout() {
+        return "连接超时".into();
+    }
+    let mut root: &dyn std::error::Error = err;
+    while let Some(next) = root.source() {
+        root = next;
+    }
+    if err.is_connect() {
+        format!("连不上服务器（{root}），请检查网络或代理设置")
+    } else {
+        root.to_string()
     }
 }
 
