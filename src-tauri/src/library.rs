@@ -361,7 +361,26 @@ impl Library {
         sqlx::migrate!("./migrations").run(&pool).await?;
         let library = Self { pool };
         library.backfill_posted_at().await?;
+        library.optimize().await?;
         Ok(library)
+    }
+
+    /// 更新查询优化器的统计信息。图库涨到几万张后没有统计信息，SQLite 会挑错索引，
+    /// 例如按来源筛选时放弃按时间的索引、把几万行取出来再排序。只分析从没分析过或变化很大的表。
+    /// 不抽样：抽样时来源、分级这种只有几个取值的列会被当成区分度很高，照样挑错。
+    pub async fn optimize(&self) -> Result<(), sqlx::Error> {
+        sqlx::raw_sql("PRAGMA optimize = 0x10002;").execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// 诊断用：SQLite 版本，以及是否已经有统计信息。
+    pub async fn stats_info(&self) -> Result<(String, bool), sqlx::Error> {
+        let version: String = sqlx::query_scalar("SELECT sqlite_version()").fetch_one(&self.pool).await?;
+        let analyzed: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1')")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok((version, analyzed))
     }
 
     /// 补上发布时间：加这一列之前下载的图只有站点原样的 created_at。认不出格式的留空，排序时放在最后。
@@ -479,24 +498,53 @@ impl Library {
         tx.commit().await
     }
 
+    /// 把筛选条件里的 tag 名换成 id。要「有」的 tag 图库里根本没有时，结果一定为空，返回 `None`。
+    async fn resolve_tags(&self, tags: &str) -> Result<Option<TagFilter>, sqlx::Error> {
+        let mut filter = TagFilter::default();
+        let mut seen = HashSet::new();
+        for tag in tags.split_whitespace().filter(|tag| seen.insert(*tag)) {
+            let (negate, name) = match tag.strip_prefix('-') {
+                Some(name) if !name.is_empty() => (true, name),
+                _ => (false, tag),
+            };
+            let id: Option<i64> = sqlx::query_scalar("SELECT id FROM tags WHERE name = ?")
+                .bind(name.to_lowercase())
+                .fetch_optional(&self.pool)
+                .await?;
+            match (id, negate) {
+                (Some(id), false) => filter.include.push(id),
+                (Some(id), true) => filter.exclude.push(id),
+                (None, false) => return Ok(None),
+                (None, true) => {}
+            }
+        }
+        Ok(Some(filter))
+    }
+
     pub async fn list(&self, query: &LibraryQuery) -> Result<LibraryPage, sqlx::Error> {
         let limit = match query.limit {
             0 => 60,
             n => n.min(MAX_PAGE),
         };
+        let Some(tags) = self.resolve_tags(&query.tags).await? else {
+            return Ok(LibraryPage { posts: Vec::new(), total: 0, offset: query.offset, has_more: false });
+        };
         let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM posts p");
-        push_filter(&mut count, query);
+        push_filter(&mut count, query, &tags);
         let total: i64 = count.build_query_scalar().fetch_one(&self.pool).await?;
 
-        let mut select = QueryBuilder::<Sqlite>::new("SELECT p.* FROM posts p");
-        push_filter(&mut select, query);
+        // 先只按排序取出这一页的 id，再取整行：排序时不用搬动几万行完整记录，热门 tag 这类结果多的查询快几倍。
+        let mut select = QueryBuilder::<Sqlite>::new("SELECT p.* FROM posts p WHERE p.id IN (SELECT p.id FROM posts p");
+        push_filter(&mut select, query, &tags);
         select
             .push(" ORDER BY ")
             .push(query.sort.order_by())
             .push(" LIMIT ")
             .push_bind(limit as i64)
             .push(" OFFSET ")
-            .push_bind(query.offset as i64);
+            .push_bind(query.offset as i64)
+            .push(") ORDER BY ")
+            .push(query.sort.order_by());
         let rows = select.build().fetch_all(&self.pool).await?;
         let mut posts = Vec::with_capacity(rows.len());
         let mut row_ids = Vec::with_capacity(rows.len());
@@ -967,31 +1015,43 @@ async fn insert_items(
     Ok(())
 }
 
-fn push_filter(query: &mut QueryBuilder<Sqlite>, filter: &LibraryQuery) {
-    query.push(" WHERE 1 = 1");
+/// 图库筛选里的 tag，已经换成了 id。
+#[derive(Default)]
+struct TagFilter {
+    include: Vec<i64>,
+    exclude: Vec<i64>,
+}
+
+/// tag 都从 tag 那一侧查（post_tags 按 tag_id 建了索引）：要「有」的冷门 tag 只碰到几条记录；
+/// 排除的 tag 先取出带这个 tag 的帖子再排除，比逐个帖子查快几倍。
+///
+/// 不写「WHERE 1 = 1」凑条件：实测多了这个恒真条件，SQLite 会放弃按排序列的索引，整表取出再排序。
+fn push_filter(query: &mut QueryBuilder<Sqlite>, filter: &LibraryQuery, tags: &TagFilter) {
+    let mut first = true;
+    let mut and = |query: &mut QueryBuilder<Sqlite>| {
+        query.push(if std::mem::take(&mut first) { " WHERE " } else { " AND " });
+    };
     if let Some(source) = filter.source {
-        query.push(" AND p.source = ").push_bind(source.as_str());
+        and(query);
+        query.push("p.source = ").push_bind(source.as_str());
     }
     let ratings: Vec<Rating> = Rating::ALL.into_iter().filter(|r| filter.ratings.contains(r)).collect();
     if !ratings.is_empty() && ratings.len() < Rating::ALL.len() {
-        query.push(" AND p.rating IN (");
+        and(query);
+        query.push("p.rating IN (");
         let mut list = query.separated(", ");
         for rating in ratings {
             list.push_bind(rating.as_str());
         }
         query.push(")");
     }
-    let mut seen = HashSet::new();
-    for tag in filter.tags.split_whitespace().filter(|tag| seen.insert(*tag)) {
-        let (negate, name) = match tag.strip_prefix('-') {
-            Some(name) if !name.is_empty() => (true, name),
-            _ => (false, tag),
-        };
-        query
-            .push(if negate { " AND NOT EXISTS" } else { " AND EXISTS" })
-            .push(" (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = p.id AND t.name = ")
-            .push_bind(name.to_lowercase())
-            .push(")");
+    for id in &tags.include {
+        and(query);
+        query.push("p.id IN (SELECT post_id FROM post_tags WHERE tag_id = ").push_bind(*id).push(")");
+    }
+    for id in &tags.exclude {
+        and(query);
+        query.push("p.id NOT IN (SELECT post_id FROM post_tags WHERE tag_id = ").push_bind(*id).push(")");
     }
 }
 
@@ -1047,6 +1107,9 @@ mod tests {
         assert_eq!(lib.list(&query("sky scenery")).await.unwrap().total, 1);
         assert_eq!(lib.list(&query("sky -scenery")).await.unwrap().posts[0].post.id, 2);
         assert_eq!(lib.list(&query("SKY")).await.unwrap().total, 2);
+        // 图库里没有的 tag：要「有」时结果为空，排除时等于没写。
+        assert_eq!(lib.list(&query("sky nobody")).await.unwrap().total, 0);
+        assert_eq!(lib.list(&query("sky -nobody")).await.unwrap().total, 2);
 
         let owned = lib.owned(Source::Danbooru, &[1, 3]).await.unwrap();
         assert_eq!(owned, HashSet::from([1]));

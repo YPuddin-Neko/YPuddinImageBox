@@ -108,6 +108,30 @@ mod tests {
         assert_eq!((thumb.width(), thumb.height()), (100, 300));
     }
 
+    /// 缩略图生成速度：几种常见尺寸的原图各生成几次，打印每张的耗时。
+    /// 手动运行：cargo test --release --lib thumbs::tests::speed -- --ignored --nocapture
+    #[test]
+    #[ignore = "性能测试，需要手动运行"]
+    fn speed() {
+        let dir = tempfile::tempdir().unwrap();
+        for (ext, width, height) in [("jpg", 2480, 3508), ("jpg", 4000, 6000), ("png", 2000, 3000), ("webp", 1600, 2400)] {
+            // 渐变加一点纹理，免得编码器把纯色图压得太小、解码太快。
+            let img = RgbImage::from_fn(width, height, |x, y| {
+                Rgb([(x * 255 / width) as u8, (y * 255 / height) as u8, ((x ^ y) & 0xff) as u8])
+            });
+            let src = dir.path().join(format!("{width}x{height}.{ext}"));
+            img.save(&src).unwrap();
+            let size = std::fs::metadata(&src).unwrap().len() as f64 / 1_048_576.0;
+            let runs = 5;
+            let start = std::time::Instant::now();
+            for _ in 0..runs {
+                render(&src).unwrap();
+            }
+            let each = start.elapsed().as_secs_f64() * 1000.0 / runs as f64;
+            println!("{ext:>4} {width}×{height}（{size:.1} MB）：每张 {each:.0} ms");
+        }
+    }
+
     #[tokio::test]
     async fn reports_undecodable_files() {
         let dir = tempfile::tempdir().unwrap();
