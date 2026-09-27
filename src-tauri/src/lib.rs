@@ -146,8 +146,92 @@ fn tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
     Menu::with_items(app, &[&open, &check, &separator, &quit])
 }
 
-/// 切换界面语言后换上新语言的托盘菜单。
-pub(crate) fn refresh_tray(app: &AppHandle) {
+/// macOS 顶部的应用菜单。Tauri 默认的那份文字是英文写死的，这里照同样的项目按界面语言建一份。
+#[cfg(target_os = "macos")]
+fn app_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
+    use tauri::menu::{AboutMetadata, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID};
+    let info = app.package_info();
+    let name = &info.name;
+    let bundle = &app.config().bundle;
+    let about = AboutMetadata {
+        name: Some(name.clone()),
+        version: Some(info.version.to_string()),
+        copyright: bundle.copyright.clone(),
+        authors: bundle.publisher.clone().map(|publisher| vec![publisher]),
+        ..Default::default()
+    };
+    let separator = || PredefinedMenuItem::separator(app);
+    let app_items = Submenu::with_items(
+        app,
+        name,
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some(&tr!("关于 {name}", "About {name}")), Some(about))?,
+            &separator()?,
+            &PredefinedMenuItem::services(app, Some(text("服务", "Services")))?,
+            &separator()?,
+            &PredefinedMenuItem::hide(app, Some(&tr!("隐藏 {name}", "Hide {name}")))?,
+            &PredefinedMenuItem::hide_others(app, Some(text("隐藏其他", "Hide Others")))?,
+            &PredefinedMenuItem::show_all(app, Some(text("全部显示", "Show All")))?,
+            &separator()?,
+            &PredefinedMenuItem::quit(app, Some(&tr!("退出 {name}", "Quit {name}")))?,
+        ],
+    )?;
+    let file = Submenu::with_items(
+        app,
+        text("文件", "File"),
+        true,
+        &[&PredefinedMenuItem::close_window(app, Some(text("关闭窗口", "Close Window")))?],
+    )?;
+    let edit = Submenu::with_items(
+        app,
+        text("编辑", "Edit"),
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, Some(text("撤销", "Undo")))?,
+            &PredefinedMenuItem::redo(app, Some(text("重做", "Redo")))?,
+            &separator()?,
+            &PredefinedMenuItem::cut(app, Some(text("剪切", "Cut")))?,
+            &PredefinedMenuItem::copy(app, Some(text("拷贝", "Copy")))?,
+            &PredefinedMenuItem::paste(app, Some(text("粘贴", "Paste")))?,
+            &PredefinedMenuItem::select_all(app, Some(text("全选", "Select All")))?,
+        ],
+    )?;
+    let view = Submenu::with_items(
+        app,
+        text("显示", "View"),
+        true,
+        &[&PredefinedMenuItem::fullscreen(app, Some(text("进入全屏幕", "Enter Full Screen")))?],
+    )?;
+    let window = Submenu::with_id_and_items(
+        app,
+        WINDOW_SUBMENU_ID,
+        text("窗口", "Window"),
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, Some(text("最小化", "Minimize")))?,
+            &PredefinedMenuItem::maximize(app, Some(text("缩放", "Zoom")))?,
+            &separator()?,
+            &PredefinedMenuItem::close_window(app, Some(text("关闭窗口", "Close Window")))?,
+        ],
+    )?;
+    let help = Submenu::with_id_and_items(app, HELP_SUBMENU_ID, text("帮助", "Help"), true, &[])?;
+    Menu::with_items(app, &[&app_items, &file, &edit, &view, &window, &help])
+}
+
+/// 按当前界面语言换上 macOS 的应用菜单；失败时保留原来的菜单，不影响使用。
+fn apply_app_menu(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Err(err) = app_menu(app).and_then(|menu| app.set_menu(menu)) {
+        log::warn!("更新应用菜单失败：{err}");
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
+/// 切换界面语言后换上新语言的托盘菜单和应用菜单。
+pub(crate) fn refresh_menus(app: &AppHandle) {
+    apply_app_menu(app);
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     if let Err(err) = tray_menu(app).and_then(|menu| tray.set_menu(Some(menu))) {
         log::warn!("更新托盘菜单失败：{err}");
@@ -295,6 +379,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 accounts_error: Mutex::new(accounts_error),
             });
+            apply_app_menu(app.handle());
             setup_tray(app)?;
             // Windows 上去掉系统标题栏，按钮由界面画，和 macOS 的一体化外观一致；保留窗口阴影和圆角。
             #[cfg(target_os = "windows")]

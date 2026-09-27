@@ -430,7 +430,7 @@ pub fn general_save(
     })?;
     if changed {
         i18n::set(language.resolve());
-        crate::refresh_tray(&app);
+        crate::refresh_menus(&app);
     }
     Ok(general_info_of(&app, &state))
 }
