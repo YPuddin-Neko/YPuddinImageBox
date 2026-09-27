@@ -44,8 +44,11 @@ select {
   color: inherit;
 }
 
+/* WebKit（macOS 上的界面引擎）默认给按钮加 align-items: flex-start，按钮里的弹性、网格子项不会撑满；
+   改回规范默认值，和 Chrome、WebView2 一致。 */
 button {
   cursor: pointer;
+  align-items: normal;
 }
 
 button:disabled {
