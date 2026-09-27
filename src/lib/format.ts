@@ -10,3 +10,14 @@ export function formatBytes(bytes: number | null | undefined): string {
   }
   return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
+
+/** 任务时间：今天只显示时分，其余加上月日。 */
+export function formatTime(ms: number): string {
+  const date = new Date(ms);
+  const time = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) return time;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+}
+
+export const formatCount = (value: number) => value.toLocaleString("zh-CN");

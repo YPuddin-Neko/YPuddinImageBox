@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -22,13 +22,22 @@ function formatDate(value: string | null): string {
   return Number.isNaN(date.getTime()) ? value : date.toISOString().slice(0, 10);
 }
 
-export function Inspector({ post }: { post: Post | null }) {
+interface InspectorProps {
+  post: Post | null;
+  emptyText?: string;
+  /** 图库里的图：显示保存位置。 */
+  localPath?: string;
+  /** 排在最前、占满一行的主要操作（下载原图、在访达中显示等）。 */
+  primaryAction?: ReactNode;
+}
+
+export function Inspector({ post, emptyText = "点一张图查看详情", localPath, primaryAction }: InspectorProps) {
   const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
 
   if (!post) {
     return (
       <aside className="insp insp-empty" aria-label="详情">
-        <p>点一张图查看详情</p>
+        <p>{emptyText}</p>
       </aside>
     );
   }
@@ -82,6 +91,14 @@ export function Inspector({ post }: { post: Post | null }) {
             <dt>md5</dt>
             <dd className="mono">{post.md5 ?? "—"}</dd>
           </div>
+          {localPath && (
+            <div className="wide">
+              <dt>保存位置</dt>
+              <dd className="mono" title={localPath}>
+                {localPath}
+              </dd>
+            </div>
+          )}
         </dl>
         <div className="insp-tags">
           {TAG_GROUPS.filter(({ key }) => post.tags[key].length > 0).map(({ key, label }) => (
@@ -96,6 +113,7 @@ export function Inspector({ post }: { post: Post | null }) {
           ))}
         </div>
         <div className="insp-acts">
+          {primaryAction && <div className="insp-primary">{primaryAction}</div>}
           <button type="button" className="btn" onClick={() => void openUrl(post.postUrl)}>
             <Icon name="ext" size={15} />
             打开原帖

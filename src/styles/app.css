@@ -98,6 +98,7 @@ button:disabled {
 }
 
 .rail-btn {
+  position: relative;
   width: 42px;
   height: 42px;
   display: grid;
@@ -117,6 +118,24 @@ button:disabled {
 .rail-btn[aria-current="page"] {
   background: var(--raised);
   color: var(--fg-1);
+}
+
+.rail-badge {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border: 2px solid var(--bg);
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .rail-space {
@@ -144,6 +163,7 @@ button:disabled {
 }
 
 .center {
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -302,9 +322,7 @@ button:disabled {
   display: block;
   width: 100%;
   margin: 0 0 12px;
-  padding: 0;
   overflow: hidden;
-  border: 0;
   border-radius: 10px;
   background: var(--raised);
   break-inside: avoid;
@@ -315,13 +333,120 @@ button:disabled {
   filter: brightness(1.07);
 }
 
-.card[aria-pressed="true"] {
+/* 选中（详情里正在看的）：外圈描边；勾选（多选）：内圈描边加勾。两者可以同时出现。 */
+.card[data-selected] {
   box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+.card-hit {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+}
+
+.card-hit:focus-visible {
+  outline-offset: -3px;
 }
 
 .card .shimmer-img {
   position: absolute;
   inset: 0;
+}
+
+.card[data-picked] .card-hit::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 3px var(--accent);
+  pointer-events: none;
+}
+
+/* 勾选框和「已下载」角标都在距边 8px 的同一条线上，高度居中对齐。 */
+.card-pick {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  background: rgba(10, 12, 18, 0.42);
+  color: transparent;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.card:hover .card-pick,
+.grid[data-picking] .card-pick,
+.card-pick:focus-visible {
+  opacity: 1;
+}
+
+.card-pick[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+  opacity: 1;
+}
+
+.card-owned {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 7px 0 6px;
+  border-radius: 10px;
+  background: rgba(10, 12, 18, 0.62);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+/* 多选时列表底部留出选择条的高度，最后一排不被挡住。 */
+.center[data-picking] .scroll {
+  padding-bottom: 92px;
+}
+
+/* 位移交给 Motion，居中用 margin。 */
+.dock {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  width: max-content;
+  max-width: calc(100% - 40px);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 8px 18px;
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  background: var(--glass);
+  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+
+.dock-count {
+  margin-right: 8px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
 
 .sentinel {
@@ -384,6 +509,15 @@ button:disabled {
 .btn.primary {
   background: var(--accent);
   color: var(--accent-fg);
+}
+
+/* 和筛选胶囊同高（30px），放在同一行时上下对齐。 */
+.btn.sm {
+  height: 30px;
+  padding: 0 12px;
+  gap: 6px;
+  border-radius: 999px;
+  font-size: 12px;
 }
 
 .btn.ghost {
@@ -634,10 +768,20 @@ code {
 }
 
 .insp-acts {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: auto;
   padding-top: 4px;
+}
+
+.insp-acts .btn {
+  justify-content: center;
+}
+
+.insp-primary {
+  grid-column: 1 / -1;
+  display: grid;
 }
 
 /* ---------- 设置 ---------- */
@@ -707,7 +851,8 @@ code {
   padding: var(--top-inset) 36px 40px;
 }
 
-.settings-head h1 {
+.settings-head h1,
+.page-head h1 {
   margin: 0;
   font-size: 26px;
   font-weight: 800;
@@ -715,7 +860,8 @@ code {
   letter-spacing: -0.01em;
 }
 
-.settings-head p {
+.settings-head p,
+.page-head p {
   margin: 2px 0 0;
   color: var(--fg-3);
 }
@@ -1116,6 +1262,282 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* ---------- 下载 ---------- */
+
+.page {
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--top-inset) 36px 40px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+
+/* 标题带 38px，按钮 34px，上移 2px 让两者中线对齐。 */
+.page-head {
+  max-width: 980px;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.page-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.page-head > .btn {
+  margin-top: 2px;
+}
+
+.page-block {
+  max-width: 980px;
+}
+
+.page > .alert {
+  margin: 18px 0 0;
+}
+
+/* 在所在的内容栏里居中：图库里是图片区，下载页里是和标题同宽的那一栏。 */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 48px 0 0;
+  text-align: center;
+  color: var(--fg-3);
+  animation: fade-in 0.2s ease both;
+}
+
+.empty p {
+  margin: 0;
+}
+
+.empty .btn {
+  margin-top: 12px;
+}
+
+.empty-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--fg-1);
+}
+
+.jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.job {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+/* 标题行和按钮同高（34px），右侧按钮、进度数字对齐到同一条右边线。 */
+.job-head {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.job-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-title h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 14.5px;
+  font-weight: 800;
+}
+
+.job-status {
+  flex: none;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 11px;
+  background: var(--chip);
+  color: var(--fg-2);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.job-status[data-status="running"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.job-status[data-status="done"] {
+  color: var(--ok);
+}
+
+.job-status[data-status="failed"] {
+  color: var(--err);
+}
+
+.job-actions {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+
+.job-query {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  color: var(--fg-3);
+}
+
+.job-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bar {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--raised);
+}
+
+.bar > i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.job[data-status="done"] .bar > i {
+  background: var(--ok);
+}
+
+.job[data-status="failed"] .bar > i {
+  background: var(--err);
+}
+
+.job[data-status="paused"] .bar > i,
+.job[data-status="canceled"] .bar > i,
+.job[data-status="queued"] .bar > i {
+  background: var(--fg-3);
+}
+
+/* 总数未知时来回滑动。 */
+.bar.is-indeterminate > i {
+  width: 30%;
+  animation: bar-slide 1.3s ease-in-out infinite;
+}
+
+@keyframes bar-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+.job-count {
+  min-width: 110px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+}
+
+.job-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.job-meta b {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+}
+
+.job-meta .link {
+  margin-left: auto;
+}
+
+.job-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--err);
+}
+
+.job-notes,
+.job-notes-hint {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--raised);
+  font-size: 12px;
+}
+
+.job-notes-hint {
+  color: var(--fg-3);
+}
+
+/* 三列：帖子号 / 结果 / 原因，各行对齐。 */
+.job-notes {
+  max-height: 240px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+  gap: 6px 14px;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+
+.job-notes li {
+  display: contents;
+}
+
+.job-notes .mono {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+}
+
+.note-status {
+  font-weight: 700;
+  color: var(--fg-3);
+}
+
+.note-status.failed {
+  color: var(--err);
+}
+
 /* ---------- 对话框与提示 ---------- */
 
 .dialog-backdrop {
@@ -1175,6 +1597,55 @@ code {
   overflow-wrap: anywhere;
 }
 
+.dialog-paths dt label {
+  cursor: pointer;
+}
+
+/* 带输入框的一行：标签和输入框按行中线对齐。 */
+.dialog-paths dt:has(label) {
+  align-self: center;
+}
+
+.dialog-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-input {
+  width: 110px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  outline: none;
+  background: var(--raised);
+  color: var(--fg-1);
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.field-input::placeholder {
+  color: var(--fg-3);
+}
+
+.field-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.field-input::-webkit-inner-spin-button,
+.field-input::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.dialog-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
 .dialog-options {
   display: grid;
   gap: 4px;
@@ -1211,7 +1682,17 @@ code {
   box-shadow: var(--shadow);
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
+  display: flex;
+  align-items: center;
+  gap: 14px;
   font-weight: 700;
+}
+
+/* 发现页的提示放在图片区底部，和多选条同一个位置、同一条中线。 */
+.center > .toast {
+  position: absolute;
+  bottom: 20px;
+  max-width: calc(100% - 40px);
 }
 
 /* ---------- 动效 ---------- */
@@ -1247,5 +1728,10 @@ html.theme-fade * {
 
   .shimmer-img::before {
     background: var(--chip);
+  }
+
+  .bar.is-indeterminate > i {
+    width: 100%;
+    opacity: 0.5;
   }
 }

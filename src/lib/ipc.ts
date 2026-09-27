@@ -57,11 +57,21 @@ export interface SearchPage {
   hasMore: boolean;
   /** 实际发给站点的查询串。 */
   query: string;
+  /** 这一页里已在图库中的帖子 id。 */
+  owned: number[];
 }
 
 export function searchRemote(params: SearchParams): Promise<SearchPage> {
   return invoke<SearchPage>("search_remote", { params });
 }
+
+/** 查询条件一共能搜到多少张；站点不给数字时为 null。 */
+export function countRemote(params: SearchParams): Promise<number | null> {
+  return invoke<number | null>("count_remote", { params });
+}
+
+/** 帖子在界面上的唯一键。 */
+export const postKey = (post: Pick<Post, "source" | "id">) => `${post.source}-${post.id}`;
 
 /** 远程图片统一经 Rust 的 ibx:// 协议加载（代理、限速、缓存都在那一侧）。 */
 export function imageSrc(url: string | null | undefined): string | undefined {
