@@ -50,8 +50,15 @@ fn note_not_image() -> &'static str {
     )
 }
 
-fn note_no_file() -> &'static str {
-    text("原图需要登录后才能下载", "Sign in to download the original")
+fn note_no_file(post: &Post) -> &'static str {
+    if post.gold_only() {
+        text("原图只对 Gold 及以上等级的账号开放", "The original is only available to Gold accounts and above")
+    } else {
+        text(
+            "站点没有开放这张图的原图（画师被封禁或图片已下架时会这样）",
+            "The site doesn't offer this original (this happens when the artist is banned or the image was taken down)",
+        )
+    }
 }
 
 fn note_bad_url() -> &'static str {
@@ -529,7 +536,7 @@ impl Downloader {
             }
         }
         let Some(ext) = image_ext(post) else { return Ok(Outcome::Skipped(note_not_image())) };
-        let Some(url) = post.file_url.as_deref() else { return Ok(Outcome::Failed(note_no_file().into())) };
+        let Some(url) = post.file_url.as_deref() else { return Ok(Outcome::Failed(note_no_file(post).into())) };
         let url = match Url::parse(url) {
             // 只从帖子所属站点的域名下载。
             Ok(url) if sources::source_for_url(&url) == Some(post.source) => url,
@@ -864,7 +871,7 @@ mod tests {
             vec![
                 (1, note_owned().to_string()),
                 (2, note_not_image().to_string()),
-                (3, note_no_file().to_string()),
+                (3, note_no_file(&post(3, "png", None)).to_string()),
                 (4, note_bad_url().to_string()),
             ]
         );

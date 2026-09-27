@@ -237,7 +237,7 @@ pub struct Post {
     pub fav_count: Option<i64>,
     pub file_ext: String,
     pub file_size: Option<u64>,
-    /// 原图。部分帖子对未登录用户隐藏原图，此时为空。
+    /// 原图。站点不对当前账号开放原图时为空，见 [`Post::gold_only`]。
     pub file_url: Option<String>,
     /// 详情面板用的中等尺寸图。
     pub sample_url: Option<String>,
@@ -246,6 +246,16 @@ pub struct Post {
     pub created_at: Option<String>,
     pub post_url: String,
     pub tags: PostTags,
+}
+
+/// Danbooru 的受限 tag：带这些 tag 的帖子只对 Gold 及以上等级开放原图，普通账号和未登录都拿不到原图地址。
+const GOLD_ONLY_TAGS: [&str; 3] = ["loli", "shota", "toddlercon"];
+
+impl Post {
+    /// 没有原图地址是不是因为账号等级不够。其余情况（画师被封禁、图片下架）连 Gold 也拿不到。
+    pub fn gold_only(&self) -> bool {
+        self.source == Source::Danbooru && self.tags.general.iter().any(|tag| GOLD_ONLY_TAGS.contains(&tag.as_str()))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

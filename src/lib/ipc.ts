@@ -110,6 +110,13 @@ export function countRemote(params: SearchParams): Promise<number | null> {
   return invoke<number | null>("count_remote", { params });
 }
 
+/** Danbooru 的受限 tag：带这些 tag 的帖子只对 Gold 及以上等级开放原图（和 Rust 端一致）。 */
+const GOLD_ONLY_TAGS = ["loli", "shota", "toddlercon"];
+
+/** 没有原图地址是不是因为账号等级不够；其余情况（画师被封禁、图片下架）连 Gold 也拿不到。 */
+export const goldOnly = (post: Post) =>
+  post.source === "danbooru" && post.tags.general.some((tag) => GOLD_ONLY_TAGS.includes(tag));
+
 /** 帖子在界面上的唯一键。 */
 export const postKey = (post: Pick<Post, "source" | "id">) => `${post.source}-${post.id}`;
 

@@ -17,6 +17,7 @@ import {
   countRemote,
   errorCode,
   errorMessage,
+  goldOnly,
   postKey,
   ratingOptions,
   RATINGS,
@@ -418,8 +419,17 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         {t("下载原图")}
       </button>
     ) : (
-      <button type="button" className="btn" disabled title={t("站点对未登录用户隐藏了这张图的原图")}>
-        {t("原图需要登录后才能下载")}
+      <button
+        type="button"
+        className="btn"
+        disabled
+        title={
+          goldOnly(selectedPost)
+            ? t("带受限 tag 的图，Danbooru 只对 Gold 及以上等级的账号开放原图。")
+            : t("站点没有开放这张图的原图，画师被封禁或图片已下架时会这样。")
+        }
+      >
+        {goldOnly(selectedPost) ? t("原图需要 Gold 账号") : t("站点没有开放原图")}
       </button>
     )
   ) : null;
@@ -509,7 +519,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
           {results?.localFilter && (
             <span
               className="local-filter"
-              title={t("站点一次能搜的 tag 数有限，「{filter}」在本地逐页筛选，加载会慢一些。登录后能直接搜更多 tag。", {
+              title={t("站点一次能搜的 tag 数有限，「{filter}」在本地逐页筛选，加载会慢一些。Gold 以上等级的账号能直接搜更多 tag。", {
                 filter: results.localFilter,
               })}
             >

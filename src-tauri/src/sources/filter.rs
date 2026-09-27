@@ -190,4 +190,12 @@ mod tests {
         assert!(LocalFilter::parse("-rain").matches(&p));
         assert!(glob("a*b*c", "axxbyyc") && !glob("a*b*c", "axxbyy") && glob("*", "x") && !glob("ab", "abc"));
     }
+
+    #[test]
+    fn gold_only_posts_are_danbooru_posts_with_restricted_tags() {
+        assert!(post(&["loli", "sky"], &[]).gold_only());
+        assert!(!post(&["sky"], &[]).gold_only());
+        let gelbooru = Post { source: Source::Gelbooru, ..post(&["loli"], &[]) };
+        assert!(!gelbooru.gold_only());
+    }
 }

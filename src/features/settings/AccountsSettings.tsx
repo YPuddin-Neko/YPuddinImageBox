@@ -29,7 +29,7 @@ const SITES: Record<Source, SiteText> = {
   danbooru: {
     nameLabel: "用户名",
     namePlaceholder: "Danbooru 用户名",
-    description: "不登录也能浏览和下载。登录后一次能搜更多 tag，部分只对会员开放的原图也能下载。",
+    description: "不登录也能浏览和下载。Gold 以上等级的账号一次能搜更多 tag（Gold 6 个、Platinum 12 个），带受限 tag 的图也只有 Gold 以上能下载原图。",
     help: "登录 Danbooru 网页后，在「My Account」页面的 API Key 一栏创建。",
     helpUrl: "https://danbooru.donmai.us/profile",
     helpLink: "打开 Danbooru 账号页",
