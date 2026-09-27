@@ -245,11 +245,11 @@ button:disabled {
 }
 
 .filters {
-  min-height: 44px;
+  min-height: 40px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 20px 12px;
+  padding: 0 20px 8px;
 }
 
 /* 筛选行的下拉框：和 .btn.sm 同高（30px），描边胶囊，前面一个浅色小标题。 */
@@ -327,11 +327,12 @@ button:disabled {
   scrollbar-color: var(--line-2) transparent;
 }
 
+/* 顶部留 4px：选中卡片的外圈描边画在卡片外面，贴着滚动区上沿会被裁掉一截。 */
 .scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 20px 28px;
+  padding: 4px 20px 28px;
 }
 
 .grid {
