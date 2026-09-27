@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { MotionConfig, motion } from "motion/react";
 
 import { Rail, type View } from "./components/Rail";
+import { WindowControls } from "./components/WindowControls";
 import { Discover } from "./features/discover/Discover";
 import { Downloads } from "./features/downloads/Downloads";
 import { useDownloads } from "./features/downloads/context";
@@ -12,6 +13,7 @@ import { Subscriptions } from "./features/subscriptions/Subscriptions";
 import { dialogOpen, hasMod } from "./lib/hotkeys";
 import { VIEW_VARIANTS } from "./lib/motion";
 import type { Navigate } from "./lib/nav";
+import { isWindows } from "./lib/platform";
 import { ThemeProvider } from "./theme/ThemeProvider";
 
 function ViewPane({ active, children }: { active: boolean; children: ReactNode }) {
@@ -70,6 +72,7 @@ function Shell() {
   }, []);
   return (
     <div className="app">
+      {isWindows && <WindowControls />}
       <Rail view={view} onChange={setView} badges={{ downloads: activeCount }} />
       <main className="app-main">
         <ViewPane active={view === "discover"}>

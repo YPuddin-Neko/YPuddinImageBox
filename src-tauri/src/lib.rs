@@ -270,6 +270,12 @@ pub fn run() {
                 accounts_error: Mutex::new(accounts_error),
             });
             setup_tray(app)?;
+            // Windows 上去掉系统标题栏，按钮由界面画，和 macOS 的一体化外观一致；保留窗口阴影和圆角。
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                let _ = window.set_decorations(false);
+                let _ = window.set_shadow(true);
+            }
             // 窗口在配置里默认隐藏，开机自动启动时保持隐藏，其余情况显示出来，避免先闪一下再藏起来。
             if !std::env::args().any(|arg| arg == BACKGROUND_ARG) {
                 show_main_window(app.handle());

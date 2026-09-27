@@ -8,6 +8,11 @@
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "core:window:allow-close",
+    "core:window:allow-is-maximized",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-minimize",
     "opener:default",
     "opener:allow-reveal-item-in-dir",
     "dialog:allow-open",

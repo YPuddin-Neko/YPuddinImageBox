@@ -7,11 +7,13 @@ import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./styles/themes.css";
 import "./styles/app.css";
+import { isMac, isWindows } from "./lib/platform";
 import { applyTheme, loadPrefs, resolveThemeId, systemDarkQuery } from "./theme/themes";
 
 // 首帧前套上主题并标记平台，避免启动时闪一下默认配色。
 applyTheme(resolveThemeId(loadPrefs(), systemDarkQuery().matches));
-document.documentElement.classList.toggle("is-mac", /Mac/.test(navigator.userAgent));
+document.documentElement.classList.toggle("is-mac", isMac);
+document.documentElement.classList.toggle("is-windows", isWindows);
 
 // 界面里没接住的错误也记进日志文件，方便排查。
 window.addEventListener("error", (event) => {
