@@ -22,6 +22,8 @@ export interface Job {
   error: string | null;
   createdAt: number;
   updatedAt: number;
+  /** 超出 tag 上限、在本地筛选的 tag。 */
+  localFilter: string | null;
 }
 
 export interface ItemNote {

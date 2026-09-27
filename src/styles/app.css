@@ -289,6 +289,24 @@ button:disabled {
   color: var(--fg-3);
 }
 
+/* 超出 tag 上限时的提示，和筛选胶囊同高。 */
+.local-filter {
+  height: 30px;
+  max-width: 30%;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 11px;
+  overflow: hidden;
+  border: 1px dashed var(--line-2);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
 .count {
   white-space: nowrap;
   font-size: 12px;
@@ -1782,6 +1800,10 @@ code {
 .dialog-paths code {
   color: var(--fg-1);
   overflow-wrap: anywhere;
+}
+
+.dialog-sub {
+  color: var(--warn);
 }
 
 .dialog-paths dt label {

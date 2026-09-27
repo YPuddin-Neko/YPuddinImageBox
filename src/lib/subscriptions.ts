@@ -23,6 +23,8 @@ export interface Subscription {
   updatedAt: number;
   /** 还在排队、下载或暂停中的检查任务。 */
   activeJob: number | null;
+  /** 超出 tag 上限、在本地筛选的 tag。 */
+  localFilter: string | null;
 }
 
 /** 可选的检查间隔（分钟）。 */

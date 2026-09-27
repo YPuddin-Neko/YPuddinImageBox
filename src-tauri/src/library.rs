@@ -142,6 +142,8 @@ pub struct JobInfo {
     pub cursor: Option<String>,
     /// 由订阅检查生成时，对应的订阅。
     pub subscription_id: Option<i64>,
+    /// 超出 tag 上限、在本地筛选的 tag。
+    pub local_filter: Option<String>,
 }
 
 /// 订阅：按设定的间隔检查条件下有没有新图，有就自动下载。
@@ -167,6 +169,8 @@ pub struct Subscription {
     pub updated_at: i64,
     /// 还在排队、下载或暂停中的检查任务。
     pub active_job: Option<i64>,
+    /// 超出 tag 上限、在本地筛选的 tag。
+    pub local_filter: Option<String>,
 }
 
 impl Subscription {
@@ -187,6 +191,7 @@ pub struct NewSubscription<'a> {
     pub query: &'a str,
     pub interval_minutes: i64,
     pub last_seen_id: i64,
+    pub local_filter: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +234,7 @@ fn job_from_row(row: &SqliteRow) -> Result<JobInfo, sqlx::Error> {
         updated_at: row.try_get("updated_at")?,
         cursor: row.try_get("cursor")?,
         subscription_id: row.try_get("subscription_id")?,
+        local_filter: row.try_get("local_filter")?,
     })
 }
 
@@ -250,6 +256,7 @@ fn subscription_from_row(row: &SqliteRow) -> Result<Subscription, sqlx::Error> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         active_job: row.try_get("active_job")?,
+        local_filter: row.try_get("local_filter")?,
     })
 }
 
@@ -286,10 +293,10 @@ fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
 }
 
 const JOB_COLUMNS: &str = "id, kind, source, title, query, max_posts, status, total, saved, skipped, failed, \
-                           cursor, error, created_at, updated_at, subscription_id";
+                           cursor, error, created_at, updated_at, subscription_id, local_filter";
 
 const SUBSCRIPTION_COLUMNS: &str = "s.id, s.source, s.tags, s.ratings, s.query, s.enabled, s.interval_minutes, \
-     s.last_seen_id, s.last_checked_at, s.last_new, s.last_error, s.created_at, s.updated_at, \
+     s.last_seen_id, s.last_checked_at, s.last_new, s.last_error, s.created_at, s.updated_at, s.local_filter, \
      (SELECT j.id FROM jobs j WHERE j.subscription_id = s.id AND j.status IN ('queued', 'running', 'paused') \
       ORDER BY j.id DESC LIMIT 1) AS active_job";
 
@@ -504,9 +511,9 @@ impl Library {
         let now = now_ms();
         let ratings: Vec<&str> = new.ratings.iter().map(|r| r.as_str()).collect();
         let id: i64 = sqlx::query_scalar(
-            "INSERT INTO subscriptions (source, tags, ratings, query, interval_minutes, last_seen_id, last_checked_at,
-                                        created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            "INSERT INTO subscriptions (source, tags, ratings, query, interval_minutes, last_seen_id, local_filter,
+                                        last_checked_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         )
         .bind(new.source.as_str())
         .bind(new.tags.trim())
@@ -514,6 +521,7 @@ impl Library {
         .bind(new.query)
         .bind(new.interval_minutes)
         .bind(new.last_seen_id)
+        .bind(new.local_filter.filter(|f| !f.is_empty()))
         .bind(now)
         .bind(now)
         .bind(now)
@@ -575,14 +583,16 @@ impl Library {
         let now = now_ms();
         let mut tx = self.pool.begin().await?;
         let job_id: i64 = sqlx::query_scalar(
-            "INSERT INTO jobs (kind, source, title, query, status, cursor, subscription_id, created_at, updated_at)
-             VALUES ('query', ?, ?, ?, 'queued', ?, ?, ?, ?) RETURNING id",
+            "INSERT INTO jobs (kind, source, title, query, status, cursor, subscription_id, local_filter,
+                               created_at, updated_at)
+             VALUES ('query', ?, ?, ?, 'queued', ?, ?, ?, ?, ?) RETURNING id",
         )
         .bind(sub.source.as_str())
         .bind(format!("订阅：{}", sub.title()))
         .bind(&sub.query)
         .bind(format!("a{}", sub.last_seen_id))
         .bind(sub.id)
+        .bind(&sub.local_filter)
         .bind(now)
         .bind(now)
         .fetch_one(&mut *tx)
@@ -636,6 +646,7 @@ impl Library {
         source: Source,
         title: &str,
         query: &str,
+        local_filter: Option<&str>,
         max_posts: Option<i64>,
         estimate: Option<i64>,
     ) -> Result<JobInfo, sqlx::Error> {
@@ -645,12 +656,14 @@ impl Library {
             (estimate, _) => estimate,
         };
         let id: i64 = sqlx::query_scalar(
-            "INSERT INTO jobs (kind, source, title, query, max_posts, status, total, cursor, created_at, updated_at)
-             VALUES ('query', ?, ?, ?, ?, 'queued', ?, '1', ?, ?) RETURNING id",
+            "INSERT INTO jobs (kind, source, title, query, local_filter, max_posts, status, total, cursor,
+                               created_at, updated_at)
+             VALUES ('query', ?, ?, ?, ?, ?, 'queued', ?, '1', ?, ?) RETURNING id",
         )
         .bind(source.as_str())
         .bind(title)
         .bind(query)
+        .bind(local_filter.filter(|f| !f.is_empty()))
         .bind(max_posts)
         .bind(total)
         .bind(now)
@@ -720,7 +733,14 @@ impl Library {
 
     /// 按条件下载时追加一页帖子，同时记下下一页；`cursor` 为 `None` 表示已翻完，此时把总数改成实际张数。
     /// 站点没给总数时，翻完之前总数保持未知。
-    pub async fn append_items(&self, job_id: i64, posts: &[Post], cursor: Option<String>) -> Result<JobInfo, sqlx::Error> {
+    /// `seen_max` 是站点这一页里最大的帖子 id（包括被本地筛选掉的），订阅按它推进。
+    pub async fn append_items(
+        &self,
+        job_id: i64,
+        posts: &[Post],
+        cursor: Option<String>,
+        seen_max: Option<u64>,
+    ) -> Result<JobInfo, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         let next_seq: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(seq) + 1, 0) FROM job_items WHERE job_id = ?")
             .bind(job_id)
@@ -728,7 +748,7 @@ impl Library {
             .await?;
         insert_items(&mut tx, job_id, next_seq, posts).await?;
         // 订阅检查：记下处理到哪里、找到了几张新图。任务内容和进度在同一个事务里，中断后从这里继续。
-        if let Some(max_id) = posts.iter().map(|post| post.id as i64).max() {
+        if let Some(max_id) = seen_max.or_else(|| posts.iter().map(|post| post.id).max()).map(|id| id as i64) {
             sqlx::query(
                 "UPDATE subscriptions SET last_seen_id = MAX(last_seen_id, ?), last_new = last_new + ?, updated_at = ?
                  WHERE id = (SELECT subscription_id FROM jobs WHERE id = ?)",
@@ -1044,6 +1064,7 @@ mod tests {
                 query: "sky rating:g,s",
                 interval_minutes: 60,
                 last_seen_id: 100,
+                local_filter: None,
             })
             .await
             .unwrap();
@@ -1057,7 +1078,7 @@ mod tests {
         assert_eq!(lib.subscription(sub.id).await.unwrap().unwrap().active_job, Some(job.id));
 
         let page: Vec<Post> = [105, 101, 103].iter().map(|id| post(Source::Danbooru, *id, PostTags::default())).collect();
-        lib.append_items(job.id, &page, Some("a105".into())).await.unwrap();
+        lib.append_items(job.id, &page, Some("a105".into()), None).await.unwrap();
         let sub = lib.subscription(sub.id).await.unwrap().unwrap();
         assert_eq!((sub.last_seen_id, sub.last_new), (105, 3));
 
@@ -1071,22 +1092,23 @@ mod tests {
     #[tokio::test]
     async fn query_job_pages_update_total() {
         let lib = Library::in_memory().await;
-        let job = lib.create_query_job(Source::Danbooru, "sky", "sky", Some(500), Some(900)).await.unwrap();
+        let job = lib.create_query_job(Source::Danbooru, "sky", "sky", None, Some(500), Some(900)).await.unwrap();
         assert_eq!((job.total, job.cursor.as_deref()), (Some(500), Some("1")));
         let page: Vec<Post> = (1..=3).map(|id| post(Source::Danbooru, id, PostTags::default())).collect();
-        let job = lib.append_items(job.id, &page, Some("b1".into())).await.unwrap();
+        let job = lib.append_items(job.id, &page, Some("b1".into()), None).await.unwrap();
         assert_eq!((job.total, job.cursor.as_deref()), (Some(500), Some("b1")));
-        let job = lib.append_items(job.id, &page[..1], None).await.unwrap();
+        let job = lib.append_items(job.id, &page[..1], None, None).await.unwrap();
         // 翻完后总数改成实际张数。
         assert_eq!((job.total, job.cursor), (Some(4), None));
         let seqs: Vec<i64> = lib.pending_items(job.id, -1, 10).await.unwrap().iter().map(|i| i.seq).collect();
         assert_eq!(seqs, vec![0, 1, 2, 3]);
 
         // 站点没给总数：翻页期间保持未知，翻完才有。
-        let job = lib.create_query_job(Source::Danbooru, "sky", "sky", None, None).await.unwrap();
-        let job = lib.append_items(job.id, &page, Some("b1".into())).await.unwrap();
+        let job = lib.create_query_job(Source::Danbooru, "sky", "sky", Some("cloud"), None, None).await.unwrap();
+        assert_eq!(job.local_filter.as_deref(), Some("cloud"));
+        let job = lib.append_items(job.id, &page, Some("b1".into()), None).await.unwrap();
         assert_eq!(job.total, None);
-        let job = lib.append_items(job.id, &[], None).await.unwrap();
+        let job = lib.append_items(job.id, &[], None, None).await.unwrap();
         assert_eq!(job.total, Some(3));
     }
 }

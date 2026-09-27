@@ -48,15 +48,18 @@ export interface SearchParams {
   source: Source;
   tags: string;
   ratings: Rating[];
-  page: number;
+  /** 上一次返回的 next；不传表示第一页。 */
+  cursor?: string | null;
 }
 
 export interface SearchPage {
   posts: Post[];
-  page: number;
-  hasMore: boolean;
+  /** 下一页的位置，没有更多时为 null。 */
+  next: string | null;
   /** 实际发给站点的查询串。 */
   query: string;
+  /** 超出 tag 上限、在本地筛选的 tag；没有时为空字符串。 */
+  localFilter: string;
   /** 这一页里已在图库中的帖子 id。 */
   owned: number[];
 }

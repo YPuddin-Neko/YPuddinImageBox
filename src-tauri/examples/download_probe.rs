@@ -51,7 +51,8 @@ async fn main() {
         .expect("搜索");
     println!("选中下载 {} 张", posts.len());
     let first = downloader.enqueue_posts(posts.clone()).await.expect("加入队列");
-    let second = downloader.enqueue_query(Source::Danbooru, "按条件", QUERY, Some(5)).await.expect("加入队列");
+    let second =
+        downloader.enqueue_query(Source::Danbooru, "按条件", QUERY, None, QUERY, Some(5)).await.expect("加入队列");
 
     // 订阅：起点设在第 3 新的帖子，检查时应该找到比它新的那几张。
     let start = posts.iter().map(|post| post.id).min().expect("至少一张") as i64;
@@ -63,6 +64,7 @@ async fn main() {
             query: QUERY,
             interval_minutes: 60,
             last_seen_id: start,
+            local_filter: None,
         })
         .await
         .expect("建订阅");

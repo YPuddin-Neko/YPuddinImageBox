@@ -1,6 +1,7 @@
 //! 各 booru 站点的适配器：把不同站点的帖子统一成 [`Post`]。
 
 pub mod danbooru;
+pub mod filter;
 pub mod gelbooru;
 
 use std::sync::{PoisonError, RwLock};
@@ -195,22 +196,21 @@ pub struct SearchParams {
     pub tags: String,
     #[serde(default)]
     pub ratings: Vec<Rating>,
-    #[serde(default = "first_page")]
-    pub page: u32,
-}
-
-fn first_page() -> u32 {
-    1
+    /// 上一次返回的 `next`；为空表示第一页。
+    #[serde(default)]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchPage {
     pub posts: Vec<Post>,
-    pub page: u32,
-    pub has_more: bool,
+    /// 下一页的位置，没有更多时为空。
+    pub next: Option<String>,
     /// 实际发给站点的查询串，界面上展示给用户核对。
     pub query: String,
+    /// 超出 tag 上限、在本地筛选的 tag（空格分隔，-tag 表示排除），没有时为空字符串。
+    pub local_filter: String,
     /// 这一页里已在图库中的帖子 id。
     pub owned: Vec<u64>,
 }

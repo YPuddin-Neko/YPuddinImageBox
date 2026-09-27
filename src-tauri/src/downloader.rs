@@ -21,6 +21,7 @@ use crate::error::AppError;
 use crate::library::{now_ms, ItemStatus, JobInfo, JobItem, JobKind, JobStatus, Library, Subscription};
 use crate::net::Net;
 use crate::protocol::sniff;
+use crate::sources::filter::LocalFilter;
 use crate::sources::{self, AccountStore, Page, Post, Source};
 use crate::storage::{Storage, StorageKind};
 use crate::thumbs;
@@ -164,20 +165,24 @@ impl Downloader {
         Ok(job)
     }
 
+    /// 按条件下载全部结果。`query` 发给站点，`local_filter` 是超出 tag 上限、在本地筛选的部分；
+    /// `count_query` 是完整条件，用来估计总数（Danbooru 的计数接口不限 tag 数量）。
     pub async fn enqueue_query(
         &self,
         source: Source,
         title: &str,
         query: &str,
+        local_filter: Option<&str>,
+        count_query: &str,
         max_posts: Option<i64>,
     ) -> Result<JobInfo, AppError> {
         // 总数只用来显示进度，查不到也照样开始；缺账号则直接提示，不建一个注定失败的任务。
-        let estimate = match sources::count(&self.net, &self.accounts.get(), source, query).await {
+        let estimate = match sources::count(&self.net, &self.accounts.get(), source, count_query).await {
             Ok(count) => count.map(|n| n as i64),
             Err(err @ AppError::CredentialsMissing(_)) => return Err(err),
             Err(_) => None,
         };
-        let job = self.library.create_query_job(source, title, query, max_posts, estimate).await?;
+        let job = self.library.create_query_job(source, title, query, local_filter, max_posts, estimate).await?;
         self.emit(Event::Job(job.clone()));
         self.wake.notify_one();
         Ok(job)
@@ -457,6 +462,10 @@ impl Downloader {
         let bounds = ids.clone().min().zip(ids.max());
         // 未登录时站点会从结果里隐去部分帖子，一页不满不代表翻完了，取到空页才算。
         let mut exhausted = fetched == 0 || bounds.is_none();
+        // 翻页位置按站点返回的整页算，本地筛选只决定哪些帖子进任务。
+        if let Some(filter) = job.local_filter.as_deref().map(LocalFilter::parse) {
+            posts.retain(|post| filter.matches(post));
+        }
         if let Some(max) = job.max_posts {
             let room = (max - self.library.item_count(job.id).await?).max(0) as usize;
             if posts.len() >= room {
@@ -465,7 +474,7 @@ impl Downloader {
             }
         }
         let next = (!exhausted).then(|| page.next(job.source, query, bounds).to_param());
-        Ok(self.library.append_items(job.id, &posts, next).await?)
+        Ok(self.library.append_items(job.id, &posts, next, bounds.map(|(_, max)| max)).await?)
     }
 
     // ---------- 单张图 ----------

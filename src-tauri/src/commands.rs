@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::error::AppError;
 use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery, NewSubscription, Subscription};
 use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
+use crate::sources::filter::{self, QueryPlan};
 use crate::sources::{self, danbooru, gelbooru, Page, Post, SearchPage, SearchParams, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
 use crate::{keys, net, secrets, thumbs, AppState};
@@ -13,19 +14,76 @@ use crate::{keys, net, secrets, thumbs, AppState};
 /// 瀑布流每页条数。下载任务另按站点上限（200 / 100）分页。
 const PAGE_SIZE: u32 = 40;
 
-#[tauri::command]
-pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> Result<SearchPage, AppError> {
-    let query = sources::build_query(params.source, &params.tags, &params.ratings);
-    let page = params.page.max(1);
+/// Danbooru 一次能搜几个 tag：看当前实际登录的账号等级；Gelbooru 不限。
+fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
+    match source {
+        Source::Danbooru => {
+            let signed_in = state.accounts.get().danbooru.is_some();
+            let level = state.settings().accounts.danbooru.as_ref().and_then(|a| a.level.clone());
+            Some(filter::danbooru_tag_limit(if signed_in { level.as_deref() } else { None }))
+        }
+        Source::Gelbooru => None,
+    }
+}
+
+/// 超出 tag 上限时一次最多往下翻几页找够一页结果，免得条件太严时一直翻。
+const MAX_FILTERED_PAGES: usize = 5;
+
+async fn search_with_plan(state: &AppState, params: &SearchParams, plan: &QueryPlan) -> Result<SearchPage, AppError> {
     let accounts = state.accounts.get();
-    let (posts, fetched) =
-        sources::fetch(&state.net, &accounts, params.source, &query, &Page::Number(page), PAGE_SIZE).await?;
+    let query = &plan.server_query;
+    let (posts, next) = if plan.local.is_empty() {
+        let page = params.cursor.as_deref().and_then(|c| c.parse().ok()).unwrap_or(1u32).max(1);
+        let (posts, fetched) =
+            sources::fetch(&state.net, &accounts, params.source, query, &Page::Number(page), PAGE_SIZE).await?;
+        (posts, (fetched >= PAGE_SIZE as usize).then(|| (page + 1).to_string()))
+    } else {
+        // 按站点每页最多的条数往下翻，本地筛到够一页或翻满几页就先返回，剩下的下次接着翻。
+        let mut page = params.cursor.as_deref().and_then(Page::parse).unwrap_or(Page::Number(1));
+        let limit = params.source.max_page_size();
+        let mut matched = Vec::new();
+        let mut next = None;
+        for _ in 0..MAX_FILTERED_PAGES {
+            let (posts, fetched) = sources::fetch(&state.net, &accounts, params.source, query, &page, limit).await?;
+            let ids = posts.iter().map(|post| post.id);
+            let Some(bounds) = ids.clone().min().zip(ids.max()).filter(|_| fetched > 0) else {
+                next = None;
+                break;
+            };
+            matched.extend(posts.into_iter().filter(|post| plan.local.matches(post)));
+            page = page.next(params.source, query, Some(bounds));
+            next = Some(page.to_param());
+            if matched.len() >= PAGE_SIZE as usize {
+                break;
+            }
+        }
+        (matched, next)
+    };
     let ids: Vec<u64> = posts.iter().map(|post| post.id).collect();
     let owned = state.library.owned(params.source, &ids).await?.into_iter().collect();
-    Ok(SearchPage { posts, page, has_more: fetched >= PAGE_SIZE as usize, query, owned })
+    Ok(SearchPage { posts, next, query: query.clone(), local_filter: plan.local.to_query(), owned })
+}
+
+#[tauri::command]
+pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> Result<SearchPage, AppError> {
+    let mut limit = tag_limit(&state, params.source);
+    // 站点实际的上限比按账号等级算的小时（例如等级刚变），按站点给的数字重新拆一次。
+    for retry in [false, true] {
+        let plan = filter::plan_query(params.source, &params.tags, &params.ratings, limit)?;
+        match search_with_plan(&state, &params, &plan).await {
+            Err(AppError::TagLimit { limit: actual, .. })
+                if !retry && limit.is_some_and(|l| l > actual as usize) =>
+            {
+                limit = Some(actual as usize);
+            }
+            result => return result,
+        }
+    }
+    unreachable!("第二次一定会返回")
 }
 
 /// 查询条件一共能搜到多少张，下载全部结果前给用户确认。
+/// Danbooru 的计数接口不限 tag 数量，所以用完整条件，超出上限时也准确。
 #[tauri::command]
 pub async fn count_remote(state: State<'_, AppState>, params: SearchParams) -> Result<Option<u64>, AppError> {
     let query = sources::build_query(params.source, &params.tags, &params.ratings);
@@ -44,10 +102,15 @@ pub async fn download_query(
     params: SearchParams,
     max_posts: Option<u32>,
 ) -> Result<JobInfo, AppError> {
-    let query = sources::build_query(params.source, &params.tags, &params.ratings);
+    let plan = filter::plan_query(params.source, &params.tags, &params.ratings, tag_limit(&state, params.source))?;
+    let full = sources::build_query(params.source, &params.tags, &params.ratings);
     let tags = params.tags.split_whitespace().collect::<Vec<_>>().join(" ");
     let title = if tags.is_empty() { "全部帖子".to_string() } else { tags };
-    state.downloader.enqueue_query(params.source, &title, &query, max_posts.map(i64::from)).await
+    let local = plan.local.to_query();
+    state
+        .downloader
+        .enqueue_query(params.source, &title, &plan.server_query, Some(&local), &full, max_posts.map(i64::from))
+        .await
 }
 
 #[tauri::command]
@@ -182,7 +245,8 @@ pub async fn subscription_create(
     download_existing: bool,
     max_posts: Option<u32>,
 ) -> Result<Subscription, AppError> {
-    let query = sources::build_query(params.source, &params.tags, &params.ratings);
+    let plan = filter::plan_query(params.source, &params.tags, &params.ratings, tag_limit(&state, params.source))?;
+    let query = plan.server_query.clone();
     if sources::has_custom_order(&query) {
         return Err(AppError::InvalidInput("订阅按上传先后找新图，条件里不能带 order: 或 sort: 这类排序".into()));
     }
@@ -202,10 +266,16 @@ pub async fn subscription_create(
             query: &query,
             interval_minutes: i64::from(interval_minutes),
             last_seen_id: newest,
+            local_filter: Some(&plan.local.to_query()),
         })
         .await?;
     if download_existing {
-        state.downloader.enqueue_query(params.source, &sub.title(), &query, max_posts.map(i64::from)).await?;
+        let full = sources::build_query(params.source, &params.tags, &params.ratings);
+        let local = plan.local.to_query();
+        state
+            .downloader
+            .enqueue_query(params.source, &sub.title(), &query, Some(&local), &full, max_posts.map(i64::from))
+            .await?;
     }
     state.downloader.reschedule();
     Ok(sub)

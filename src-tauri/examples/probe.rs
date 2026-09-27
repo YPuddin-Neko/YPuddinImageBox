@@ -4,6 +4,7 @@
 
 use imagebox_lib::net::{test_connection, Net};
 use imagebox_lib::settings::{ProxyMode, ProxySettings};
+use imagebox_lib::sources::filter::{danbooru_tag_limit, plan_query};
 use imagebox_lib::sources::{build_query, danbooru, gelbooru, Page, Rating, Source};
 
 #[tokio::main]
@@ -44,6 +45,23 @@ async fn main() {
             }
             Err(err) => println!("预览图下载失败：{err}"),
         }
+    }
+
+    // 超出 tag 上限：前两个交给站点，第三个在本地筛。
+    let plan = plan_query(Source::Danbooru, "1girl scenery sky", &[Rating::General], Some(danbooru_tag_limit(None)))
+        .expect("拆分条件");
+    match danbooru::search(&net, &plan.server_query, &Page::Number(1), 200, None).await {
+        Ok((posts, fetched)) => {
+            let matched: Vec<_> = posts.iter().filter(|post| plan.local.matches(post)).collect();
+            let all_have_sky = matched.iter().all(|post| post.tags.general.iter().any(|t| t == "sky"));
+            println!(
+                "本地筛选  站点查询「{}」+ 本地「{}」：这一页 {fetched} 条，筛出 {} 条，全部带 sky：{all_have_sky}",
+                plan.server_query,
+                plan.local.to_query(),
+                matched.len()
+            );
+        }
+        Err(err) => println!("本地筛选失败：{err}"),
     }
 
     // 填错的账号：两个站点都应该提示账号或 Key 不对。

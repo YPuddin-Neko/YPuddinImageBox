@@ -37,15 +37,18 @@ interface Criteria {
 
 interface Results {
   posts: Post[];
-  page: number;
-  hasMore: boolean;
+  /** 下一页的位置，没有更多时为 null。 */
+  next: string | null;
   query: string;
+  /** 超出 tag 上限、在本地筛选的 tag。 */
+  localFilter: string;
 }
 
 /** 「下载全部结果」对话框。 */
 interface Bulk {
   criteria: Criteria;
   query: string;
+  localFilter: string;
   count: number | null | "loading" | "failed";
   /** 最多下载前多少张，留空表示不限。 */
   max: string;
@@ -61,6 +64,7 @@ interface Toast {
 interface SubscribeDraft {
   criteria: Criteria;
   query: string;
+  localFilter: string;
   interval: number;
   /** 现在是否也下载已有的图。 */
   existing: boolean;
@@ -89,7 +93,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   /** 记下失败的是哪一页，重试时重跑这一页；code 用来判断是不是账号问题。 */
-  const [error, setError] = useState<{ message: string; code: string | null; page: number } | null>(null);
+  const [error, setError] = useState<{ message: string; code: string | null; cursor: string | null } | null>(null);
   /** 已在图库中的帖子。只增不减：下载完成的事件也会加进来。 */
   const [owned, setOwned] = useState<Set<string>>(() => new Set());
   /** 这次打开软件后加入过下载队列、还没下载完的帖子。 */
@@ -105,37 +109,40 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const posts = results?.posts ?? [];
   const { picked, pickedPosts, toggle: togglePick, clear: clearPicks, pickAll } = usePicker(posts);
 
-  const run = useCallback(async (criteria: Criteria, page: number) => {
+  /** `cursor` 为 null 表示重新搜第一页。 */
+  const run = useCallback(async (criteria: Criteria, cursor: string | null) => {
     const id = ++requestId.current;
+    const first = cursor === null;
     committed.current = criteria;
     setLoading(true);
     setError(null);
     try {
-      const next = await searchRemote({ ...criteria, page });
+      const next = await searchRemote({ ...criteria, cursor });
       if (id !== requestId.current) return;
       setResults((prev) => {
-        if (page === 1 || !prev) return next;
+        const page = { posts: next.posts, next: next.next, query: next.query, localFilter: next.localFilter };
+        if (first || !prev) return page;
         const seen = new Set(prev.posts.map(postKey));
-        return { ...next, posts: [...prev.posts, ...next.posts.filter((p) => !seen.has(postKey(p)))] };
+        return { ...page, posts: [...prev.posts, ...next.posts.filter((p) => !seen.has(postKey(p)))] };
       });
       setOwned((prev) => {
         const ownedNow = new Set(prev);
         next.owned.forEach((postId) => ownedNow.add(postKey({ source: criteria.source, id: postId })));
         return ownedNow;
       });
-      if (page === 1) {
+      if (first) {
         setSelected(next.posts[0] ? postKey(next.posts[0]) : null);
         clearPicks();
       }
     } catch (err) {
-      if (id === requestId.current) setError({ message: errorMessage(err), code: errorCode(err), page });
+      if (id === requestId.current) setError({ message: errorMessage(err), code: errorCode(err), cursor });
     } finally {
       if (id === requestId.current) setLoading(false);
     }
   }, [clearPicks]);
 
   useEffect(() => {
-    void run(DEFAULT_CRITERIA, 1);
+    void run(DEFAULT_CRITERIA, null);
   }, [run]);
 
   useTauriEvent<PostRef[]>(EVENTS.libraryRemoved, (removed) =>
@@ -164,8 +171,8 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   }, [toast]);
 
   const loadMore = useCallback(() => {
-    if (!results?.hasMore || loading || error) return;
-    void run(committed.current, results.page + 1);
+    if (!results?.next || loading || error) return;
+    void run(committed.current, results.next);
   }, [results, loading, error, run]);
 
   useEffect(() => {
@@ -183,18 +190,18 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void run({ source, tags, ratings }, 1);
+    void run({ source, tags, ratings }, null);
   };
 
   const toggleRating = (rating: Rating) => {
     const next = ratings.includes(rating) ? ratings.filter((r) => r !== rating) : [...ratings, rating];
     setRatings(next);
-    void run({ source, tags, ratings: next }, 1);
+    void run({ source, tags, ratings: next }, null);
   };
 
   const changeSource = (next: Source) => {
     setSource(next);
-    void run({ source: next, tags, ratings }, 1);
+    void run({ source: next, tags, ratings }, null);
   };
 
   const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
@@ -231,10 +238,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   const openBulk = () => {
     const criteria = committed.current;
-    setBulk({ criteria, query: results?.query ?? "", count: "loading", max: "" });
+    setBulk({ criteria, query: results?.query ?? "", localFilter: results?.localFilter ?? "", count: "loading", max: "" });
     const settle = (count: Bulk["count"]) =>
       setBulk((current) => (current && current.criteria === criteria ? { ...current, count } : current));
-    countRemote({ ...criteria, page: 1 }).then(settle, () => settle("failed"));
+    countRemote(criteria).then(settle, () => settle("failed"));
   };
 
   const confirmBulk = async () => {
@@ -242,7 +249,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     const max = Number.parseInt(bulk.max, 10);
     setBulk(null);
     try {
-      await addQuery({ ...bulk.criteria, page: 1 }, Number.isFinite(max) && max > 0 ? max : null);
+      await addQuery(bulk.criteria, Number.isFinite(max) && max > 0 ? max : null);
       setToast({ message: `已加入下载队列：${bulk.query || "全部帖子"}`, link: "downloads" });
     } catch (err) {
       setToast({ message: errorMessage(err) });
@@ -253,6 +260,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     setSubscribing({
       criteria: committed.current,
       query: results?.query ?? "",
+      localFilter: results?.localFilter ?? "",
       interval: 360,
       existing: false,
       max: "",
@@ -268,7 +276,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     const max = Number.parseInt(draft.max, 10);
     try {
       const sub = await subscriptionCreate(
-        { ...draft.criteria, page: 1 },
+        draft.criteria,
         draft.interval,
         draft.existing,
         draft.existing && Number.isFinite(max) && max > 0 ? max : null,
@@ -362,6 +370,14 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               {results.query || "最新帖子"}
             </span>
           )}
+          {results?.localFilter && (
+            <span
+              className="local-filter"
+              title={`站点一次能搜的 tag 数有限，「${results.localFilter}」在本地逐页筛选，加载会慢一些。登录后能直接搜更多 tag。`}
+            >
+              本地筛选 {results.localFilter}
+            </span>
+          )}
           <span className="count">{posts.length} 张</span>
           <button type="button" className="btn sm" onClick={openSubscribe} disabled={!results || loading}>
             <Icon name="bell" size={14} />
@@ -382,7 +398,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                   填写账号
                 </button>
               ) : (
-                <button type="button" className="btn" onClick={() => void run(committed.current, error.page)}>
+                <button type="button" className="btn" onClick={() => void run(committed.current, error.cursor)}>
                   <Icon name="retry" size={15} />
                   重试
                 </button>
@@ -403,7 +419,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             onPick={togglePick}
           />
           <div ref={sentinel} className="sentinel" aria-hidden="true" />
-          {results?.hasMore && !error && (
+          {results?.next && !error && (
             <button type="button" className="btn more" onClick={loadMore} disabled={loading}>
               {loading ? "正在加载…" : "加载更多"}
             </button>
@@ -461,6 +477,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               <dt>条件</dt>
               <dd>
                 <code>{bulk.query || "全部帖子"}</code>
+                {bulk.localFilter && <span className="dialog-sub">，本地筛选 <code>{bulk.localFilter}</code></span>}
               </dd>
               <dt>数量</dt>
               <dd>{countText(bulk.count)}</dd>
@@ -517,6 +534,9 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               <dt>条件</dt>
               <dd>
                 <code>{subscribing.query || "全部帖子"}</code>
+                {subscribing.localFilter && (
+                  <span className="dialog-sub">，本地筛选 <code>{subscribing.localFilter}</code></span>
+                )}
               </dd>
               <dt>
                 <label htmlFor="subscribe-interval">检查</label>

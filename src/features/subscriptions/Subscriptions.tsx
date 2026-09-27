@@ -189,6 +189,7 @@ export function Subscriptions({ onNavigate }: { onNavigate: Navigate }) {
               </div>
               <code className="job-query" title="发给站点的查询">
                 {sub.query || "全部帖子"}
+                {sub.localFilter ? ` · 本地筛选 ${sub.localFilter}` : ""}
               </code>
               <div className="job-meta">
                 <span>{lastResult(sub)}</span>

@@ -37,6 +37,10 @@ pnpm tauri icon design/icon/app-icon-macos.png -o /tmp/ibx-icons-mac
 
 把 `/tmp/ibx-icons` 中与 `src-tauri/icons/` 同名的文件复制过去（不需要 `android/`、`ios/`），`icon.icns` 改用 `/tmp/ibx-icons-mac` 里的。界面左上角的 `src/assets/app-icon.png` 是 128px 的缩小版。
 
+## 超出 tag 上限
+
+Danbooru 一次能搜的 tag 数有限（未登录 2 个）。超出时前几个交给站点，其余在本地逐页筛选，发现页的筛选行会标出「本地筛选」；下载全部结果和订阅同样适用。
+
 ## 订阅与后台运行
 
 - 在「发现」里搜索后点「订阅」，按设定的间隔（每小时到每天）检查新图并自动下载；订阅页可以暂停、改间隔、立即检查。

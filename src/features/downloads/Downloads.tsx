@@ -207,6 +207,7 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
               {job.query !== null && (
                 <code className="job-query" title="发给站点的查询">
                   {job.query || "全部帖子"}
+                  {job.localFilter ? ` · 本地筛选 ${job.localFilter}` : ""}
                   {job.maxPosts ? ` · 最多 ${formatCount(job.maxPosts)} 张` : ""}
                 </code>
               )}
