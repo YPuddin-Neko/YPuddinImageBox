@@ -17,6 +17,34 @@ export const SOURCE_LABEL: Record<Source, string> = {
   gelbooru: "Gelbooru",
 };
 
+export const SOURCES = Object.keys(SOURCE_LABEL) as Source[];
+export const SOURCE_OPTIONS = SOURCES.map((value) => ({ value, label: SOURCE_LABEL[value] }));
+export const RATING_OPTIONS = RATINGS.map((value) => ({ value, label: RATING_LABEL[value] }));
+
+/** 站点搜索的排序；默认按上传先后，新的在前。 */
+export type RemoteSort = "newest" | "oldest" | "score" | "favorites" | "popular" | "resolution" | "filesize";
+
+const REMOTE_SORTS: { value: RemoteSort; label: string; hint?: string; danbooruOnly?: boolean }[] = [
+  { value: "newest", label: "最新上传" },
+  { value: "oldest", label: "最早上传" },
+  { value: "score", label: "分数最高" },
+  { value: "favorites", label: "收藏最多", danbooruOnly: true },
+  { value: "popular", label: "近期热门", hint: "近两天", danbooruOnly: true },
+  { value: "resolution", label: "分辨率最高", danbooruOnly: true },
+  { value: "filesize", label: "文件最大", danbooruOnly: true },
+];
+
+/** 站点支持的排序：Gelbooru 只能按上传先后和分数排。 */
+export function remoteSorts(source: Source) {
+  return REMOTE_SORTS.filter((sort) => source === "danbooru" || !sort.danbooruOnly).map(({ value, label, hint }) => ({
+    value,
+    label,
+    hint,
+  }));
+}
+
+export const remoteSortLabel = (sort: RemoteSort) => REMOTE_SORTS.find((option) => option.value === sort)?.label ?? "";
+
 export interface PostTags {
   artist: string[];
   copyright: string[];
@@ -48,6 +76,8 @@ export interface SearchParams {
   source: Source;
   tags: string;
   ratings: Rating[];
+  /** 订阅和统计张数时忽略（近期热门除外，它同时限定了时间范围）。 */
+  sort?: RemoteSort;
   /** 上一次返回的 next；不传表示第一页。 */
   cursor?: string | null;
 }

@@ -4,14 +4,22 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PostGrid } from "../../components/PostGrid";
+import { MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
 import { Toast, useToast } from "../../components/Toast";
 import { usePicker } from "../../components/usePicker";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
-import { errorMessage, postKey, RATING_LABEL, RATINGS, SOURCE_LABEL, type Rating, type Source } from "../../lib/ipc";
-import { libraryDelete, libraryList, type LocalPost, type PostRef } from "../../lib/library";
+import { errorMessage, postKey, RATING_OPTIONS, RATINGS, SOURCE_OPTIONS, type Rating, type Source } from "../../lib/ipc";
+import {
+  LIBRARY_SORTS,
+  libraryDelete,
+  libraryList,
+  type LibrarySort,
+  type LocalPost,
+  type PostRef,
+} from "../../lib/library";
 import type { Navigate } from "../../lib/nav";
 import { revealLabel, trashLabel } from "../../lib/platform";
 import { Inspector } from "../discover/Inspector";
@@ -21,6 +29,7 @@ interface Filter {
   source: Source | "all";
   tags: string;
   ratings: Rating[];
+  sort: LibrarySort;
 }
 
 interface Listing {
@@ -30,7 +39,8 @@ interface Listing {
 }
 
 const PAGE_SIZE = 60;
-const EMPTY_FILTER: Filter = { source: "all", tags: "", ratings: [] };
+const EMPTY_FILTER: Filter = { source: "all", tags: "", ratings: [], sort: "downloaded" };
+const SOURCE_FILTERS: { value: Filter["source"]; label: string }[] = [{ value: "all", label: "全部来源" }, ...SOURCE_OPTIONS];
 
 const isFiltered = (filter: Filter) =>
   filter.source !== "all" || filter.tags.trim() !== "" || (filter.ratings.length > 0 && filter.ratings.length < RATINGS.length);
@@ -39,6 +49,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
   const [source, setSource] = useState<Filter["source"]>("all");
   const [tags, setTags] = useState("");
   const [ratings, setRatings] = useState<Rating[]>([]);
+  const [sort, setSort] = useState<LibrarySort>(EMPTY_FILTER.sort);
   const [listing, setListing] = useState<Listing | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -69,6 +80,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
         source: filter.source === "all" ? null : filter.source,
         tags: filter.tags,
         ratings: filter.ratings,
+        sort: filter.sort,
         offset,
         limit: PAGE_SIZE,
       });
@@ -149,18 +161,22 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void load({ source, tags, ratings }, 0);
+    void load({ source, tags, ratings, sort }, 0);
   };
 
-  const toggleRating = (rating: Rating) => {
-    const next = ratings.includes(rating) ? ratings.filter((r) => r !== rating) : [...ratings, rating];
+  const changeRatings = (next: Rating[]) => {
     setRatings(next);
-    void load({ source, tags, ratings: next }, 0);
+    void load({ source, tags, ratings: next, sort }, 0);
+  };
+
+  const changeSort = (next: LibrarySort) => {
+    setSort(next);
+    void load({ source, tags, ratings, sort: next }, 0);
   };
 
   const changeSource = (next: Filter["source"]) => {
     setSource(next);
-    void load({ source: next, tags, ratings }, 0);
+    void load({ source: next, tags, ratings, sort }, 0);
   };
 
   const reveal = async (post: LocalPost) => {
@@ -223,19 +239,13 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
       <div className="center" data-picking={picked.size > 0 || undefined}>
         <div className="topbar" data-tauri-drag-region>
           <form className="search" onSubmit={submit} role="search">
-            <select
+            <Select
               className="search-source"
-              aria-label="来源"
+              name="来源"
               value={source}
-              onChange={(event) => changeSource(event.target.value as Filter["source"])}
-            >
-              <option value="all">全部来源</option>
-              {(Object.keys(SOURCE_LABEL) as Source[]).map((key) => (
-                <option key={key} value={key}>
-                  {SOURCE_LABEL[key]}
-                </option>
-              ))}
-            </select>
+              options={SOURCE_FILTERS}
+              onChange={changeSource}
+            />
             <input
               className="search-input"
               aria-label="按 tag 筛选"
@@ -251,19 +261,23 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
           </form>
         </div>
         <div className="filters">
-          <div className="chips" role="group" aria-label="分级">
-            {RATINGS.map((rating) => (
-              <button
-                key={rating}
-                type="button"
-                className="chip"
-                aria-pressed={ratings.includes(rating)}
-                onClick={() => toggleRating(rating)}
-              >
-                {RATING_LABEL[rating]}
-              </button>
-            ))}
-          </div>
+          <MultiSelect
+            className="filter-select"
+            name="分级"
+            label="分级"
+            allLabel="全部"
+            values={ratings}
+            options={RATING_OPTIONS}
+            onChange={changeRatings}
+          />
+          <Select
+            className="filter-select"
+            name="排序"
+            label="排序"
+            value={sort}
+            options={LIBRARY_SORTS}
+            onChange={changeSort}
+          />
           <span className="filters-space" />
           {fresh > 0 && deep && (
             <button type="button" className="btn sm" onClick={() => void load(committed.current, 0)}>

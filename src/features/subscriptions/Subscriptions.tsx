@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { Select } from "../../components/Select";
 import { Toast, useToast } from "../../components/Toast";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount, formatTime } from "../../lib/format";
@@ -10,8 +11,7 @@ import { errorMessage, SOURCE_LABEL } from "../../lib/ipc";
 import { EASE_OUT } from "../../lib/motion";
 import type { Navigate } from "../../lib/nav";
 import {
-  INTERVALS,
-  intervalLabel,
+  intervalOptions,
   SUBSCRIPTION_EVENT,
   subscriptionCheck,
   subscriptionDelete,
@@ -142,23 +142,15 @@ export function Subscriptions({ onNavigate }: { onNavigate: Navigate }) {
                   )}
                 </div>
                 <div className="job-actions">
-                  <select
+                  <Select
                     className="select"
-                    aria-label="检查间隔"
+                    name="检查间隔"
                     value={sub.intervalMinutes}
-                    onChange={(event) =>
-                      void run(async () => upsert(await subscriptionUpdate(sub.id, { intervalMinutes: Number(event.target.value) })))
+                    options={intervalOptions(sub.intervalMinutes)}
+                    onChange={(intervalMinutes) =>
+                      void run(async () => upsert(await subscriptionUpdate(sub.id, { intervalMinutes })))
                     }
-                  >
-                    {INTERVALS.some((option) => option.minutes === sub.intervalMinutes) ? null : (
-                      <option value={sub.intervalMinutes}>{intervalLabel(sub.intervalMinutes)}</option>
-                    )}
-                    {INTERVALS.map((option) => (
-                      <option key={option.minutes} value={option.minutes}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <button
                     type="button"
                     className="btn"

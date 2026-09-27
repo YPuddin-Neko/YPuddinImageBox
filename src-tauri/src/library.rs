@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
-use crate::sources::{Post, PostTags, Rating, Source};
+use crate::sources::{timestamp, Post, PostTags, Rating, Source};
 
 const DB_FILE: &str = "library.sqlite3";
 /// 一次列表查询最多返回多少张。
@@ -39,6 +39,39 @@ pub struct LocalPost {
     pub missing: bool,
 }
 
+/// 图库的排序。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LibrarySort {
+    /// 最近下载的在前。
+    #[default]
+    Downloaded,
+    DownloadedAsc,
+    /// 按帖子的发布时间，新的在前。
+    Newest,
+    Oldest,
+    Score,
+    Favorites,
+    Resolution,
+    Filesize,
+}
+
+impl LibrarySort {
+    /// ORDER BY 子句。缺少数据的排在最后；最后都按 id 兜底，翻页时顺序稳定。
+    fn order_by(self) -> &'static str {
+        match self {
+            LibrarySort::Downloaded => "p.downloaded_at DESC, p.id DESC",
+            LibrarySort::DownloadedAsc => "p.downloaded_at ASC, p.id ASC",
+            LibrarySort::Newest => "p.posted_at DESC NULLS LAST, p.id DESC",
+            LibrarySort::Oldest => "p.posted_at ASC NULLS LAST, p.id ASC",
+            LibrarySort::Score => "p.score DESC, p.id DESC",
+            LibrarySort::Favorites => "p.fav_count DESC NULLS LAST, p.id DESC",
+            LibrarySort::Resolution => "p.width * p.height DESC, p.id DESC",
+            LibrarySort::Filesize => "p.file_size DESC NULLS LAST, p.id DESC",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryQuery {
@@ -50,6 +83,8 @@ pub struct LibraryQuery {
     /// 为空或全选时不按分级筛选。
     #[serde(default)]
     pub ratings: Vec<Rating>,
+    #[serde(default)]
+    pub sort: LibrarySort,
     #[serde(default)]
     pub offset: u32,
     #[serde(default)]
@@ -324,7 +359,27 @@ impl Library {
 
     async fn migrate(pool: SqlitePool) -> Result<Self, sqlx::Error> {
         sqlx::migrate!("./migrations").run(&pool).await?;
-        Ok(Self { pool })
+        let library = Self { pool };
+        library.backfill_posted_at().await?;
+        Ok(library)
+    }
+
+    /// 补上发布时间：加这一列之前下载的图只有站点原样的 created_at。认不出格式的留空，排序时放在最后。
+    async fn backfill_posted_at(&self) -> Result<(), sqlx::Error> {
+        let rows: Vec<(i64, String)> =
+            sqlx::query_as("SELECT id, created_at FROM posts WHERE posted_at IS NULL AND created_at IS NOT NULL")
+                .fetch_all(&self.pool)
+                .await?;
+        let parsed: Vec<(i64, i64)> =
+            rows.into_iter().filter_map(|(id, created)| Some((id, timestamp::parse(&created)?))).collect();
+        if parsed.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for (id, posted_at) in parsed {
+            sqlx::query("UPDATE posts SET posted_at = ? WHERE id = ?").bind(posted_at).bind(id).execute(&mut *tx).await?;
+        }
+        tx.commit().await
     }
 
     // ---------- 图库 ----------
@@ -373,13 +428,14 @@ impl Library {
         let mut tx = self.pool.begin().await?;
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO posts (source, post_id, md5, width, height, rating, score, fav_count, file_ext, file_size,
-                                file_url, created_at, post_url, local_path, downloaded_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                file_url, created_at, posted_at, post_url, local_path, downloaded_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (source, post_id) DO UPDATE SET
                 md5 = excluded.md5, width = excluded.width, height = excluded.height, rating = excluded.rating,
                 score = excluded.score, fav_count = excluded.fav_count, file_ext = excluded.file_ext,
                 file_size = excluded.file_size, file_url = excluded.file_url, created_at = excluded.created_at,
-                post_url = excluded.post_url, local_path = excluded.local_path, downloaded_at = excluded.downloaded_at
+                posted_at = excluded.posted_at, post_url = excluded.post_url, local_path = excluded.local_path,
+                downloaded_at = excluded.downloaded_at
              RETURNING id",
         )
         .bind(post.source.as_str())
@@ -394,6 +450,7 @@ impl Library {
         .bind(post.file_size.map(|size| size as i64))
         .bind(&post.file_url)
         .bind(&post.created_at)
+        .bind(post.created_at.as_deref().and_then(timestamp::parse))
         .bind(&post.post_url)
         .bind(path.to_string_lossy().into_owned())
         .bind(downloaded_at)
@@ -434,7 +491,9 @@ impl Library {
         let mut select = QueryBuilder::<Sqlite>::new("SELECT p.* FROM posts p");
         push_filter(&mut select, query);
         select
-            .push(" ORDER BY p.downloaded_at DESC, p.id DESC LIMIT ")
+            .push(" ORDER BY ")
+            .push(query.sort.order_by())
+            .push(" LIMIT ")
             .push_bind(limit as i64)
             .push(" OFFSET ")
             .push_bind(query.offset as i64);
@@ -992,6 +1051,49 @@ mod tests {
         let owned = lib.owned(Source::Danbooru, &[1, 3]).await.unwrap();
         assert_eq!(owned, HashSet::from([1]));
         assert!(lib.owned(Source::Gelbooru, &[1]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sorts_by_each_column() {
+        let lib = Library::in_memory().await;
+        // (id, 下载时间, 发布时间, 分数, 收藏, 宽, 文件大小)
+        let rows = [
+            (1, 30, Some("2026-09-01T00:00:00Z"), 9, Some(1), 1000, Some(500)),
+            (2, 10, Some("Sat Sep 26 00:00:00 +0000 2026"), 3, None, 3000, Some(900)),
+            (3, 20, None, 6, Some(8), 2000, None),
+        ];
+        for (id, downloaded, created, score, favs, width, size) in rows {
+            let mut p = post(Source::Danbooru, id, PostTags::default());
+            p.created_at = created.map(str::to_string);
+            (p.score, p.fav_count, p.width, p.file_size) = (score, favs, width, size);
+            lib.save_post(&p, Path::new(&format!("/i/{id}.png")), downloaded).await.unwrap();
+        }
+        let ids = |sort| {
+            let lib = &lib;
+            async move {
+                let page = lib.list(&LibraryQuery { sort, ..LibraryQuery::default() }).await.unwrap();
+                page.posts.iter().map(|p| p.post.id).collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(ids(LibrarySort::Downloaded).await, [1, 3, 2]);
+        assert_eq!(ids(LibrarySort::DownloadedAsc).await, [2, 3, 1]);
+        // 两个站点的时间格式都能比较；没有发布时间的排最后。
+        assert_eq!(ids(LibrarySort::Newest).await, [2, 1, 3]);
+        assert_eq!(ids(LibrarySort::Oldest).await, [1, 2, 3]);
+        assert_eq!(ids(LibrarySort::Score).await, [1, 3, 2]);
+        assert_eq!(ids(LibrarySort::Favorites).await, [3, 1, 2]);
+        assert_eq!(ids(LibrarySort::Resolution).await, [2, 3, 1]);
+        assert_eq!(ids(LibrarySort::Filesize).await, [2, 1, 3]);
+    }
+
+    #[tokio::test]
+    async fn backfills_posted_at_for_old_rows() {
+        let lib = Library::in_memory().await;
+        lib.save_post(&post(Source::Danbooru, 1, PostTags::default()), Path::new("/i/1.png"), 1).await.unwrap();
+        sqlx::query("UPDATE posts SET posted_at = NULL").execute(&lib.pool).await.unwrap();
+        lib.backfill_posted_at().await.unwrap();
+        let posted: Option<i64> = sqlx::query_scalar("SELECT posted_at FROM posts").fetch_one(&lib.pool).await.unwrap();
+        assert_eq!(posted, timestamp::parse("2026-09-27T00:00:00Z"));
     }
 
     #[tokio::test]

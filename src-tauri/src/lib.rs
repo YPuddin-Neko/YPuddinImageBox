@@ -266,6 +266,7 @@ pub fn run() {
             commands::account_remove,
             commands::account_key_storage,
             commands::subscriptions_list,
+            commands::subscription_preview,
             commands::subscription_create,
             commands::subscription_update,
             commands::subscription_delete,

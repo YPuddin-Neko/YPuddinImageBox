@@ -5,7 +5,10 @@
 use imagebox_lib::net::{test_connection, Net};
 use imagebox_lib::settings::{ProxyMode, ProxySettings};
 use imagebox_lib::sources::filter::{danbooru_tag_limit, plan_query};
-use imagebox_lib::sources::{build_query, danbooru, gelbooru, Page, Rating, Source};
+use imagebox_lib::sources::{build_query, danbooru, gelbooru, Page, Post, Rating, SearchParams, Sort, Source};
+
+/// 排序依据的数值，越靠前越大。
+type SortKey = fn(&Post) -> i64;
 
 #[tokio::main]
 async fn main() {
@@ -62,6 +65,43 @@ async fn main() {
             );
         }
         Err(err) => println!("本地筛选失败：{err}"),
+    }
+
+    // 排序：按界面的做法拼出查询（未登录，排序条件也占一个 tag 额度），翻两页看顺序是否接得上。
+    let sorts: [(Sort, SortKey); 6] = [
+        (Sort::Oldest, |p| -(p.id as i64)),
+        (Sort::Score, |p| p.score),
+        (Sort::Favorites, |p| p.fav_count.unwrap_or(0)),
+        (Sort::Resolution, |p| i64::from(p.width) * i64::from(p.height)),
+        (Sort::Filesize, |p| p.file_size.unwrap_or(0) as i64),
+        (Sort::Popular, |_| 0),
+    ];
+    for (sort, key) in sorts {
+        let params = SearchParams {
+            source: Source::Danbooru,
+            tags: "scenery".into(),
+            ratings: vec![Rating::General],
+            sort,
+            cursor: None,
+        };
+        let tags = params.tags_with_sort().expect("排序条件");
+        let plan = plan_query(Source::Danbooru, &tags, &params.ratings, Some(danbooru_tag_limit(None))).expect("拆分条件");
+        let query = &plan.server_query;
+        let first = danbooru::search(&net, query, &Page::Number(1), 20, None).await;
+        let Ok((page1, _)) = first else {
+            println!("排序 {sort:?} 失败：{}", first.err().map(|e| e.to_string()).unwrap_or_default());
+            continue;
+        };
+        let ids = page1.iter().map(|p| p.id);
+        let next = Page::Number(1).next(Source::Danbooru, query, ids.clone().min().zip(ids.max()));
+        let page2 = danbooru::search(&net, query, &next, 20, None).await.map(|(posts, _)| posts).unwrap_or_default();
+        let keys: Vec<i64> = page1.iter().chain(&page2).map(key).collect();
+        let ordered = keys.windows(2).all(|pair| pair[0] >= pair[1]);
+        println!(
+            "排序 {sort:?}：查询「{query}」，下一页 {}，两页共 {} 条，顺序正确：{ordered}",
+            next.to_param(),
+            keys.len()
+        );
     }
 
     // 填错的账号：两个站点都应该提示账号或 Key 不对。

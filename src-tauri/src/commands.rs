@@ -66,10 +66,11 @@ async fn search_with_plan(state: &AppState, params: &SearchParams, plan: &QueryP
 
 #[tauri::command]
 pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> Result<SearchPage, AppError> {
+    let tags = params.tags_with_sort()?;
     let mut limit = tag_limit(&state, params.source);
     // 站点实际的上限比按账号等级算的小时（例如等级刚变），按站点给的数字重新拆一次。
     for retry in [false, true] {
-        let plan = filter::plan_query(params.source, &params.tags, &params.ratings, limit)?;
+        let plan = filter::plan_query(params.source, &tags, &params.ratings, limit)?;
         match search_with_plan(&state, &params, &plan).await {
             Err(AppError::TagLimit { limit: actual, .. })
                 if !retry && limit.is_some_and(|l| l > actual as usize) =>
@@ -86,7 +87,7 @@ pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> 
 /// Danbooru 的计数接口不限 tag 数量，所以用完整条件，超出上限时也准确。
 #[tauri::command]
 pub async fn count_remote(state: State<'_, AppState>, params: SearchParams) -> Result<Option<u64>, AppError> {
-    let query = sources::build_query(params.source, &params.tags, &params.ratings);
+    let query = sources::build_query(params.source, &params.tags_for_count()?, &params.ratings);
     sources::count(&state.net, &state.accounts.get(), params.source, &query).await
 }
 
@@ -102,14 +103,16 @@ pub async fn download_query(
     params: SearchParams,
     max_posts: Option<u32>,
 ) -> Result<JobInfo, AppError> {
-    let plan = filter::plan_query(params.source, &params.tags, &params.ratings, tag_limit(&state, params.source))?;
-    let full = sources::build_query(params.source, &params.tags, &params.ratings);
-    let tags = params.tags.split_whitespace().collect::<Vec<_>>().join(" ");
-    let title = if tags.is_empty() { "全部帖子".to_string() } else { tags };
+    // 按所选排序翻页，设了上限时就是「排在前面的 N 张」。
+    let tags = params.tags_with_sort()?;
+    let plan = filter::plan_query(params.source, &tags, &params.ratings, tag_limit(&state, params.source))?;
+    let count_query = sources::build_query(params.source, &params.tags_for_count()?, &params.ratings);
+    let words = params.tags.split_whitespace().collect::<Vec<_>>().join(" ");
+    let title = if words.is_empty() { "全部帖子".to_string() } else { words };
     let local = plan.local.to_query();
     state
         .downloader
-        .enqueue_query(params.source, &title, &plan.server_query, Some(&local), &full, max_posts.map(i64::from))
+        .enqueue_query(params.source, &title, &plan.server_query, Some(&local), &count_query, max_posts.map(i64::from))
         .await
 }
 
@@ -233,6 +236,23 @@ const MIN_INTERVAL_MINUTES: u32 = 30;
 #[tauri::command]
 pub async fn subscriptions_list(state: State<'_, AppState>) -> Result<Vec<Subscription>, AppError> {
     Ok(state.library.subscriptions().await?)
+}
+
+/// 订阅对话框里显示的条件：订阅按上传先后找新图、不带排序，超出 tag 上限时的拆分可能和当前搜索不一样。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionPreview {
+    pub query: String,
+    pub local_filter: String,
+}
+
+#[tauri::command]
+pub async fn subscription_preview(
+    state: State<'_, AppState>,
+    params: SearchParams,
+) -> Result<SubscriptionPreview, AppError> {
+    let plan = filter::plan_query(params.source, &params.tags, &params.ratings, tag_limit(&state, params.source))?;
+    Ok(SubscriptionPreview { query: plan.server_query, local_filter: plan.local.to_query() })
 }
 
 /// 订阅搜索条件。以现在最新的一张为起点，以后比它新的才下载；

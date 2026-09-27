@@ -4,6 +4,7 @@ import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PostGrid } from "../../components/PostGrid";
 import type { View } from "../../components/Rail";
+import { MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
 import { Toast } from "../../components/Toast";
 import { usePicker } from "../../components/usePicker";
@@ -15,17 +16,19 @@ import {
   errorCode,
   errorMessage,
   postKey,
-  RATING_LABEL,
-  RATINGS,
+  RATING_OPTIONS,
+  remoteSortLabel,
+  remoteSorts,
   searchRemote,
-  SOURCE_LABEL,
+  SOURCE_OPTIONS,
   type Post,
   type Rating,
+  type RemoteSort,
   type Source,
 } from "../../lib/ipc";
 import type { PostRef } from "../../lib/library";
 import type { Navigate } from "../../lib/nav";
-import { INTERVALS, subscriptionCreate, subscriptionTitle } from "../../lib/subscriptions";
+import { intervalOptions, subscriptionCreate, subscriptionPreview, subscriptionTitle } from "../../lib/subscriptions";
 import { useDownloads } from "../downloads/context";
 import { Inspector } from "./Inspector";
 
@@ -33,6 +36,7 @@ interface Criteria {
   source: Source;
   tags: string;
   ratings: Rating[];
+  sort: RemoteSort;
 }
 
 interface Results {
@@ -73,9 +77,11 @@ interface SubscribeDraft {
   error: string | null;
 }
 
-const DEFAULT_CRITERIA: Criteria = { source: "danbooru", tags: "", ratings: ["general"] };
+const DEFAULT_CRITERIA: Criteria = { source: "danbooru", tags: "", ratings: ["general"], sort: "newest" };
 /** 与 Rust 端每页条数一致，用于卡片入场错开。 */
 const PAGE_SIZE = 40;
+/** 分级是复选，连着勾几项时等停下来再搜，免得每勾一项搜一次。 */
+const RATING_DEBOUNCE_MS = 300;
 
 function countText(count: Bulk["count"]): string {
   if (count === "loading") return "正在统计…";
@@ -89,6 +95,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [source, setSource] = useState<Source>(DEFAULT_CRITERIA.source);
   const [tags, setTags] = useState(DEFAULT_CRITERIA.tags);
   const [ratings, setRatings] = useState<Rating[]>(DEFAULT_CRITERIA.ratings);
+  const [sort, setSort] = useState<RemoteSort>(DEFAULT_CRITERIA.sort);
   const [results, setResults] = useState<Results | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -104,6 +111,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [busy, setBusy] = useState(false);
   const committed = useRef<Criteria>(DEFAULT_CRITERIA);
   const requestId = useRef(0);
+  const ratingTimer = useRef(0);
   const sentinel = useRef<HTMLDivElement>(null);
 
   const posts = results?.posts ?? [];
@@ -113,6 +121,8 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const run = useCallback(async (criteria: Criteria, cursor: string | null) => {
     const id = ++requestId.current;
     const first = cursor === null;
+    // 重新搜第一页时，还没发出的分级改动已经包含在这次的条件里。
+    if (first) window.clearTimeout(ratingTimer.current);
     committed.current = criteria;
     setLoading(true);
     setError(null);
@@ -143,6 +153,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   useEffect(() => {
     void run(DEFAULT_CRITERIA, null);
+    return () => window.clearTimeout(ratingTimer.current);
   }, [run]);
 
   useTauriEvent<PostRef[]>(EVENTS.libraryRemoved, (removed) =>
@@ -190,18 +201,26 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void run({ source, tags, ratings }, null);
+    void run({ source, tags, ratings, sort }, null);
   };
 
-  const toggleRating = (rating: Rating) => {
-    const next = ratings.includes(rating) ? ratings.filter((r) => r !== rating) : [...ratings, rating];
+  const changeRatings = (next: Rating[]) => {
     setRatings(next);
-    void run({ source, tags, ratings: next }, null);
+    window.clearTimeout(ratingTimer.current);
+    ratingTimer.current = window.setTimeout(() => void run({ source, tags, ratings: next, sort }, null), RATING_DEBOUNCE_MS);
   };
 
+  const changeSort = (next: RemoteSort) => {
+    setSort(next);
+    void run({ source, tags, ratings, sort: next }, null);
+  };
+
+  // 换站点时，新站点不支持当前排序就回到默认顺序。
   const changeSource = (next: Source) => {
+    const nextSort = remoteSorts(next).some((option) => option.value === sort) ? sort : "newest";
     setSource(next);
-    void run({ source: next, tags, ratings }, null);
+    setSort(nextSort);
+    void run({ source: next, tags, ratings, sort: nextSort }, null);
   };
 
   const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
@@ -256,17 +275,24 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     }
   };
 
-  const openSubscribe = () => {
-    setSubscribing({
-      criteria: committed.current,
-      query: results?.query ?? "",
-      localFilter: results?.localFilter ?? "",
-      interval: 360,
-      existing: false,
-      max: "",
-      busy: false,
-      error: null,
-    });
+  // 订阅不带排序，发给站点的条件以 Rust 端算出的为准。
+  const openSubscribe = async () => {
+    const criteria = committed.current;
+    try {
+      const preview = await subscriptionPreview(criteria);
+      setSubscribing({
+        criteria,
+        query: preview.query,
+        localFilter: preview.localFilter,
+        interval: 360,
+        existing: false,
+        max: "",
+        busy: false,
+        error: null,
+      });
+    } catch (err) {
+      setToast({ message: errorMessage(err) });
+    }
   };
 
   const confirmSubscribe = async () => {
@@ -322,19 +348,14 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
       <div className="center" data-picking={picked.size > 0 || undefined}>
         <div className="topbar" data-tauri-drag-region>
           <form className="search" onSubmit={submit} role="search">
-            <select
+            <Select
               id="search-source"
               className="search-source"
-              aria-label="来源"
+              name="来源"
               value={source}
-              onChange={(event) => changeSource(event.target.value as Source)}
-            >
-              {(Object.keys(SOURCE_LABEL) as Source[]).map((key) => (
-                <option key={key} value={key}>
-                  {SOURCE_LABEL[key]}
-                </option>
-              ))}
-            </select>
+              options={SOURCE_OPTIONS}
+              onChange={changeSource}
+            />
             <input
               id="search-tags"
               className="search-input"
@@ -351,19 +372,23 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
           </form>
         </div>
         <div className="filters">
-          <div className="chips" role="group" aria-label="分级">
-            {RATINGS.map((rating) => (
-              <button
-                key={rating}
-                type="button"
-                className="chip"
-                aria-pressed={ratings.includes(rating)}
-                onClick={() => toggleRating(rating)}
-              >
-                {RATING_LABEL[rating]}
-              </button>
-            ))}
-          </div>
+          <MultiSelect
+            className="filter-select"
+            name="分级"
+            label="分级"
+            allLabel="全部"
+            values={ratings}
+            options={RATING_OPTIONS}
+            onChange={changeRatings}
+          />
+          <Select
+            className="filter-select"
+            name="排序"
+            label="排序"
+            value={sort}
+            options={remoteSorts(source)}
+            onChange={changeSort}
+          />
           <span className="filters-space" />
           {results && (
             <span className="query" title="实际发给站点的查询">
@@ -379,7 +404,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             </span>
           )}
           <span className="count">{posts.length} 张</span>
-          <button type="button" className="btn sm" onClick={openSubscribe} disabled={!results || loading}>
+          <button type="button" className="btn sm" onClick={() => void openSubscribe()} disabled={!results || loading}>
             <Icon name="bell" size={14} />
             订阅
           </button>
@@ -407,7 +432,11 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
           )}
           {firstLoad && <p className="hint">正在加载…</p>}
           {results && posts.length === 0 && !loading && !error && (
-            <p className="hint">没有找到符合条件的图片。可以减少 tag 或放宽分级再试。</p>
+            <p className="hint">
+              {committed.current.sort === "popular"
+                ? "没有找到符合条件的图片。「近期热门」只包含最近两天上传的图，可以换个排序再试。"
+                : "没有找到符合条件的图片。可以减少 tag 或放宽分级再试。"}
+            </p>
           )}
           <PostGrid
             posts={posts}
@@ -499,7 +528,11 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                     setBulk((current) => current && { ...current, max });
                   }}
                 />
-                <span>张，留空表示全部下载</span>
+                <span>
+                  {bulk.criteria.sort === "newest"
+                    ? "张，留空表示全部下载"
+                    : `张，按「${remoteSortLabel(bulk.criteria.sort)}」取排在前面的，留空表示全部下载`}
+                </span>
               </dd>
             </dl>
             <p className="dialog-note">已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。</p>
@@ -542,21 +575,14 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 <label htmlFor="subscribe-interval">检查</label>
               </dt>
               <dd className="dialog-field">
-                <select
+                <Select
                   id="subscribe-interval"
                   className="select"
+                  name="检查间隔"
                   value={subscribing.interval}
-                  onChange={(event) => {
-                    const interval = Number(event.target.value);
-                    setSubscribing((current) => current && { ...current, interval });
-                  }}
-                >
-                  {INTERVALS.map((option) => (
-                    <option key={option.minutes} value={option.minutes}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                  options={intervalOptions()}
+                  onChange={(interval) => setSubscribing((current) => current && { ...current, interval })}
+                />
               </dd>
               <dt>已有的图</dt>
               <dd className="dialog-choices">
@@ -598,7 +624,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             </dl>
             {subscribing.error && <p className="form-error">{subscribing.error}</p>}
             <p className="dialog-note">
-              以后按设定的间隔检查，有新图就自动下载。关掉窗口后会在后台继续，可以在「设置 → 通用」里修改。
+              以后按设定的间隔检查，有新图就自动下载。
+              {subscribing.criteria.sort !== "newest" &&
+                `订阅按上传先后找新图，不使用「${remoteSortLabel(subscribing.criteria.sort)}」排序。`}
+              关掉窗口后会在后台继续，可以在「设置 → 通用」里修改。
             </p>
           </>
         )}

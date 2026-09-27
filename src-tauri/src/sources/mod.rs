@@ -3,6 +3,7 @@
 pub mod danbooru;
 pub mod filter;
 pub mod gelbooru;
+pub mod timestamp;
 
 use std::sync::{PoisonError, RwLock};
 
@@ -131,6 +132,43 @@ impl Rating {
     }
 }
 
+/// 搜索结果的排序。默认按上传先后（新到旧），其余换成站点的排序条件加进查询；
+/// 带了排序条件就不能按 id 翻页，改用页码（见 [`Page::next`]）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sort {
+    #[default]
+    Newest,
+    Oldest,
+    Score,
+    Favorites,
+    /// Danbooru 的 order:rank：按分数和新近程度综合排序，只包含最近两天左右上传的帖子。
+    Popular,
+    Resolution,
+    Filesize,
+}
+
+impl Sort {
+    /// 加进查询的排序条件，默认顺序为 `None`。只有 Danbooru 能按收藏、热度、分辨率和文件大小排序。
+    pub fn term(self, source: Source) -> Result<Option<&'static str>, AppError> {
+        let term = match (source, self) {
+            (_, Sort::Newest) => return Ok(None),
+            (Source::Danbooru, Sort::Oldest) => "order:id",
+            (Source::Danbooru, Sort::Score) => "order:score",
+            (Source::Danbooru, Sort::Favorites) => "order:favcount",
+            (Source::Danbooru, Sort::Popular) => "order:rank",
+            (Source::Danbooru, Sort::Resolution) => "order:mpixels",
+            (Source::Danbooru, Sort::Filesize) => "order:filesize",
+            (Source::Gelbooru, Sort::Oldest) => "sort:id:asc",
+            (Source::Gelbooru, Sort::Score) => "sort:score:desc",
+            (Source::Gelbooru, _) => {
+                return Err(AppError::InvalidInput(format!("{} 不支持这种排序", source.site_name())));
+            }
+        };
+        Ok(Some(term))
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostTags {
@@ -196,9 +234,38 @@ pub struct SearchParams {
     pub tags: String,
     #[serde(default)]
     pub ratings: Vec<Rating>,
+    /// 订阅按上传先后找新图，不看排序。
+    #[serde(default)]
+    pub sort: Sort,
     /// 上一次返回的 `next`；为空表示第一页。
     #[serde(default)]
     pub cursor: Option<String>,
+}
+
+impl SearchParams {
+    /// 用户输入的 tag 加上所选排序的条件。选了排序时以选项为准，输入框里手写的 order: / sort: 不再发给站点。
+    pub fn tags_with_sort(&self) -> Result<String, AppError> {
+        let Some(term) = self.sort.term(self.source)? else { return Ok(self.tags.clone()) };
+        let mut words: Vec<&str> = self.tags.split_whitespace().filter(|tag| !is_sort_tag(tag)).collect();
+        words.push(term);
+        Ok(words.join(" "))
+    }
+
+    /// 统计张数用的 tag。排序不影响张数，一般不带（Danbooru 带 order:score 这类条件时不给数字）；
+    /// 近期热门同时限定了时间范围，要带上。
+    pub fn tags_for_count(&self) -> Result<String, AppError> {
+        if self.sort == Sort::Popular {
+            self.tags_with_sort()
+        } else {
+            Ok(self.tags.clone())
+        }
+    }
+}
+
+/// 明确指定排序的条件（order:、sort:）。
+fn is_sort_tag(tag: &str) -> bool {
+    let tag = tag.to_ascii_lowercase();
+    tag.starts_with("order:") || tag.starts_with("sort:")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -428,6 +495,23 @@ mod tests {
         assert_eq!(Page::After(100).next(Source::Danbooru, "scenery", None), Page::After(100));
         assert!(has_custom_order("sky sort:score"));
         assert!(!has_custom_order("sky rating:g"));
+    }
+
+    #[test]
+    fn sort_adds_site_term_and_overrides_typed_order() {
+        let params = |source, tags: &str, sort| SearchParams { source, tags: tags.into(), ratings: vec![], sort, cursor: None };
+        assert_eq!(params(Source::Danbooru, "sky", Sort::Newest).tags_with_sort().unwrap(), "sky");
+        // 默认顺序时照样用手写的排序；选了排序就以选项为准。
+        assert_eq!(params(Source::Danbooru, "sky order:score", Sort::Newest).tags_with_sort().unwrap(), "sky order:score");
+        assert_eq!(params(Source::Danbooru, "sky Order:Score", Sort::Favorites).tags_with_sort().unwrap(), "sky order:favcount");
+        assert_eq!(params(Source::Gelbooru, "sky sort:score", Sort::Oldest).tags_with_sort().unwrap(), "sky sort:id:asc");
+        assert!(params(Source::Gelbooru, "sky", Sort::Favorites).tags_with_sort().is_err());
+        // 选了排序后改按页码翻页。
+        let tags = params(Source::Danbooru, "sky", Sort::Score).tags_with_sort().unwrap();
+        assert!(has_custom_order(&build_query(Source::Danbooru, &tags, &[])));
+        // 计数不带排序，近期热门除外（它同时限定了时间范围）。
+        assert_eq!(params(Source::Danbooru, "sky", Sort::Score).tags_for_count().unwrap(), "sky");
+        assert_eq!(params(Source::Danbooru, "sky", Sort::Popular).tags_for_count().unwrap(), "sky order:rank");
     }
 
     #[test]

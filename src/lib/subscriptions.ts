@@ -39,6 +39,15 @@ export const INTERVALS: { minutes: number; label: string }[] = [
 export const intervalLabel = (minutes: number) =>
   INTERVALS.find((option) => option.minutes === minutes)?.label ?? `每 ${minutes} 分钟`;
 
+/** 下拉框的选项；当前间隔不在列表里时（例如旧版本设的）也列出来。 */
+export function intervalOptions(current?: number) {
+  const options = INTERVALS.map((option) => ({ value: option.minutes, label: option.label }));
+  if (current !== undefined && !INTERVALS.some((option) => option.minutes === current)) {
+    options.unshift({ value: current, label: intervalLabel(current) });
+  }
+  return options;
+}
+
 export const subscriptionTitle = (sub: Pick<Subscription, "tags">) => sub.tags.trim() || "全部帖子";
 
 export const SUBSCRIPTION_EVENT = "subscription-updated";
@@ -50,6 +59,9 @@ export const subscriptionCreate = (
   downloadExisting: boolean,
   maxPosts: number | null,
 ) => invoke<Subscription>("subscription_create", { params, intervalMinutes, downloadExisting, maxPosts });
+/** 订阅实际使用的条件：订阅按上传先后找新图、不带排序，超出 tag 上限时的拆分可能和当前搜索不同。 */
+export const subscriptionPreview = (params: SearchParams) =>
+  invoke<{ query: string; localFilter: string }>("subscription_preview", { params });
 export const subscriptionUpdate = (id: number, change: { enabled?: boolean; intervalMinutes?: number }) =>
   invoke<Subscription>("subscription_update", { id, ...change });
 export const subscriptionDelete = (id: number) => invoke<void>("subscription_delete", { id });

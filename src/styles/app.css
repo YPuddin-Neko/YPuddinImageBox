@@ -193,6 +193,9 @@ button:disabled {
 
 .search-source {
   height: 34px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
   padding: 0 30px 0 14px;
   border: 0;
   border-radius: 17px;
@@ -249,31 +252,33 @@ button:disabled {
   padding: 0 20px 12px;
 }
 
-.chips {
-  display: flex;
-  gap: 4px;
-}
-
-.chip {
+/* 筛选行的下拉框：和 .btn.sm 同高（30px），描边胶囊，前面一个浅色小标题。 */
+.filter-select {
   height: 30px;
-  padding: 0 13px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 0 28px 0 13px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  background: transparent;
-  color: var(--fg-3);
+  background-color: transparent;
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-3) 50%),
+    linear-gradient(135deg, var(--fg-3) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--fg-1);
   font-size: 12.5px;
   font-weight: 700;
-  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
-.chip:hover {
-  color: var(--fg-1);
-}
-
-.chip[aria-pressed="true"] {
-  border-color: var(--fg-1);
-  background: var(--fg-1);
-  color: var(--bg);
+.filter-select:hover,
+.filter-select[data-open] {
+  border-color: var(--line-2);
+  background-color: var(--chip);
 }
 
 .filters-space {
@@ -552,7 +557,140 @@ button:disabled {
   cursor: pointer;
 }
 
-/* 和筛选胶囊同高（30px），放在同一行时上下对齐。 */
+.select {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  white-space: nowrap;
+}
+
+/* ---------- 下拉框 ---------- */
+
+.dropdown-label {
+  color: var(--fg-3);
+}
+
+/* 所有选项的文字叠在同一格里，按钮按最宽的那个定宽，换选项时不跳动。 */
+.dropdown-value {
+  display: inline-grid;
+}
+
+.dropdown-value > * {
+  grid-area: 1 / 1;
+}
+
+.dropdown-sizer {
+  visibility: hidden;
+}
+
+/* 菜单放在浏览器顶层（popover），位置由脚本按按钮算好。 */
+.menu {
+  position: fixed;
+  inset: auto;
+  z-index: 1000;
+  max-height: min(360px, calc(100vh - 16px));
+  margin: 0;
+  padding: 5px;
+  overflow-y: auto;
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  background: var(--raised);
+  color: var(--fg-1);
+  box-shadow: var(--shadow);
+  scrollbar-width: thin;
+  animation: menu-in 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: top left;
+}
+
+.menu[data-placement="above"] {
+  animation-name: menu-in-above;
+  transform-origin: bottom left;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+@keyframes menu-in-above {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+.menu-option {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px 0 9px;
+  border-radius: 9px;
+  color: var(--fg-2);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+}
+
+.menu-option[aria-selected="true"] {
+  color: var(--fg-1);
+}
+
+/* 鼠标移过会把焦点带过去，所以悬停和键盘选中是同一种高亮。 */
+.menu-option:focus {
+  background: var(--chip);
+  color: var(--fg-1);
+}
+
+/* 单选：选中项前面一个勾；复选：方框。两种都占 16px，文字左边对齐在同一条线上。 */
+.menu-mark,
+.menu-box {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+.menu-mark {
+  color: var(--accent);
+}
+
+.menu-box {
+  border: 1.5px solid var(--line-2);
+  border-radius: 5px;
+  color: var(--accent-fg);
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.menu-option[aria-selected="true"] .menu-box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.menu-box .icon {
+  stroke-width: 2.6;
+}
+
+.menu-hint {
+  margin-left: auto;
+  padding-left: 18px;
+  color: var(--fg-3);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.menu-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--line);
+}
+
+/* 和筛选下拉框同高（30px），放在同一行时上下对齐。 */
 .btn.sm {
   height: 30px;
   padding: 0 12px;

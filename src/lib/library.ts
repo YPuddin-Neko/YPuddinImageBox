@@ -20,11 +20,34 @@ export interface DeleteOutcome {
   failed: { postId: number; message: string }[];
 }
 
+/** 图库的排序；默认最近下载的在前。 */
+export type LibrarySort =
+  | "downloaded"
+  | "downloadedAsc"
+  | "newest"
+  | "oldest"
+  | "score"
+  | "favorites"
+  | "resolution"
+  | "filesize";
+
+export const LIBRARY_SORTS: { value: LibrarySort; label: string }[] = [
+  { value: "downloaded", label: "最近下载" },
+  { value: "downloadedAsc", label: "最早下载" },
+  { value: "newest", label: "最新上传" },
+  { value: "oldest", label: "最早上传" },
+  { value: "score", label: "分数最高" },
+  { value: "favorites", label: "收藏最多" },
+  { value: "resolution", label: "分辨率最高" },
+  { value: "filesize", label: "文件最大" },
+];
+
 export interface LibraryQuery {
   source: Source | null;
   /** 空格分隔，`-tag` 表示排除。 */
   tags: string;
   ratings: Rating[];
+  sort: LibrarySort;
   offset: number;
   limit: number;
 }
