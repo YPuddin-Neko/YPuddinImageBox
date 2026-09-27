@@ -492,25 +492,28 @@ code {
   gap: 12px;
 }
 
+.insp-figure {
+  flex: none;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .insp-pv {
   position: relative;
   height: 260px;
-  flex: none;
   overflow: hidden;
   border-radius: 12px;
   background: var(--raised);
 }
 
 .insp-res {
-  position: absolute;
-  left: 10px;
-  bottom: 10px;
-  padding: 3px 8px;
-  border-radius: 7px;
-  background: rgba(10, 12, 18, 0.62);
-  color: #fff;
-  font-size: 11px;
+  color: var(--fg-2);
+  font-size: 12px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .insp-id {
@@ -540,7 +543,8 @@ code {
 
 .insp-meta {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* 最后一列是发布日期，按内容宽度排，避免日期被折成两行 */
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 8px 10px;
   margin: 0;
 }
