@@ -3,11 +3,11 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEve
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PostGrid } from "../../components/PostGrid";
+import type { View } from "../../components/Rail";
 import { SelectionDock } from "../../components/SelectionDock";
 import { Toast } from "../../components/Toast";
 import { usePicker } from "../../components/usePicker";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
-import type { PostRef } from "../../lib/library";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
 import {
@@ -23,7 +23,9 @@ import {
   type Rating,
   type Source,
 } from "../../lib/ipc";
+import type { PostRef } from "../../lib/library";
 import type { Navigate } from "../../lib/nav";
+import { INTERVALS, subscriptionCreate, subscriptionTitle } from "../../lib/subscriptions";
 import { useDownloads } from "../downloads/DownloadsProvider";
 import { Inspector } from "./Inspector";
 
@@ -51,8 +53,20 @@ interface Bulk {
 
 interface Toast {
   message: string;
-  /** 带「查看」按钮，跳到下载页。 */
-  link: boolean;
+  /** 带「查看」按钮时跳到哪个页面。 */
+  link?: View;
+}
+
+/** 「订阅」对话框。 */
+interface SubscribeDraft {
+  criteria: Criteria;
+  query: string;
+  interval: number;
+  /** 现在是否也下载已有的图。 */
+  existing: boolean;
+  max: string;
+  busy: boolean;
+  error: string | null;
 }
 
 const DEFAULT_CRITERIA: Criteria = { source: "danbooru", tags: "", ratings: ["general"] };
@@ -81,6 +95,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   /** 这次打开软件后加入过下载队列、还没下载完的帖子。 */
   const [queued, setQueued] = useState<Set<string>>(() => new Set());
   const [bulk, setBulk] = useState<Bulk | null>(null);
+  const [subscribing, setSubscribing] = useState<SubscribeDraft | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState(false);
   const committed = useRef<Criteria>(DEFAULT_CRITERIA);
@@ -200,10 +215,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         list.forEach((post) => next.add(postKey(post)));
         return next;
       });
-      setToast({ message, link: true });
+      setToast({ message, link: "downloads" });
       return true;
     } catch (err) {
-      setToast({ message: errorMessage(err), link: false });
+      setToast({ message: errorMessage(err) });
       return false;
     } finally {
       setBusy(false);
@@ -228,9 +243,40 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     setBulk(null);
     try {
       await addQuery({ ...bulk.criteria, page: 1 }, Number.isFinite(max) && max > 0 ? max : null);
-      setToast({ message: `已加入下载队列：${bulk.query || "全部帖子"}`, link: true });
+      setToast({ message: `已加入下载队列：${bulk.query || "全部帖子"}`, link: "downloads" });
     } catch (err) {
-      setToast({ message: errorMessage(err), link: false });
+      setToast({ message: errorMessage(err) });
+    }
+  };
+
+  const openSubscribe = () => {
+    setSubscribing({
+      criteria: committed.current,
+      query: results?.query ?? "",
+      interval: 360,
+      existing: false,
+      max: "",
+      busy: false,
+      error: null,
+    });
+  };
+
+  const confirmSubscribe = async () => {
+    if (!subscribing) return;
+    const draft = subscribing;
+    setSubscribing({ ...draft, busy: true, error: null });
+    const max = Number.parseInt(draft.max, 10);
+    try {
+      const sub = await subscriptionCreate(
+        { ...draft.criteria, page: 1 },
+        draft.interval,
+        draft.existing,
+        draft.existing && Number.isFinite(max) && max > 0 ? max : null,
+      );
+      setSubscribing(null);
+      setToast({ message: `已订阅「${subscriptionTitle(sub)}」`, link: "subscriptions" });
+    } catch (err) {
+      setSubscribing((current) => current && { ...current, busy: false, error: errorMessage(err) });
     }
   };
 
@@ -317,6 +363,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             </span>
           )}
           <span className="count">{posts.length} 张</span>
+          <button type="button" className="btn sm" onClick={openSubscribe} disabled={!results || loading}>
+            <Icon name="bell" size={14} />
+            订阅
+          </button>
           <button type="button" className="btn sm" onClick={openBulk} disabled={posts.length === 0 || loading}>
             <Icon name="download" size={14} />
             下载全部结果
@@ -375,8 +425,9 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 type="button"
                 className="link"
                 onClick={() => {
+                  const target = toast.link;
                   setToast(null);
-                  onNavigate("downloads");
+                  if (target) onNavigate(target);
                 }}
               >
                 查看
@@ -435,6 +486,100 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               </dd>
             </dl>
             <p className="dialog-note">已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。</p>
+          </>
+        )}
+      </Dialog>
+
+      <Dialog
+        open={subscribing !== null}
+        title="订阅这个搜索条件？"
+        onClose={() => setSubscribing(null)}
+        actions={
+          <>
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => void confirmSubscribe()}
+              disabled={subscribing?.busy}
+            >
+              <Icon name="bell" size={15} />
+              {subscribing?.busy ? "正在订阅…" : "订阅"}
+            </button>
+            <button type="button" className="btn ghost" onClick={() => setSubscribing(null)}>
+              取消
+            </button>
+          </>
+        }
+      >
+        {subscribing && (
+          <>
+            <dl className="dialog-paths">
+              <dt>条件</dt>
+              <dd>
+                <code>{subscribing.query || "全部帖子"}</code>
+              </dd>
+              <dt>
+                <label htmlFor="subscribe-interval">检查</label>
+              </dt>
+              <dd className="dialog-field">
+                <select
+                  id="subscribe-interval"
+                  className="select"
+                  value={subscribing.interval}
+                  onChange={(event) => {
+                    const interval = Number(event.target.value);
+                    setSubscribing((current) => current && { ...current, interval });
+                  }}
+                >
+                  {INTERVALS.map((option) => (
+                    <option key={option.minutes} value={option.minutes}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </dd>
+              <dt>已有的图</dt>
+              <dd className="dialog-choices">
+                <label className="choice">
+                  <input
+                    type="radio"
+                    name="subscribe-existing"
+                    checked={!subscribing.existing}
+                    onChange={() => setSubscribing((current) => current && { ...current, existing: false })}
+                  />
+                  不下载，只下载以后的新图
+                </label>
+                <label className="choice">
+                  <input
+                    type="radio"
+                    name="subscribe-existing"
+                    checked={subscribing.existing}
+                    onChange={() => setSubscribing((current) => current && { ...current, existing: true })}
+                  />
+                  现在也下载，最多
+                  <input
+                    className="field-input"
+                    type="number"
+                    min={1}
+                    step={1}
+                    inputMode="numeric"
+                    placeholder="不限"
+                    aria-label="最多下载多少张已有的图"
+                    value={subscribing.max}
+                    onFocus={() => setSubscribing((current) => current && { ...current, existing: true })}
+                    onChange={(event) => {
+                      const max = event.target.value;
+                      setSubscribing((current) => current && { ...current, max, existing: true });
+                    }}
+                  />
+                  张
+                </label>
+              </dd>
+            </dl>
+            {subscribing.error && <p className="form-error">{subscribing.error}</p>}
+            <p className="dialog-note">
+              以后按设定的间隔检查，有新图就自动下载。关掉窗口后会在后台继续，可以在「设置 → 通用」里修改。
+            </p>
           </>
         )}
       </Dialog>

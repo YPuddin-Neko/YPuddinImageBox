@@ -515,6 +515,25 @@ button:disabled {
   color: var(--accent-fg);
 }
 
+/* 和按钮同高的下拉框。 */
+.select {
+  height: 34px;
+  padding: 0 30px 0 12px;
+  border: 0;
+  border-radius: 11px;
+  appearance: none;
+  background-color: var(--raised-2);
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-3) 50%),
+    linear-gradient(135deg, var(--fg-3) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 52%, calc(100% - 11px) 52%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--fg-1);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 /* 和筛选胶囊同高（30px），放在同一行时上下对齐。 */
 .btn.sm {
   height: 30px;
@@ -1209,6 +1228,10 @@ code {
   gap: 8px;
 }
 
+.set-title .switch {
+  margin-left: auto;
+}
+
 .set-title h2 {
   margin: 0;
   font-size: 14.5px;
@@ -1770,10 +1793,41 @@ code {
   align-self: center;
 }
 
+/* 后面跟着几行单选时，标签和第一行（34px）的中线对齐。 */
+.dialog-paths dt:has(+ dd.dialog-choices) {
+  line-height: 34px;
+}
+
 .dialog-field {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 对话框里的单选：每项一行，圆点和文字、输入框按行中线对齐。 */
+.dialog-choices {
+  display: grid;
+  gap: 6px;
+}
+
+.choice {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-1);
+  cursor: pointer;
+}
+
+.choice input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.choice .field-input {
+  width: 90px;
 }
 
 .field-input {
@@ -1856,6 +1910,12 @@ code {
 .settings-page .toast {
   left: calc(68px + 220px + 36px);
   right: max(36px, calc(100vw - 68px - 220px - 36px - 980px));
+}
+
+/* 下载、订阅页的提示同样对准内容栏：左边让出侧栏和内边距。 */
+.page .toast {
+  left: calc(68px + 36px);
+  right: max(36px, calc(100vw - 68px - 36px - 980px));
 }
 
 /* 发现页的提示放在图片区底部，和多选条同一个位置、同一条中线。 */

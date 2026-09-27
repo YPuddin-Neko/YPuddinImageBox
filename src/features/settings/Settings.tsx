@@ -5,12 +5,14 @@ import { Icon, type IconName } from "../../components/Icon";
 import { EASE_OUT } from "../../lib/motion";
 import { AccountsSettings } from "./AccountsSettings";
 import { Appearance } from "./Appearance";
+import { GeneralSettings } from "./GeneralSettings";
 import { NetworkSettings } from "./NetworkSettings";
 import { StorageSettings } from "./StorageSettings";
 
-export type SettingsSection = "appearance" | "accounts" | "network" | "storage";
+export type SettingsSection = "general" | "appearance" | "accounts" | "network" | "storage";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: IconName }[] = [
+  { id: "general", label: "通用", icon: "gear" },
   { id: "appearance", label: "外观", icon: "palette" },
   { id: "accounts", label: "账号", icon: "user" },
   { id: "network", label: "网络", icon: "globe" },
@@ -18,6 +20,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: IconName }[] = [
 ];
 
 const PAGES: Record<SettingsSection, ComponentType> = {
+  general: GeneralSettings,
   appearance: Appearance,
   accounts: AccountsSettings,
   network: NetworkSettings,

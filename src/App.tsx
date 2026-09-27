@@ -7,6 +7,7 @@ import { Downloads } from "./features/downloads/Downloads";
 import { DownloadsProvider, useDownloads } from "./features/downloads/DownloadsProvider";
 import { Library } from "./features/library/Library";
 import { Settings, type SettingsSection } from "./features/settings/Settings";
+import { Subscriptions } from "./features/subscriptions/Subscriptions";
 import { VIEW_VARIANTS } from "./lib/motion";
 import type { Navigate } from "./lib/nav";
 import { ThemeProvider } from "./theme/ThemeProvider";
@@ -29,7 +30,7 @@ function ViewPane({ active, children }: { active: boolean; children: ReactNode }
 /** 各视图一直挂着，切换时只做淡入淡出，搜索结果、滚动位置都保留。 */
 function Shell() {
   const [view, setView] = useState<View>("discover");
-  const [section, setSection] = useState<SettingsSection>("appearance");
+  const [section, setSection] = useState<SettingsSection>("general");
   const { activeCount } = useDownloads();
   const navigate = useCallback<Navigate>((next, target) => {
     if (target) setSection(target);
@@ -44,6 +45,9 @@ function Shell() {
         </ViewPane>
         <ViewPane active={view === "library"}>
           <Library active={view === "library"} onNavigate={navigate} />
+        </ViewPane>
+        <ViewPane active={view === "subscriptions"}>
+          <Subscriptions onNavigate={navigate} />
         </ViewPane>
         <ViewPane active={view === "downloads"}>
           <Downloads onNavigate={navigate} />

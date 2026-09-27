@@ -37,6 +37,11 @@ pnpm tauri icon design/icon/app-icon-macos.png -o /tmp/ibx-icons-mac
 
 把 `/tmp/ibx-icons` 中与 `src-tauri/icons/` 同名的文件复制过去（不需要 `android/`、`ios/`），`icon.icns` 改用 `/tmp/ibx-icons-mac` 里的。界面左上角的 `src/assets/app-icon.png` 是 128px 的缩小版。
 
+## 订阅与后台运行
+
+- 在「发现」里搜索后点「订阅」，按设定的间隔（每小时到每天）检查新图并自动下载；订阅页可以暂停、改间隔、立即检查。
+- 关闭窗口后默认在后台继续运行，从菜单栏（Windows 为托盘）图标重新打开或退出；「设置 → 通用」里可以改成关窗口即退出，也可以打开开机启动。
+
 ## 账号与代理
 
 - 账号在「设置 → 账号」里填写，保存前先访问一次站点验证。Danbooru 不填也能用，Gelbooru 必须填写。

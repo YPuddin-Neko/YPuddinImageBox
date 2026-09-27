@@ -39,3 +39,13 @@ export const proxyInfo = () => invoke<ProxySettings>("proxy_info");
 export const proxySave = (proxy: ProxySettings) => invoke<ProxySettings>("proxy_save", { proxy });
 /** 用还没保存的设置试连一次，返回耗时（毫秒）。 */
 export const proxyTest = (proxy: ProxySettings) => invoke<number>("proxy_test", { proxy });
+
+export interface GeneralSettings {
+  /** 关闭窗口后在后台继续运行。 */
+  closeToTray: boolean;
+  /** 登录系统后自动在后台启动。 */
+  launchAtLogin: boolean;
+}
+
+export const generalInfo = () => invoke<GeneralSettings>("general_info");
+export const generalSave = (settings: GeneralSettings) => invoke<GeneralSettings>("general_save", { ...settings });
