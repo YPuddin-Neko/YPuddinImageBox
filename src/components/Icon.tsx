@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 
 const PATHS = {
-  box: <path d="M4 8.5 12 4.5l8 4v7L12 19.5l-8-4zM4 8.5l8 4 8-4M12 12.5v7" />,
   compass: (
     <>
       <circle cx="12" cy="12" r="8.5" />

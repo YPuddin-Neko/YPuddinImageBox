@@ -1,3 +1,4 @@
+import appIcon from "../assets/app-icon.png";
 import { Icon, type IconName } from "./Icon";
 
 export type View = "discover" | "settings";
@@ -20,9 +21,7 @@ export function Rail({ view, onChange }: { view: View; onChange: (view: View) =>
   );
   return (
     <nav className="rail" aria-label="主导航" data-tauri-drag-region>
-      <span className="rail-logo" aria-hidden="true">
-        <Icon name="box" size={20} />
-      </span>
+      <img className="rail-logo" src={appIcon} alt="" draggable={false} data-tauri-drag-region />
       {ITEMS.map(button)}
       <span className="rail-space" data-tauri-drag-region />
       {button({ view: "settings", label: "设置", icon: "gear" })}

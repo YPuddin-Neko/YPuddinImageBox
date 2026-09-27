@@ -88,11 +88,7 @@ button:disabled {
   width: 38px;
   height: 38px;
   margin-bottom: 10px;
-  display: grid;
-  place-items: center;
-  border-radius: 12px;
-  background: var(--accent);
-  color: var(--accent-fg);
+  display: block;
 }
 
 .rail-btn {

@@ -25,6 +25,17 @@ cd src-tauri && cargo run --example probe # 用真实网络检查 Danbooru 访�
 
 颜色只写在 `src/theme/themes.json`，运行 `pnpm themes` 生成 `src/styles/themes.css`（`pnpm build` 会自动执行）。
 
+## 图标
+
+原图放在 `design/icon/`：`app-icon.png` 铺满画布，用于 Windows；`app-icon-macos.png` 按 macOS 图标规范四周留白并带投影。换图后重新生成：
+
+```bash
+pnpm tauri icon design/icon/app-icon.png -o /tmp/ibx-icons
+pnpm tauri icon design/icon/app-icon-macos.png -o /tmp/ibx-icons-mac
+```
+
+把 `/tmp/ibx-icons` 中与 `src-tauri/icons/` 同名的文件复制过去（不需要 `android/`、`ios/`），`icon.icns` 改用 `/tmp/ibx-icons-mac` 里的。界面左上角的 `src/assets/app-icon.png` 是 128px 的缩小版。
+
 ## 账号（临时方式）
 
 账号设置页完成前，账号从环境变量读取：
