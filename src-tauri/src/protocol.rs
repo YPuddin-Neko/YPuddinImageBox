@@ -1,7 +1,7 @@
 //! `ibx://` 图片协议：界面上的远程图片都经这里加载。
 //!
 //! 界面不直接请求站点图床，这样代理、UA、Referer、限速和域名白名单只在一处生效；
-//! 加载过的图缓存在磁盘上（14 天）。
+//! 加载过的图缓存在「缓存」位置下的 remote 目录（14 天）。
 //! 地址由前端 `convertFileSrc(远程地址, "ibx")` 生成，路径部分是百分号编码后的完整远程 URL。
 
 use std::path::{Path, PathBuf};
@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager, Runtime};
 use url::Url;
 
 use crate::sources::Source;
+use crate::storage::StorageKind;
 use crate::AppState;
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
@@ -50,6 +51,7 @@ async fn load<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<(Vec<u8>, &'
     let url = Url::parse(&raw).map_err(|_| (StatusCode::BAD_REQUEST, "图片地址无效".to_string()))?;
     let source = allowed_source(&url).ok_or((StatusCode::FORBIDDEN, "只能加载已接入站点的图片".to_string()))?;
 
+    // 每次请求都读取当前的缓存位置，修改位置后立即生效。
     let cache = cache_path(app, &url);
     if let Some(bytes) = read_fresh(cache.as_deref()).await {
         if let Some(mime) = sniff(&bytes) {
@@ -95,7 +97,7 @@ fn allowed_source(url: &Url) -> Option<Source> {
 fn cache_path<R: Runtime>(app: &AppHandle<R>, url: &Url) -> Option<PathBuf> {
     let digest = Md5::digest(url.as_str().as_bytes());
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    let root = app.path().app_cache_dir().ok()?;
+    let root = app.state::<AppState>().storage().path(StorageKind::Cache);
     Some(root.join("remote").join(&hex[..2]).join(hex))
 }
 

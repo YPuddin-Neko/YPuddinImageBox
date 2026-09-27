@@ -29,6 +29,15 @@ const PATHS = {
   ),
   check: <path d="m5 12.5 4.5 4.5L19 7.5" />,
   retry: <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" />,
+  folder: <path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4.2l2 2H19a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z" />,
+  palette: (
+    <>
+      <path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.1 0 1.7-.8 1.7-1.7 0-.9-.7-1.4-.7-2.3 0-.9.7-1.7 1.7-1.7h1.8a4 4 0 0 0 4-4c0-4.1-3.8-7.3-8.5-7.3z" />
+      <circle cx="7.8" cy="11.3" r="1.1" />
+      <circle cx="10.8" cy="7.8" r="1.1" />
+      <circle cx="15.2" cy="8.4" r="1.1" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof PATHS;

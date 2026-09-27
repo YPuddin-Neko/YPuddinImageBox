@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { Icon } from "../../components/Icon";
 import { ShimmerImage } from "../../components/ShimmerImage";
+import { formatBytes } from "../../lib/format";
 import { PANEL_ENTER } from "../../lib/motion";
 import { imageSrc, RATING_LABEL, SOURCE_LABEL, type Post, type PostTags } from "../../lib/ipc";
 
@@ -14,12 +15,6 @@ const TAG_GROUPS: { key: keyof PostTags; label: string }[] = [
   { key: "general", label: "一般" },
   { key: "meta", label: "元" },
 ];
-
-function formatBytes(bytes: number | null): string {
-  if (bytes == null) return "—";
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 function formatDate(value: string | null): string {
   if (!value) return "—";

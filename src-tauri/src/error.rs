@@ -15,6 +15,10 @@ pub enum AppError {
     CredentialsMissing(&'static str),
     #[error("{site} 的响应无法解析：{detail}")]
     Parse { site: &'static str, detail: String },
+    #[error("{0}")]
+    Storage(#[from] crate::storage::StorageError),
+    #[error("{0}")]
+    Internal(String),
 }
 
 impl AppError {
@@ -26,6 +30,8 @@ impl AppError {
             AppError::Upstream { .. } => "upstream",
             AppError::CredentialsMissing(_) => "credentials_missing",
             AppError::Parse { .. } => "parse",
+            AppError::Storage(_) => "storage",
+            AppError::Internal(_) => "internal",
         }
     }
 }

@@ -1,103 +1,51 @@
-import { Icon } from "../../components/Icon";
-import { useTheme } from "../../theme/ThemeProvider";
-import { findTheme, THEMES, type ThemeInfo } from "../../theme/themes";
+import { useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 
-const MODE_LABEL = { dark: "深色", light: "浅色" } as const;
+import { Icon, type IconName } from "../../components/Icon";
+import { EASE_OUT } from "../../lib/motion";
+import { Appearance } from "./Appearance";
+import { StorageSettings } from "./StorageSettings";
 
-function MiniPreview({ theme }: { theme: ThemeInfo }) {
-  return (
-    <span className="mini" data-theme={theme.id} aria-hidden="true">
-      <i className="mini-rail" />
-      <i className="mini-bar" />
-      <i className="mini-grid">
-        <i />
-        <i />
-        <i />
-      </i>
-      <i className="mini-panel">
-        <i />
-        <i />
-        <i />
-        <b />
-      </i>
-    </span>
-  );
-}
+type Section = "appearance" | "storage";
+
+const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
+  { id: "appearance", label: "外观", icon: "palette" },
+  { id: "storage", label: "存储", icon: "folder" },
+];
 
 export function Settings() {
-  const { prefs, activeId, chooseTheme, setFollowSystem } = useTheme();
-  const darkName = findTheme(prefs.darkId)?.name;
-  const lightName = findTheme(prefs.lightId)?.name;
-  const darkCount = THEMES.filter((t) => t.mode === "dark").length;
-
+  const [section, setSection] = useState<Section>("appearance");
   return (
     <div className="settings">
-      <header className="settings-head" data-tauri-drag-region>
-        <p className="eyebrow">设置</p>
-        <h1>外观</h1>
-        <p>主题和跟随系统，改动立即生效。</p>
-      </header>
-
-      <div className="section-head">
-        <h2 id="theme-title">主题</h2>
-        <span>
-          {darkCount} 套深色 · {THEMES.length - darkCount} 套浅色
-        </span>
-      </div>
-      <div className="theme-grid" role="group" aria-labelledby="theme-title">
-        {THEMES.map((theme) => {
-          const slot = prefs.followSystem
-            ? theme.id === prefs.darkId
-              ? "深色时使用"
-              : theme.id === prefs.lightId
-                ? "浅色时使用"
-                : null
-            : null;
-          const inUse = prefs.followSystem ? slot !== null : theme.id === prefs.themeId;
-          return (
-            <button
-              key={theme.id}
-              type="button"
-              className="theme-card"
-              aria-pressed={inUse}
-              aria-label={`${theme.name}，${MODE_LABEL[theme.mode]}，${theme.mood}`}
-              title={theme.mood}
-              onClick={() => chooseTheme(theme.id)}
-            >
-              <MiniPreview theme={theme} />
-              <span className="theme-name">
-                <b>{theme.name}</b>
-                <small>{slot ?? MODE_LABEL[theme.mode]}</small>
-              </span>
-              {theme.id === activeId && (
-                <span className="theme-check" aria-hidden="true">
-                  <Icon name="check" size={12} />
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="setting-row">
-        <div>
-          <b id="follow-system-label">跟随系统</b>
-          <span>
-            系统切换深浅色时自动换主题：深色用{darkName}，浅色用{lightName}。开启后点主题卡片，替换的是对应明暗的那一套。
-          </span>
-        </div>
-        <button
-          type="button"
-          id="follow-system"
-          role="switch"
-          className="switch"
-          aria-checked={prefs.followSystem}
-          aria-labelledby="follow-system-label"
-          onClick={() => setFollowSystem(!prefs.followSystem)}
+      <nav className="settings-nav" aria-label="设置分类">
+        <p className="settings-nav-title" data-tauri-drag-region>
+          设置
+        </p>
+        {SECTIONS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className="settings-nav-item"
+            aria-current={section === item.id ? "page" : undefined}
+            onClick={() => setSection(item.id)}
+          >
+            <Icon name={item.icon} size={17} />
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={section}
+          className="settings-body"
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, transition: { duration: 0.1 } }}
+          transition={{ duration: 0.18, ease: EASE_OUT }}
         >
-          <span />
-        </button>
-      </div>
+          {section === "appearance" ? <Appearance /> : <StorageSettings />}
+        </motion.div>
+      </AnimatePresence>
     </div>
   );
 }
