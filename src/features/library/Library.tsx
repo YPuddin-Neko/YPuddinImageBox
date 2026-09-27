@@ -3,12 +3,12 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { Icon } from "../../components/Icon";
 import { PostGrid } from "../../components/PostGrid";
-import type { View } from "../../components/Rail";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
 import { errorMessage, postKey, RATING_LABEL, RATINGS, SOURCE_LABEL, type Rating, type Source } from "../../lib/ipc";
 import { libraryList, type LocalPost } from "../../lib/library";
+import type { Navigate } from "../../lib/nav";
 import { revealLabel } from "../../lib/platform";
 import { Inspector } from "../discover/Inspector";
 
@@ -30,7 +30,7 @@ const EMPTY_FILTER: Filter = { source: "all", tags: "", ratings: [] };
 const isFiltered = (filter: Filter) =>
   filter.source !== "all" || filter.tags.trim() !== "" || (filter.ratings.length > 0 && filter.ratings.length < RATINGS.length);
 
-export function Library({ active, onNavigate }: { active: boolean; onNavigate: (view: View) => void }) {
+export function Library({ active, onNavigate }: { active: boolean; onNavigate: Navigate }) {
   const [source, setSource] = useState<Filter["source"]>("all");
   const [tags, setTags] = useState("");
   const [ratings, setRatings] = useState<Rating[]>([]);

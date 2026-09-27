@@ -78,6 +78,14 @@ export function imageSrc(url: string | null | undefined): string | undefined {
   return url ? convertFileSrc(url, "ibx") : undefined;
 }
 
+/** Rust 端错误的类别，例如 credentials_missing、bad_credentials。 */
+export function errorCode(error: unknown): string | null {
+  if (error && typeof error === "object" && "code" in error) {
+    return String((error as { code: unknown }).code);
+  }
+  return null;
+}
+
 /** Rust 端错误序列化为 { code, message }。 */
 export function errorMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {

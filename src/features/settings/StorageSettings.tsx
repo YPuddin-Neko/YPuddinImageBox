@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { Toast, useToast } from "../../components/Toast";
 import { formatBytes } from "../../lib/format";
 import { errorMessage } from "../../lib/ipc";
 import { revealLabel } from "../../lib/platform";
@@ -71,7 +71,7 @@ export function StorageSettings() {
   const [usage, setUsage] = useState<Partial<Record<StorageKind, Usage>>>({});
   const [busy, setBusy] = useState<StorageKind | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useToast();
   const [choice, setChoice] = useState<Choice | null>(null);
 
   const measure = useCallback((kind: StorageKind) => {
@@ -91,12 +91,6 @@ export function StorageSettings() {
       (err) => setError(errorMessage(err)),
     );
   }, [measure]);
-
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 3200);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
 
   const apply = async (location: LocationInfo, target: string | null, mode: ChangeMode) => {
     setChoice(null);
@@ -181,10 +175,10 @@ export function StorageSettings() {
         </div>
       )}
 
-      <div className="storage-list">
+      <div className="set-list">
         {info?.locations.map((location) => (
-          <section key={location.kind} className="storage-row" aria-labelledby={`storage-${location.kind}`}>
-            <div className="storage-title">
+          <section key={location.kind} className="set-card" aria-labelledby={`storage-${location.kind}`}>
+            <div className="set-title">
               <h2 id={`storage-${location.kind}`}>{location.label}</h2>
               {/* 「恢复默认」放在标题行，每行右侧的按钮保持一样，路径框才能上下对齐。 */}
               {location.isDefault ? (
@@ -201,15 +195,15 @@ export function StorageSettings() {
               )}
               <span className="storage-usage">{usageText(usage[location.kind])}</span>
             </div>
-            <p className="storage-desc">
+            <p className="set-desc">
               {DESCRIPTION[location.kind]}
               {location.appliesOnRestart ? "，修改后重启生效" : ""}
             </p>
-            <div className="storage-line">
+            <div className="set-line">
               <code className="storage-path" title={location.path}>
                 <span>{location.path}</span>
               </code>
-              <div className="storage-actions">
+              <div className="set-actions">
                 <button type="button" className="btn" onClick={() => void pick(location)} disabled={busy !== null}>
                   {busy === location.kind ? "正在处理…" : "更改位置…"}
                 </button>
@@ -242,20 +236,7 @@ export function StorageSettings() {
         </p>
       )}
 
-      <AnimatePresence>
-        {notice && (
-          <motion.p
-            className="toast"
-            role="status"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 10 }}
-            transition={{ duration: 0.2 }}
-          >
-            {notice}
-          </motion.p>
-        )}
-      </AnimatePresence>
+      <Toast message={notice} />
 
       <Dialog
         open={choice !== null}

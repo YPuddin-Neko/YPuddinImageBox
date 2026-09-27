@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { Icon, type IconName } from "../../components/Icon";
-import type { View } from "../../components/Rail";
 import { isActive, jobNotes, processed, STATUS_LABEL, type ItemNote, type Job, type JobAction } from "../../lib/downloads";
 import { formatCount, formatTime } from "../../lib/format";
 import { errorMessage, SOURCE_LABEL } from "../../lib/ipc";
 import { EASE_OUT } from "../../lib/motion";
+import type { Navigate } from "../../lib/nav";
 import { useDownloads } from "./DownloadsProvider";
 
 type Notes = ItemNote[] | "loading" | "failed";
@@ -100,7 +100,7 @@ function NoteList({ notes }: { notes: Notes | undefined }) {
   );
 }
 
-export function Downloads({ onNavigate }: { onNavigate: (view: View) => void }) {
+export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
   const { jobs, loaded, loadError, act, clearFinished } = useDownloads();
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<number | null>(null);

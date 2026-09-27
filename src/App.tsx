@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { MotionConfig, motion } from "motion/react";
 
 import { Rail, type View } from "./components/Rail";
@@ -6,8 +6,9 @@ import { Discover } from "./features/discover/Discover";
 import { Downloads } from "./features/downloads/Downloads";
 import { DownloadsProvider, useDownloads } from "./features/downloads/DownloadsProvider";
 import { Library } from "./features/library/Library";
-import { Settings } from "./features/settings/Settings";
+import { Settings, type SettingsSection } from "./features/settings/Settings";
 import { VIEW_VARIANTS } from "./lib/motion";
+import type { Navigate } from "./lib/nav";
 import { ThemeProvider } from "./theme/ThemeProvider";
 
 function ViewPane({ active, children }: { active: boolean; children: ReactNode }) {
@@ -28,22 +29,27 @@ function ViewPane({ active, children }: { active: boolean; children: ReactNode }
 /** 各视图一直挂着，切换时只做淡入淡出，搜索结果、滚动位置都保留。 */
 function Shell() {
   const [view, setView] = useState<View>("discover");
+  const [section, setSection] = useState<SettingsSection>("appearance");
   const { activeCount } = useDownloads();
+  const navigate = useCallback<Navigate>((next, target) => {
+    if (target) setSection(target);
+    setView(next);
+  }, []);
   return (
     <div className="app">
       <Rail view={view} onChange={setView} badges={{ downloads: activeCount }} />
       <main className="app-main">
         <ViewPane active={view === "discover"}>
-          <Discover active={view === "discover"} onNavigate={setView} />
+          <Discover active={view === "discover"} onNavigate={navigate} />
         </ViewPane>
         <ViewPane active={view === "library"}>
-          <Library active={view === "library"} onNavigate={setView} />
+          <Library active={view === "library"} onNavigate={navigate} />
         </ViewPane>
         <ViewPane active={view === "downloads"}>
-          <Downloads onNavigate={setView} />
+          <Downloads onNavigate={navigate} />
         </ViewPane>
         <ViewPane active={view === "settings"}>
-          <Settings />
+          <Settings section={section} onSectionChange={setSection} />
         </ViewPane>
       </main>
     </div>

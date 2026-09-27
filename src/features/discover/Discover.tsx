@@ -4,12 +4,13 @@ import { AnimatePresence, motion } from "motion/react";
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PostGrid } from "../../components/PostGrid";
-import type { View } from "../../components/Rail";
+import { Toast } from "../../components/Toast";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
 import {
   countRemote,
+  errorCode,
   errorMessage,
   postKey,
   RATING_LABEL,
@@ -21,6 +22,7 @@ import {
   type Source,
 } from "../../lib/ipc";
 import { PANEL_ENTER } from "../../lib/motion";
+import type { Navigate } from "../../lib/nav";
 import { useDownloads } from "../downloads/DownloadsProvider";
 import { Inspector } from "./Inspector";
 
@@ -63,7 +65,7 @@ function countText(count: Bulk["count"]): string {
   return `约 ${formatCount(count)} 张`;
 }
 
-export function Discover({ active, onNavigate }: { active: boolean; onNavigate: (view: View) => void }) {
+export function Discover({ active, onNavigate }: { active: boolean; onNavigate: Navigate }) {
   const { addPosts, addQuery } = useDownloads();
   const [source, setSource] = useState<Source>(DEFAULT_CRITERIA.source);
   const [tags, setTags] = useState(DEFAULT_CRITERIA.tags);
@@ -71,8 +73,8 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [results, setResults] = useState<Results | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  /** 记下失败的是哪一页，重试时重跑这一页。 */
-  const [error, setError] = useState<{ message: string; page: number } | null>(null);
+  /** 记下失败的是哪一页，重试时重跑这一页；code 用来判断是不是账号问题。 */
+  const [error, setError] = useState<{ message: string; code: string | null; page: number } | null>(null);
   /** 已在图库中的帖子。只增不减：下载完成的事件也会加进来。 */
   const [owned, setOwned] = useState<Set<string>>(() => new Set());
   /** 这次打开软件后加入过下载队列、还没下载完的帖子。 */
@@ -110,7 +112,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         lastPicked.current = null;
       }
     } catch (err) {
-      if (id === requestId.current) setError({ message: errorMessage(err), page });
+      if (id === requestId.current) setError({ message: errorMessage(err), code: errorCode(err), page });
     } finally {
       if (id === requestId.current) setLoading(false);
     }
@@ -342,10 +344,17 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
           {error && (
             <div className="alert" role="alert">
               <span>{error.message}</span>
-              <button type="button" className="btn" onClick={() => void run(committed.current, error.page)}>
-                <Icon name="retry" size={15} />
-                重试
-              </button>
+              {error.code === "credentials_missing" || error.code === "bad_credentials" ? (
+                <button type="button" className="btn" onClick={() => onNavigate("settings", "accounts")}>
+                  <Icon name="user" size={15} />
+                  填写账号
+                </button>
+              ) : (
+                <button type="button" className="btn" onClick={() => void run(committed.current, error.page)}>
+                  <Icon name="retry" size={15} />
+                  重试
+                </button>
+              )}
             </div>
           )}
           {firstLoad && <p className="hint">正在加载…</p>}
@@ -400,32 +409,23 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
           )}
         </AnimatePresence>
 
-        <AnimatePresence>
-          {toast && (
-            <motion.div
-              className="toast"
-              role="status"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              transition={{ duration: 0.2 }}
-            >
-              <span>{toast.message}</span>
-              {toast.link && (
-                <button
-                  type="button"
-                  className="link"
-                  onClick={() => {
-                    setToast(null);
-                    onNavigate("downloads");
-                  }}
-                >
-                  查看
-                </button>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <Toast
+          message={toast?.message ?? null}
+          action={
+            toast?.link && (
+              <button
+                type="button"
+                className="link"
+                onClick={() => {
+                  setToast(null);
+                  onNavigate("downloads");
+                }}
+              >
+                查看
+              </button>
+            )
+          }
+        />
       </div>
 
       <Inspector key={selectedKey ?? "none"} post={selectedPost} primaryAction={primaryAction} />

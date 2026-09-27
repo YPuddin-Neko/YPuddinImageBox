@@ -1126,7 +1126,7 @@ code {
   background: var(--accent-fg);
 }
 
-/* ---------- 存储 ---------- */
+/* ---------- 设置里的卡片（账号、网络、存储共用） ---------- */
 
 .notice-bar {
   max-width: 980px;
@@ -1150,7 +1150,7 @@ code {
   margin-top: 18px;
 }
 
-.storage-list {
+.set-list {
   max-width: 980px;
   display: flex;
   flex-direction: column;
@@ -1158,9 +1158,9 @@ code {
   margin-top: 22px;
 }
 
-/* 每行三层：标题和占用 / 说明 / 路径框和按钮。路径框与按钮同高（34px）排在同一行，
-   右侧占用和最右边的按钮对齐到同一条边。 */
-.storage-row {
+/* 每张卡片三层：标题 / 说明 / 内容行。内容行里的框和按钮同高（34px）排在同一行，
+   标题行右侧的信息和最右边的按钮对齐到同一条边。 */
+.set-card {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1170,14 +1170,14 @@ code {
   background: var(--panel);
 }
 
-.storage-title {
+.set-title {
   min-height: 24px;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.storage-title h2 {
+.set-title h2 {
   margin: 0;
   font-size: 14.5px;
   font-weight: 800;
@@ -1191,13 +1191,13 @@ code {
   color: var(--fg-2);
 }
 
-.storage-desc {
+.set-desc {
   margin: 0;
   font-size: 12px;
   color: var(--fg-3);
 }
 
-.storage-line {
+.set-line {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1230,10 +1230,142 @@ code {
   unicode-bidi: isolate;
 }
 
-.storage-actions {
+.set-actions {
   flex: none;
   display: flex;
   gap: 8px;
+}
+
+.badge.ok {
+  color: var(--ok);
+}
+
+.badge.warn {
+  color: var(--warn);
+}
+
+/* 已登录的账号：和存储页的路径框同样大小。 */
+.identity {
+  flex: 1 1 320px;
+  min-width: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--raised);
+  color: var(--fg-2);
+}
+
+.identity b {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg-1);
+}
+
+/* 表单行：标签在上、输入框在下，按钮和输入框底边对齐。 */
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.field {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field > span {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--fg-3);
+}
+
+.field .field-input {
+  width: 100%;
+}
+
+.form-hint,
+.form-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.form-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  color: var(--fg-3);
+}
+
+.form-error {
+  color: var(--err);
+}
+
+/* 单选行：圆点 / 标题 / 说明或输入框三列，各行的标题和说明上下对齐。 */
+.options {
+  display: grid;
+  gap: 2px;
+  margin: 4px -10px 4px;
+}
+
+.option {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 16px 88px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.option:hover {
+  background: var(--chip);
+}
+
+.option input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.option-title {
+  font-weight: 700;
+}
+
+.option-desc {
+  font-size: 12.5px;
+  color: var(--fg-3);
+}
+
+.option .option-input {
+  width: 100%;
+}
+
+.test-result {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg-3);
+}
+
+.test-result[data-state="ok"] {
+  color: var(--ok);
+}
+
+.test-result[data-state="failed"] {
+  color: var(--err);
 }
 
 .storage-pending {
@@ -1686,6 +1818,12 @@ code {
   align-items: center;
   gap: 14px;
   font-weight: 700;
+}
+
+/* 设置页的提示对准卡片那一栏居中：左边让出侧栏、设置导航和内边距，右边按卡片的最大宽度算。 */
+.settings-page .toast {
+  left: calc(68px + 220px + 36px);
+  right: max(36px, calc(100vw - 68px - 220px - 36px - 980px));
 }
 
 /* 发现页的提示放在图片区底部，和多选条同一个位置、同一条中线。 */

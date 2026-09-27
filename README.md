@@ -37,15 +37,9 @@ pnpm tauri icon design/icon/app-icon-macos.png -o /tmp/ibx-icons-mac
 
 把 `/tmp/ibx-icons` 中与 `src-tauri/icons/` 同名的文件复制过去（不需要 `android/`、`ios/`），`icon.icns` 改用 `/tmp/ibx-icons-mac` 里的。界面左上角的 `src/assets/app-icon.png` 是 128px 的缩小版。
 
-## 账号（临时方式）
+## 账号与代理
 
-账号设置页完成前，账号从环境变量读取：
-
-```bash
-export IMAGEBOX_DANBOORU_USERNAME=...
-export IMAGEBOX_DANBOORU_API_KEY=...
-export IMAGEBOX_GELBOORU_USER_ID=...
-export IMAGEBOX_GELBOORU_API_KEY=...
-```
-
-Danbooru 不填也能匿名浏览；Gelbooru 必须填写。
+- 账号在「设置 → 账号」里填写。保存前先访问一次站点验证；API Key 存在系统钥匙串（macOS 钥匙串 / Windows 凭据管理器），`settings.json` 里只记用户名。Danbooru 不填也能用，Gelbooru 必须填写。
+- 代理在「设置 → 网络」里选：跟随系统、不使用代理或手动填写（http / https / socks5），保存后立即生效。
+- 开发版每次重新编译后，macOS 可能询问是否允许读取钥匙串里的 API Key，选「始终允许」即可；签名后的正式版不会反复询问。
+- `cd src-tauri && cargo test secrets -- --ignored` 会真实读写一次钥匙串，平时的 `cargo test` 不碰钥匙串。
