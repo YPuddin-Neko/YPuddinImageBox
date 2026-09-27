@@ -399,6 +399,10 @@ button:disabled {
   opacity: 1;
 }
 
+.card-owned.is-missing {
+  color: var(--warn);
+}
+
 .card-owned {
   position: absolute;
   top: 10px;
@@ -523,6 +527,19 @@ button:disabled {
 .btn.ghost {
   background: transparent;
   color: var(--fg-2);
+}
+
+/* 删除类操作：淡红底、红字，和主按钮区分开。 */
+.btn.danger {
+  background: color-mix(in srgb, var(--err) 16%, transparent);
+  color: var(--err);
+}
+
+.btn.icon-only {
+  width: 34px;
+  flex: none;
+  justify-content: center;
+  padding: 0;
 }
 
 .btn.ghost:hover:not(:disabled) {
@@ -779,9 +796,24 @@ code {
   justify-content: center;
 }
 
+/* 主要操作占满一行；旁边可以跟一个方形的图标按钮（例如删除）。 */
 .insp-primary {
   grid-column: 1 / -1;
-  display: grid;
+  display: flex;
+  gap: 8px;
+}
+
+.insp-primary > .btn:first-child {
+  flex: 1;
+}
+
+.insp-notice {
+  margin: -4px 0 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--raised);
+  color: var(--warn);
+  font-size: 12px;
 }
 
 /* ---------- 设置 ---------- */

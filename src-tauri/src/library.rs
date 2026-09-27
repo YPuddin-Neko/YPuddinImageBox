@@ -35,6 +35,8 @@ pub struct LocalPost {
     pub post: Post,
     pub path: String,
     pub downloaded_at: i64,
+    /// 文件已经不在记录的位置（被移动或删除）。列表返回前由调用方检查。
+    pub missing: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -210,6 +212,7 @@ fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
         },
         path: row.try_get("local_path")?,
         downloaded_at: row.try_get("downloaded_at")?,
+        missing: false,
     })
 }
 
@@ -385,6 +388,22 @@ impl Library {
 
         let has_more = (query.offset as i64 + posts.len() as i64) < total;
         Ok(LibraryPage { posts, total, offset: query.offset, has_more })
+    }
+
+    /// 从图库删除记录（tag 关联随之删除），返回删掉的条数。不碰文件。
+    pub async fn remove_posts(&self, posts: &[(Source, u64)]) -> Result<u64, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let mut removed = 0;
+        for (source, post_id) in posts {
+            removed += sqlx::query("DELETE FROM posts WHERE source = ? AND post_id = ?")
+                .bind(source.as_str())
+                .bind(*post_id as i64)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        }
+        tx.commit().await?;
+        Ok(removed)
     }
 
     /// 图片位置整体移走后，把旧位置下的路径改成新位置。返回改了多少条。
@@ -765,6 +784,19 @@ mod tests {
         let page = lib.list(&LibraryQuery::default()).await.unwrap();
         let gel = page.posts.iter().find(|p| p.post.source == Source::Gelbooru).unwrap();
         assert_eq!(gel.post.tags.artist, vec!["alice"]);
+    }
+
+    #[tokio::test]
+    async fn removes_posts_with_their_tags() {
+        let lib = Library::in_memory().await;
+        lib.save_post(&post(Source::Danbooru, 1, tags(&["alice"], &["sky"])), Path::new("/i/1.png"), 1).await.unwrap();
+        lib.save_post(&post(Source::Danbooru, 2, tags(&[], &["sky"])), Path::new("/i/2.png"), 2).await.unwrap();
+        assert_eq!(lib.remove_posts(&[(Source::Danbooru, 1), (Source::Danbooru, 9)]).await.unwrap(), 1);
+        assert!(lib.local_path(Source::Danbooru, 1).await.unwrap().is_none());
+        let sky = lib.list(&LibraryQuery { tags: "sky".into(), ..LibraryQuery::default() }).await.unwrap();
+        assert_eq!(sky.total, 1);
+        let links: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM post_tags").fetch_one(&lib.pool).await.unwrap();
+        assert_eq!(links, 1);
     }
 
     #[tokio::test]

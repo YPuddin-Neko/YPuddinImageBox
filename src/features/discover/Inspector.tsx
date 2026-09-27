@@ -29,9 +29,11 @@ interface InspectorProps {
   localPath?: string;
   /** 排在最前、占满一行的主要操作（下载原图、在访达中显示等）。 */
   primaryAction?: ReactNode;
+  /** 预览图下方的提醒，例如文件已经不见了。 */
+  notice?: string;
 }
 
-export function Inspector({ post, emptyText = "点一张图查看详情", localPath, primaryAction }: InspectorProps) {
+export function Inspector({ post, emptyText = "点一张图查看详情", localPath, primaryAction, notice }: InspectorProps) {
   const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
 
   if (!post) {
@@ -65,6 +67,7 @@ export function Inspector({ post, emptyText = "点一张图查看详情", localP
             {post.fileExt ? ` · ${post.fileExt.toUpperCase()}` : ""}
           </figcaption>
         </figure>
+        {notice && <p className="insp-notice">{notice}</p>}
         <div className="insp-id">
           <b>#{post.id.toLocaleString("en-US")}</b>
           <span className="badge">{SOURCE_LABEL[post.source]}</span>

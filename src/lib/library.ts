@@ -6,6 +6,18 @@ import type { Post, Rating, Source } from "./ipc";
 export interface LocalPost extends Post {
   path: string;
   downloadedAt: number;
+  /** 文件已经不在记录的位置（被移动或删除）。 */
+  missing: boolean;
+}
+
+export interface PostRef {
+  source: Source;
+  postId: number;
+}
+
+export interface DeleteOutcome {
+  removed: PostRef[];
+  failed: { postId: number; message: string }[];
 }
 
 export interface LibraryQuery {
@@ -25,3 +37,7 @@ export interface LibraryPage {
 }
 
 export const libraryList = (query: LibraryQuery) => invoke<LibraryPage>("library_list", { query });
+
+/** 从图库删除；keepFiles 为 false 时图片移到废纸篓（回收站）。 */
+export const libraryDelete = (posts: PostRef[], keepFiles: boolean) =>
+  invoke<DeleteOutcome>("library_delete", { posts, keepFiles });

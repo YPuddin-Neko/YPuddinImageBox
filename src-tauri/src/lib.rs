@@ -188,6 +188,7 @@ pub fn run() {
             commands::job_notes,
             commands::clear_finished_jobs,
             commands::library_list,
+            commands::library_delete,
             commands::accounts_info,
             commands::account_save,
             commands::account_remove,

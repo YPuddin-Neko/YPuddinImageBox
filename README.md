@@ -42,4 +42,4 @@ pnpm tauri icon design/icon/app-icon-macos.png -o /tmp/ibx-icons-mac
 - 账号在「设置 → 账号」里填写。保存前先访问一次站点验证；API Key 存在系统钥匙串（macOS 钥匙串 / Windows 凭据管理器），`settings.json` 里只记用户名。Danbooru 不填也能用，Gelbooru 必须填写。
 - 代理在「设置 → 网络」里选：跟随系统、不使用代理或手动填写（http / https / socks5），保存后立即生效。
 - 开发版每次重新编译后，macOS 可能询问是否允许读取钥匙串里的 API Key，选「始终允许」即可；签名后的正式版不会反复询问。
-- `cd src-tauri && cargo test secrets -- --ignored` 会真实读写一次钥匙串，平时的 `cargo test` 不碰钥匙串。
+- `cd src-tauri && cargo test secrets -- --ignored` 会真实读写一次钥匙串，`cargo test trash -- --ignored` 会往废纸篓里放一个临时文件再清掉；平时的 `cargo test` 两样都不碰。

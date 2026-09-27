@@ -9,17 +9,20 @@ interface DialogProps {
   onClose: () => void;
   children: ReactNode;
   actions: ReactNode;
+  /** 打开时焦点落在哪个按钮。删除这类操作用 "last"（取消），免得一按回车就执行。 */
+  initialFocus?: "first" | "last";
 }
 
-/** 应用内的确认对话框：遮罩淡入、面板轻微放大；Esc 或点遮罩关闭，打开时焦点落在第一个按钮。 */
-export function Dialog({ open, title, onClose, children, actions }: DialogProps) {
+/** 应用内的确认对话框：遮罩淡入、面板轻微放大；Esc 或点遮罩关闭。 */
+export function Dialog({ open, title, onClose, children, actions, initialFocus = "first" }: DialogProps) {
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
-    panel.current?.querySelector<HTMLElement>(".dialog-actions button")?.focus();
+    const buttons = panel.current?.querySelectorAll<HTMLElement>(".dialog-actions button");
+    buttons?.[initialFocus === "last" ? buttons.length - 1 : 0]?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
@@ -28,7 +31,7 @@ export function Dialog({ open, title, onClose, children, actions }: DialogProps)
       window.removeEventListener("keydown", onKey);
       previous?.focus();
     };
-  }, [open, onClose]);
+  }, [open, onClose, initialFocus]);
 
   return (
     <AnimatePresence>

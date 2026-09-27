@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
-import { AnimatePresence, motion } from "motion/react";
 
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PostGrid } from "../../components/PostGrid";
+import { SelectionDock } from "../../components/SelectionDock";
 import { Toast } from "../../components/Toast";
+import { usePicker } from "../../components/usePicker";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
+import type { PostRef } from "../../lib/library";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
 import {
@@ -21,7 +23,6 @@ import {
   type Rating,
   type Source,
 } from "../../lib/ipc";
-import { PANEL_ENTER } from "../../lib/motion";
 import type { Navigate } from "../../lib/nav";
 import { useDownloads } from "../downloads/DownloadsProvider";
 import { Inspector } from "./Inspector";
@@ -79,14 +80,15 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [owned, setOwned] = useState<Set<string>>(() => new Set());
   /** 这次打开软件后加入过下载队列、还没下载完的帖子。 */
   const [queued, setQueued] = useState<Set<string>>(() => new Set());
-  const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [bulk, setBulk] = useState<Bulk | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState(false);
   const committed = useRef<Criteria>(DEFAULT_CRITERIA);
   const requestId = useRef(0);
-  const lastPicked = useRef<string | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
+
+  const posts = results?.posts ?? [];
+  const { picked, pickedPosts, toggle: togglePick, clear: clearPicks, pickAll } = usePicker(posts);
 
   const run = useCallback(async (criteria: Criteria, page: number) => {
     const id = ++requestId.current;
@@ -108,19 +110,26 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
       });
       if (page === 1) {
         setSelected(next.posts[0] ? postKey(next.posts[0]) : null);
-        setPicked(new Set());
-        lastPicked.current = null;
+        clearPicks();
       }
     } catch (err) {
       if (id === requestId.current) setError({ message: errorMessage(err), code: errorCode(err), page });
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, []);
+  }, [clearPicks]);
 
   useEffect(() => {
     void run(DEFAULT_CRITERIA, 1);
   }, [run]);
+
+  useTauriEvent<PostRef[]>(EVENTS.libraryRemoved, (removed) =>
+    setOwned((prev) => {
+      const next = new Set(prev);
+      removed.forEach((post) => next.delete(postKey({ source: post.source, id: post.postId })));
+      return next;
+    }),
+  );
 
   useTauriEvent<SavedPayload>(EVENTS.librarySaved, (saved) => {
     const key = postKey({ source: saved.source, id: saved.postId });
@@ -173,39 +182,13 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     void run({ source: next, tags, ratings }, 1);
   };
 
-  const posts = results?.posts ?? [];
   const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
   const firstLoad = loading && !results;
-
-  // 勾选：单击勾选框切换；按住 Shift 时把上次勾选的到这一张之间全部选上。
-  const togglePick = (post: Post, event: MouseEvent) => {
-    const key = postKey(post);
-    const anchor = lastPicked.current;
-    setPicked((prev) => {
-      const next = new Set(prev);
-      const keys = posts.map(postKey);
-      const [from, to] = [anchor ? keys.indexOf(anchor) : -1, keys.indexOf(key)];
-      if (event.shiftKey && from >= 0 && to >= 0) {
-        keys.slice(Math.min(from, to), Math.max(from, to) + 1).forEach((k) => next.add(k));
-      } else if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-    lastPicked.current = key;
-  };
 
   // 点卡片看详情；按住 ⌘ / Ctrl / Shift 点卡片等同于点勾选框。
   const selectCard = (post: Post, event: MouseEvent) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey) togglePick(post, event);
     else setSelected(postKey(post));
-  };
-
-  const clearPicks = () => {
-    setPicked(new Set());
-    lastPicked.current = null;
   };
 
   const enqueue = async (list: Post[], message: string) => {
@@ -228,8 +211,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   };
 
   const downloadPicked = async () => {
-    const list = posts.filter((post) => picked.has(postKey(post)));
-    if (await enqueue(list, `已加入下载队列：${list.length} 张`)) clearPicks();
+    if (await enqueue(pickedPosts, `已加入下载队列：${pickedPosts.length} 张`)) clearPicks();
   };
 
   const openBulk = () => {
@@ -378,36 +360,12 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
           )}
         </div>
 
-        <AnimatePresence>
-          {picked.size > 0 && (
-            <motion.div
-              className="dock"
-              role="toolbar"
-              aria-label="已选的图片"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 12 }}
-              transition={PANEL_ENTER}
-            >
-              <span className="dock-count">已选 {formatCount(picked.size)} 张</span>
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={() => setPicked(new Set(posts.map(postKey)))}
-                disabled={picked.size === posts.length}
-              >
-                全选已加载的 {formatCount(posts.length)} 张
-              </button>
-              <button type="button" className="btn ghost" onClick={clearPicks}>
-                取消选择
-              </button>
-              <button type="button" className="btn primary" onClick={() => void downloadPicked()} disabled={busy}>
-                <Icon name="download" size={15} />
-                下载
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <SelectionDock count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
+          <button type="button" className="btn primary" onClick={() => void downloadPicked()} disabled={busy}>
+            <Icon name="download" size={15} />
+            下载
+          </button>
+        </SelectionDock>
 
         <Toast
           message={toast?.message ?? null}

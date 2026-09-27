@@ -19,13 +19,24 @@ interface PostGridProps<T extends Post> {
   pageSize: number;
   /** 已在图库中的帖子，卡片右上角标「已下载」。 */
   owned?: ReadonlySet<string>;
+  /** 图库里文件已经不在的帖子，右上角标「文件缺失」。 */
+  missing?: ReadonlySet<string>;
   /** 多选时已勾选的帖子；不传 `onPick` 就不显示勾选框。 */
   picked?: ReadonlySet<string>;
   onPick?: (post: T, event: MouseEvent) => void;
 }
 
 /** 瀑布流卡片：点卡片看详情，左上角勾选框多选，右上角角标表示已下载。 */
-export function PostGrid<T extends Post>({ posts, selected, onSelect, pageSize, owned, picked, onPick }: PostGridProps<T>) {
+export function PostGrid<T extends Post>({
+  posts,
+  selected,
+  onSelect,
+  pageSize,
+  owned,
+  missing,
+  picked,
+  onPick,
+}: PostGridProps<T>) {
   const picking = (picked?.size ?? 0) > 0;
   return (
     <div className="grid" data-picking={picking || undefined}>
@@ -65,11 +76,15 @@ export function PostGrid<T extends Post>({ posts, selected, onSelect, pageSize, 
                 <Icon name="check" size={13} />
               </button>
             )}
-            {owned?.has(key) && (
-              <span className="card-owned">
-                <Icon name="check" size={11} />
-                已下载
-              </span>
+            {missing?.has(key) ? (
+              <span className="card-owned is-missing">文件缺失</span>
+            ) : (
+              owned?.has(key) && (
+                <span className="card-owned">
+                  <Icon name="check" size={11} />
+                  已下载
+                </span>
+              )
             )}
           </motion.div>
         );

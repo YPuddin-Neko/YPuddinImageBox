@@ -479,6 +479,22 @@ fn remove_contents(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// 把文件移到系统的废纸篓（Windows 上是回收站），用户还能找回。文件已经不在时算成功。
+/// macOS 上用 NSFileManager，不需要「控制访达」的权限，也不会弹授权窗口。
+pub fn move_to_trash(path: &Path) -> Result<(), String> {
+    if fs::symlink_metadata(path).is_err() {
+        return Ok(());
+    }
+    #[allow(unused_mut)]
+    let mut trash = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        trash.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    trash.delete(path).map_err(|e| e.to_string())
+}
+
 /// 目录占用的字节数；读不到的文件跳过。
 pub fn dir_size(path: &Path) -> u64 {
     let Ok(entries) = fs::read_dir(path) else { return 0 };
@@ -617,5 +633,28 @@ mod tests {
         let default = f.storage.default_path(StorageKind::Cache);
         f.storage.change(StorageKind::Cache, Some(default), ChangeMode::Leave).unwrap();
         assert!(f.storage.is_default(StorageKind::Cache));
+    }
+}
+
+#[cfg(test)]
+mod trash_tests {
+    use super::*;
+
+    /// 真的把一个临时文件移进废纸篓再清掉，平时跳过：`cargo test trash -- --ignored`。
+    #[test]
+    #[ignore = "会往系统废纸篓里放一个临时文件，需要手动运行"]
+    fn moves_file_to_system_trash() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = format!("imagebox-trash-test-{}.txt", std::process::id());
+        let file = dir.path().join(&name);
+        fs::write(&file, b"test").unwrap();
+        move_to_trash(&file).unwrap();
+        assert!(!file.exists());
+        // 已经不在的文件算成功。
+        move_to_trash(&file).unwrap();
+        #[cfg(target_os = "macos")]
+        if let Some(home) = std::env::var_os("HOME") {
+            let _ = fs::remove_file(PathBuf::from(home).join(".Trash").join(&name));
+        }
     }
 }

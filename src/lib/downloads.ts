@@ -57,6 +57,8 @@ export const EVENTS = {
   jobUpdated: "job-updated",
   jobRemoved: "job-removed",
   librarySaved: "library-changed",
+  /** 图库里删掉了一些图，payload 是 PostRef[]。 */
+  libraryRemoved: "library-removed",
 } as const;
 
 export interface SavedPayload {

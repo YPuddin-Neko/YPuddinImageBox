@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
 use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery};
 use crate::settings::{ProxySettings, SavedAccount};
 use crate::sources::{self, danbooru, gelbooru, Page, Post, SearchPage, SearchParams, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
-use crate::{net, secrets, AppState};
+use crate::{net, secrets, thumbs, AppState};
 
 /// 瀑布流每页条数。下载任务另按站点上限（200 / 100）分页。
 const PAGE_SIZE: u32 = 40;
@@ -90,7 +90,72 @@ pub async fn clear_finished_jobs(state: State<'_, AppState>) -> Result<(), AppEr
 
 #[tauri::command]
 pub async fn library_list(state: State<'_, AppState>, query: LibraryQuery) -> Result<LibraryPage, AppError> {
-    Ok(state.library.list(&query).await?)
+    let mut page = state.library.list(&query).await?;
+    for post in &mut page.posts {
+        post.missing = !tokio::fs::try_exists(&post.path).await.unwrap_or(false);
+    }
+    Ok(page)
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostRef {
+    source: Source,
+    post_id: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteFailure {
+    post_id: u64,
+    message: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteOutcome {
+    removed: Vec<PostRef>,
+    failed: Vec<DeleteFailure>,
+}
+
+/// 从图库删除。`keep_files` 为 false 时先把图片移到废纸篓（回收站），移不走的保留记录并报告原因；
+/// 文件本来就不在的直接删记录。缩略图随记录一起删掉。
+#[tauri::command]
+pub async fn library_delete(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    posts: Vec<PostRef>,
+    keep_files: bool,
+) -> Result<DeleteOutcome, AppError> {
+    // 和移动图片位置互斥，免得删到一半文件被搬走。
+    let _gate = state.images_gate.read().await;
+    let mut targets = Vec::with_capacity(posts.len());
+    for post in posts {
+        if let Some(path) = state.library.local_path(post.source, post.post_id).await? {
+            targets.push((post, path));
+        }
+    }
+    let cache = state.storage().path(StorageKind::Cache);
+    let (removed, failed) = blocking(move || {
+        let mut removed = Vec::new();
+        let mut failed = Vec::new();
+        for (post, path) in targets {
+            let result = if keep_files { Ok(()) } else { storage::move_to_trash(&path) };
+            match result {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(thumbs::path(&cache, post.source, post.post_id));
+                    removed.push(post);
+                }
+                Err(message) => failed.push(DeleteFailure { post_id: post.post_id, message }),
+            }
+        }
+        Ok((removed, failed))
+    })
+    .await?;
+    let keys: Vec<(Source, u64)> = removed.iter().map(|post| (post.source, post.post_id)).collect();
+    state.library.remove_posts(&keys).await?;
+    let _ = app.emit("library-removed", &removed);
+    Ok(DeleteOutcome { removed, failed })
 }
 
 fn join_error(err: tauri::Error) -> AppError {
