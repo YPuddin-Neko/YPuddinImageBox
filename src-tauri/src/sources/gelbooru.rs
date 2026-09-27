@@ -21,7 +21,15 @@ pub struct Credentials {
 
 #[derive(Deserialize)]
 struct Envelope {
+    #[serde(rename = "@attributes")]
+    attributes: Option<Attributes>,
     post: Option<OneOrMany>,
+}
+
+#[derive(Deserialize)]
+struct Attributes {
+    #[serde(default, deserialize_with = "lenient_u64")]
+    count: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +82,16 @@ pub async fn search(
     limit: u32,
     credentials: &Credentials,
 ) -> Result<(Vec<Post>, usize), AppError> {
+    parse(&index(net, query, page.saturating_sub(1), limit.min(100), credentials).await?)
+}
+
+/// 结果总数取自列表接口的 `@attributes.count`，只取 1 条。
+pub async fn count(net: &Net, query: &str, credentials: &Credentials) -> Result<Option<u64>, AppError> {
+    let body = index(net, query, 0, 1, credentials).await?;
+    Ok(envelope(&body)?.attributes.and_then(|a| a.count))
+}
+
+async fn index(net: &Net, query: &str, pid: u32, limit: u32, credentials: &Credentials) -> Result<Vec<u8>, AppError> {
     let request = net
         .client
         .get(format!("{BASE}/index.php"))
@@ -83,8 +101,8 @@ pub async fn search(
             ("q", "index".to_string()),
             ("json", "1".to_string()),
             ("tags", query.to_string()),
-            ("pid", page.saturating_sub(1).to_string()),
-            ("limit", limit.min(100).to_string()),
+            ("pid", pid.to_string()),
+            ("limit", limit.to_string()),
             ("user_id", credentials.user_id.clone()),
             ("api_key", credentials.api_key.clone()),
         ])
@@ -97,13 +115,15 @@ pub async fn search(
     if !status.is_success() {
         return Err(AppError::Http { site: SITE, status: status.as_u16() });
     }
-    parse(&response.bytes().await?)
+    Ok(response.bytes().await?.to_vec())
+}
+
+fn envelope(body: &[u8]) -> Result<Envelope, AppError> {
+    serde_json::from_slice(body).map_err(|e| AppError::Parse { site: SITE, detail: e.to_string() })
 }
 
 pub fn parse(body: &[u8]) -> Result<(Vec<Post>, usize), AppError> {
-    let envelope: Envelope =
-        serde_json::from_slice(body).map_err(|e| AppError::Parse { site: SITE, detail: e.to_string() })?;
-    let raw = match envelope.post {
+    let raw = match envelope(body)?.post {
         Some(OneOrMany::Many(posts)) => posts,
         Some(OneOrMany::One(post)) => vec![*post],
         None => Vec::new(),
@@ -179,5 +199,12 @@ mod tests {
         let (posts, count) = parse(br#"{"@attributes":{"limit":100,"offset":0,"count":0}}"#).unwrap();
         assert!(posts.is_empty());
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn reads_total_count_from_attributes() {
+        assert_eq!(envelope(MANY).unwrap().attributes.and_then(|a| a.count), Some(5213));
+        let quoted = envelope(br#"{"@attributes":{"count":"42"}}"#).unwrap();
+        assert_eq!(quoted.attributes.and_then(|a| a.count), Some(42));
     }
 }

@@ -23,13 +23,44 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.13", features = ["json", "query", "gzip", "socks"] }
-tokio = { version = "1", features = ["sync", "time", "fs", "macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["sync", "time", "fs", "io-util", "macros", "rt-multi-thread"] }
 thiserror = "2"
 percent-encoding = "2"
 url = "2"
 md-5 = "0.11.0"
 tauri-plugin-dialog = "2"
+# 只开内置 SQLite，不开加载扩展等用不到的能力。
+sqlx = { version = "0.9", default-features = false, features = ["sqlite-bundled", "runtime-tokio", "macros", "migrate"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
+
+# 开发版里也要能较快地解码大图、生成缩略图和计算 md5，这几个依赖单独开优化。
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.image-webp]
+opt-level = 3
+
+[profile.dev.package.gif]
+opt-level = 3
+
+[profile.dev.package.weezl]
+opt-level = 3
+
+[profile.dev.package.md-5]
+opt-level = 3
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

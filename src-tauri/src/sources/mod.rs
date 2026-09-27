@@ -4,6 +4,10 @@ pub mod danbooru;
 pub mod gelbooru;
 
 use serde::{Deserialize, Serialize};
+use url::Url;
+
+use crate::error::AppError;
+use crate::net::Net;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -13,6 +17,22 @@ pub enum Source {
 }
 
 impl Source {
+    /// 数据库、文件夹名和图片路由里用的小写名称。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Source::Danbooru => "danbooru",
+            Source::Gelbooru => "gelbooru",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Source> {
+        match value {
+            "danbooru" => Some(Source::Danbooru),
+            "gelbooru" => Some(Source::Gelbooru),
+            _ => None,
+        }
+    }
+
     pub fn site_name(self) -> &'static str {
         match self {
             Source::Danbooru => "Danbooru",
@@ -44,6 +64,25 @@ impl Source {
                 .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
         })
     }
+
+    /// 下载任务每页取多少条：取站点允许的最大值，减少翻页请求。
+    pub fn max_page_size(self) -> u32 {
+        match self {
+            Source::Danbooru => 200,
+            Source::Gelbooru => 100,
+        }
+    }
+}
+
+/// 地址属于哪个已接入站点。只认 http(s)、默认端口、不带账号信息，域名按点边界匹配。
+pub fn source_for_url(url: &Url) -> Option<Source> {
+    if !matches!(url.scheme(), "https" | "http") || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    if url.port().is_some() {
+        return None;
+    }
+    Source::for_host(url.host_str()?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,7 +117,8 @@ impl Rating {
         }
     }
 
-    fn gelbooru_name(self) -> &'static str {
+    /// 全称，也是数据库里存的值。
+    pub fn as_str(self) -> &'static str {
         match self {
             Rating::General => "general",
             Rating::Sensitive => "sensitive",
@@ -88,7 +128,7 @@ impl Rating {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostTags {
     pub artist: Vec<String>,
@@ -98,7 +138,30 @@ pub struct PostTags {
     pub meta: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl PostTags {
+    /// 按分类列出，分类名和数据库里的一致。
+    pub fn by_category(&self) -> [(&'static str, &[String]); 5] {
+        [
+            ("artist", &self.artist),
+            ("copyright", &self.copyright),
+            ("character", &self.character),
+            ("general", &self.general),
+            ("meta", &self.meta),
+        ]
+    }
+
+    pub fn push(&mut self, category: &str, name: String) {
+        match category {
+            "artist" => self.artist.push(name),
+            "copyright" => self.copyright.push(name),
+            "character" => self.character.push(name),
+            "meta" => self.meta.push(name),
+            _ => self.general.push(name),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Post {
     pub source: Source,
@@ -146,6 +209,108 @@ pub struct SearchPage {
     pub has_more: bool,
     /// 实际发给站点的查询串，界面上展示给用户核对。
     pub query: String,
+    /// 这一页里已在图库中的帖子 id。
+    pub owned: Vec<u64>,
+}
+
+/// 翻页参数。Danbooru 按默认顺序（新到旧）时用「id 小于某值」翻页：
+/// 翻页期间有新图上传也不会重复或漏掉，也不受 1000 页的上限限制。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Page {
+    Number(u32),
+    Before(u64),
+}
+
+impl Page {
+    pub fn to_param(&self) -> String {
+        match self {
+            Page::Number(n) => n.to_string(),
+            Page::Before(id) => format!("b{id}"),
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Page> {
+        match value.strip_prefix('b') {
+            Some(id) => id.parse().ok().map(Page::Before),
+            None => value.parse().ok().filter(|n| *n >= 1).map(Page::Number),
+        }
+    }
+
+    /// 取完这一页后的下一页。`min_id` 是这一页里最小的帖子 id。
+    pub fn next(&self, source: Source, query: &str, min_id: Option<u64>) -> Page {
+        let by_id = source == Source::Danbooru && !has_custom_order(query);
+        match (self, min_id) {
+            (_, Some(id)) if by_id => Page::Before(id),
+            (Page::Number(n), _) => Page::Number(n + 1),
+            // 按 id 翻页却没拿到帖子：调用方此时已判定翻完，原样返回。
+            (page @ Page::Before(_), _) => page.clone(),
+        }
+    }
+}
+
+/// 查询里指定了排序（order:score、随机等）时不能按 id 翻页。
+fn has_custom_order(query: &str) -> bool {
+    query.split_whitespace().any(|tag| {
+        let tag = tag.to_ascii_lowercase();
+        ["order:", "ordfav:", "ordpool:", "random:"].iter().any(|prefix| tag.starts_with(prefix))
+    })
+}
+
+/// 各站点的账号。Danbooru 可以不填；Gelbooru 的接口必须带账号。
+#[derive(Debug, Clone, Default)]
+pub struct Accounts {
+    pub danbooru: Option<danbooru::Credentials>,
+    pub gelbooru: Option<gelbooru::Credentials>,
+}
+
+impl Accounts {
+    /// 账号设置（存系统钥匙串）完成之前，先从环境变量读取，方便本地验证：
+    /// IMAGEBOX_DANBOORU_USERNAME / IMAGEBOX_DANBOORU_API_KEY，
+    /// IMAGEBOX_GELBOORU_USER_ID / IMAGEBOX_GELBOORU_API_KEY。
+    pub fn from_env() -> Self {
+        let var = |name: &str| std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        Self {
+            danbooru: var("IMAGEBOX_DANBOORU_USERNAME")
+                .zip(var("IMAGEBOX_DANBOORU_API_KEY"))
+                .map(|(username, api_key)| danbooru::Credentials { username, api_key }),
+            gelbooru: var("IMAGEBOX_GELBOORU_USER_ID")
+                .zip(var("IMAGEBOX_GELBOORU_API_KEY"))
+                .map(|(user_id, api_key)| gelbooru::Credentials { user_id, api_key }),
+        }
+    }
+
+    fn gelbooru(&self) -> Result<&gelbooru::Credentials, AppError> {
+        self.gelbooru.as_ref().ok_or(AppError::CredentialsMissing("Gelbooru"))
+    }
+}
+
+/// 取一页帖子，返回（整理后的帖子，站点这一页实际返回的条数）。
+pub async fn fetch(
+    net: &Net,
+    accounts: &Accounts,
+    source: Source,
+    query: &str,
+    page: &Page,
+    limit: u32,
+) -> Result<(Vec<Post>, usize), AppError> {
+    match source {
+        Source::Danbooru => danbooru::search(net, query, page, limit, accounts.danbooru.as_ref()).await,
+        Source::Gelbooru => {
+            let number = match page {
+                Page::Number(n) => *n,
+                Page::Before(_) => 1,
+            };
+            gelbooru::search(net, query, number, limit, accounts.gelbooru()?).await
+        }
+    }
+}
+
+/// 查询条件一共能搜到多少张（站点给的估计值）；站点不给数字时为 `None`。
+pub async fn count(net: &Net, accounts: &Accounts, source: Source, query: &str) -> Result<Option<u64>, AppError> {
+    match source {
+        Source::Danbooru => danbooru::count(net, query, accounts.danbooru.as_ref()).await,
+        Source::Gelbooru => gelbooru::count(net, query, accounts.gelbooru()?).await,
+    }
 }
 
 /// 用户输入的 tag 加上分级条件，翻译成站点的查询语法。
@@ -160,11 +325,11 @@ pub fn build_query(source: Source, tags: &str, ratings: &[Rating]) -> String {
                 parts.push(format!("rating:{}", codes.join(",")));
             }
             Source::Gelbooru if selected.len() == 1 => {
-                parts.push(format!("rating:{}", selected[0].gelbooru_name()));
+                parts.push(format!("rating:{}", selected[0].as_str()));
             }
             Source::Gelbooru => {
                 let alternatives: Vec<String> =
-                    selected.iter().map(|r| format!("rating:{}", r.gelbooru_name())).collect();
+                    selected.iter().map(|r| format!("rating:{}", r.as_str())).collect();
                 parts.push(format!("{{{}}}", alternatives.join(" ~ ")));
             }
         }
@@ -203,6 +368,29 @@ mod tests {
         assert_eq!(build_query(Source::Gelbooru, "scenery", &[Rating::General]), "scenery rating:general");
         assert_eq!(build_query(Source::Danbooru, "scenery", &Rating::ALL), "scenery");
         assert_eq!(build_query(Source::Danbooru, "", &[]), "");
+    }
+
+    #[test]
+    fn page_cursor_round_trips_and_advances() {
+        assert_eq!(Page::parse("3"), Some(Page::Number(3)));
+        assert_eq!(Page::parse("b12345"), Some(Page::Before(12345)));
+        assert_eq!(Page::parse("0"), None);
+        assert_eq!(Page::parse("bx"), None);
+        assert_eq!(Page::Before(9).to_param(), "b9");
+
+        let first = Page::Number(1);
+        assert_eq!(first.next(Source::Danbooru, "scenery rating:g", Some(500)), Page::Before(500));
+        assert_eq!(first.next(Source::Danbooru, "scenery order:score", Some(500)), Page::Number(2));
+        assert_eq!(first.next(Source::Gelbooru, "scenery", Some(500)), Page::Number(2));
+    }
+
+    #[test]
+    fn url_source_requires_known_host() {
+        let url = |s: &str| Url::parse(s).unwrap();
+        assert_eq!(source_for_url(&url("https://cdn.donmai.us/original/a.png")), Some(Source::Danbooru));
+        assert_eq!(source_for_url(&url("https://user:pw@cdn.donmai.us/a.png")), None);
+        assert_eq!(source_for_url(&url("https://cdn.donmai.us:8443/a.png")), None);
+        assert_eq!(source_for_url(&url("file:///etc/passwd")), None);
     }
 
     #[test]

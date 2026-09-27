@@ -4,7 +4,7 @@
 use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::Deserialize;
 
-use super::{non_empty, split_tags, Post, PostTags, Rating, Source};
+use super::{non_empty, split_tags, Page, Post, PostTags, Rating, Source};
 use crate::error::AppError;
 use crate::net::{user_agent, Net};
 
@@ -58,19 +58,47 @@ struct ErrorBody {
     message: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct CountBody {
+    counts: Counts,
+}
+
+#[derive(Deserialize)]
+struct Counts {
+    posts: Option<u64>,
+}
+
 /// 返回（整理后的帖子，站点这一页实际返回的条数）。后者用来判断是否还有下一页。
 pub async fn search(
     net: &Net,
     query: &str,
-    page: u32,
+    page: &Page,
     limit: u32,
     credentials: Option<&Credentials>,
 ) -> Result<(Vec<Post>, usize), AppError> {
-    let mut request = net
+    let request = net
         .client
         .get(format!("{BASE}/posts.json"))
-        .query(&[("tags", query.to_string()), ("page", page.to_string()), ("limit", limit.min(200).to_string())])
-        .header(ACCEPT, "application/json");
+        .query(&[("tags", query.to_string()), ("page", page.to_param()), ("limit", limit.min(200).to_string())]);
+    parse(&get(net, request, credentials).await?)
+}
+
+/// 查询条件的结果总数；查询太复杂时站点不给数字，返回 `None`。
+/// 注意这个接口不检查 tag 数量上限，超限的查询也会返回数字。
+pub async fn count(net: &Net, query: &str, credentials: Option<&Credentials>) -> Result<Option<u64>, AppError> {
+    let request = net.client.get(format!("{BASE}/counts/posts.json")).query(&[("tags", query)]);
+    let body = get(net, request, credentials).await?;
+    let parsed: CountBody =
+        serde_json::from_slice(&body).map_err(|e| AppError::Parse { site: SITE, detail: e.to_string() })?;
+    Ok(parsed.counts.posts)
+}
+
+async fn get(
+    net: &Net,
+    request: reqwest::RequestBuilder,
+    credentials: Option<&Credentials>,
+) -> Result<Vec<u8>, AppError> {
+    let mut request = request.header(ACCEPT, "application/json");
     if let Some(creds) = credentials {
         request = request
             .basic_auth(&creds.username, Some(&creds.api_key))
@@ -82,7 +110,7 @@ pub async fn search(
     if !status.is_success() {
         return Err(upstream_error(status.as_u16(), &body));
     }
-    parse(&body)
+    Ok(body.to_vec())
 }
 
 fn upstream_error(status: u16, body: &[u8]) -> AppError {
@@ -172,6 +200,15 @@ mod tests {
             other => panic!("unexpected: {other:?}"),
         }
         assert!(matches!(upstream_error(500, b"<html>"), AppError::Http { status: 500, .. }));
+    }
+
+    #[test]
+    fn parses_count_body() {
+        let parsed: CountBody = serde_json::from_slice(br#"{"counts":{"posts":66491}}"#).unwrap();
+        assert_eq!(parsed.counts.posts, Some(66491));
+        // 带 filesize 等开销大的条件时站点返回 null。
+        let parsed: CountBody = serde_json::from_slice(br#"{"counts":{"posts":null}}"#).unwrap();
+        assert_eq!(parsed.counts.posts, None);
     }
 
     #[test]

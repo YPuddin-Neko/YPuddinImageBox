@@ -17,6 +17,8 @@ pub enum AppError {
     Parse { site: &'static str, detail: String },
     #[error("{0}")]
     Storage(#[from] crate::storage::StorageError),
+    #[error("图库数据库出错：{0}")]
+    Database(#[from] sqlx::Error),
     #[error("{0}")]
     Internal(String),
 }
@@ -31,6 +33,7 @@ impl AppError {
             AppError::CredentialsMissing(_) => "credentials_missing",
             AppError::Parse { .. } => "parse",
             AppError::Storage(_) => "storage",
+            AppError::Database(_) => "database",
             AppError::Internal(_) => "internal",
         }
     }

@@ -153,6 +153,11 @@ impl ChangePlan {
     pub fn execute(&self) -> Result<(), StorageError> {
         apply_move(self.kind, &self.from, &self.to, self.mode)
     }
+
+    /// 整体移动时返回（旧位置，新位置），用来改写图库里记录的文件路径。
+    pub fn moved(&self) -> Option<(&Path, &Path)> {
+        (self.mode == ChangeMode::Move).then_some((self.from.as_path(), self.to.as_path()))
+    }
 }
 
 impl Storage {

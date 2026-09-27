@@ -2,7 +2,7 @@
 //! 运行：cargo run --example probe
 
 use imagebox_lib::net::Net;
-use imagebox_lib::sources::{build_query, danbooru, Rating, Source};
+use imagebox_lib::sources::{build_query, danbooru, Page, Rating, Source};
 
 #[tokio::main]
 async fn main() {
@@ -16,7 +16,7 @@ async fn main() {
     let mut first_thumb = None;
     for (tags, ratings) in cases {
         let query = build_query(Source::Danbooru, tags, ratings);
-        match danbooru::search(&net, &query, 1, 5, None).await {
+        match danbooru::search(&net, &query, &Page::Number(1), 5, None).await {
             Ok((posts, fetched)) => {
                 let first = posts.first();
                 println!(

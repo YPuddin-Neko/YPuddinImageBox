@@ -1,42 +1,30 @@
 mod commands;
+pub mod downloader;
 pub mod error;
+pub mod library;
 pub mod net;
 mod protocol;
 pub mod sources;
 pub mod storage;
+mod thumbs;
 
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use tauri::Manager;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager};
 
-use sources::{danbooru, gelbooru};
-use storage::{Defaults, Storage};
-
-pub struct Credentials {
-    pub danbooru: Option<danbooru::Credentials>,
-    pub gelbooru: Option<gelbooru::Credentials>,
-}
-
-impl Credentials {
-    /// 账号设置（存系统钥匙串）完成之前，先从环境变量读取，方便本地验证：
-    /// IMAGEBOX_DANBOORU_USERNAME / IMAGEBOX_DANBOORU_API_KEY，
-    /// IMAGEBOX_GELBOORU_USER_ID / IMAGEBOX_GELBOORU_API_KEY。
-    pub fn from_env() -> Self {
-        let var = |name: &str| std::env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-        Self {
-            danbooru: var("IMAGEBOX_DANBOORU_USERNAME")
-                .zip(var("IMAGEBOX_DANBOORU_API_KEY"))
-                .map(|(username, api_key)| danbooru::Credentials { username, api_key }),
-            gelbooru: var("IMAGEBOX_GELBOORU_USER_ID")
-                .zip(var("IMAGEBOX_GELBOORU_API_KEY"))
-                .map(|(user_id, api_key)| gelbooru::Credentials { user_id, api_key }),
-        }
-    }
-}
+use downloader::{Downloader, Event, EventSink};
+use library::Library;
+use sources::{Accounts, Source};
+use storage::{Defaults, Storage, StorageKind};
 
 pub struct AppState {
     pub net: Arc<net::Net>,
-    pub credentials: Credentials,
+    pub accounts: Arc<Accounts>,
+    pub library: Library,
+    pub downloader: Arc<Downloader>,
+    /// 见 [`Downloader`] 里的同名字段：移动图片位置时拿写锁。
+    pub images_gate: Arc<tokio::sync::RwLock<()>>,
     storage: Arc<RwLock<Storage>>,
 }
 
@@ -49,10 +37,28 @@ impl AppState {
     pub fn storage_mut(&self) -> RwLockWriteGuard<'_, Storage> {
         self.storage.write().unwrap_or_else(PoisonError::into_inner)
     }
+}
 
-    pub fn storage_handle(&self) -> Arc<RwLock<Storage>> {
-        Arc::clone(&self.storage)
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedPayload {
+    source: Source,
+    post_id: u64,
+}
+
+/// 下载队列的变化推给界面：job-updated / job-removed / library-changed。
+fn emit_event(app: &AppHandle, event: Event) {
+    let result = match event {
+        Event::Job(job) => app.emit("job-updated", job),
+        Event::JobRemoved(id) => app.emit("job-removed", id),
+        Event::Saved { source, post_id } => app.emit("library-changed", SavedPayload { source, post_id }),
+    };
+    #[cfg(debug_assertions)]
+    if let Err(err) = result {
+        eprintln!("[event] 发送失败：{err}");
     }
+    #[cfg(not(debug_assertions))]
+    let _ = result;
 }
 
 fn load_storage(app: &tauri::App) -> Result<Storage, Box<dyn std::error::Error>> {
@@ -76,12 +82,28 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let storage = load_storage(app)?;
-            app.manage(AppState {
-                net: Arc::new(net::Net::new()?),
-                credentials: Credentials::from_env(),
-                storage: Arc::new(RwLock::new(storage)),
-            });
+            let storage = Arc::new(RwLock::new(load_storage(app)?));
+            let db_dir = storage.read().unwrap_or_else(PoisonError::into_inner).path(StorageKind::Database);
+            let library = tauri::async_runtime::block_on(async {
+                let library = Library::open(&db_dir).await?;
+                library.requeue_interrupted().await?;
+                Ok::<_, sqlx::Error>(library)
+            })?;
+            let net = Arc::new(net::Net::new()?);
+            let accounts = Arc::new(Accounts::from_env());
+            let images_gate = Arc::new(tokio::sync::RwLock::new(()));
+            let handle = app.handle().clone();
+            let events: EventSink = Arc::new(move |event| emit_event(&handle, event));
+            let downloader = Downloader::new(
+                library.clone(),
+                Arc::clone(&net),
+                Arc::clone(&accounts),
+                Arc::clone(&storage),
+                Arc::clone(&images_gate),
+                events,
+            );
+            tauri::async_runtime::spawn(Arc::clone(&downloader).run());
+            app.manage(AppState { net, accounts, library, downloader, images_gate, storage });
             Ok(())
         })
         .register_asynchronous_uri_scheme_protocol("ibx", |ctx, request, responder| {
@@ -92,6 +114,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::search_remote,
+            commands::count_remote,
+            commands::download_posts,
+            commands::download_query,
+            commands::list_jobs,
+            commands::job_action,
+            commands::job_notes,
+            commands::clear_finished_jobs,
+            commands::library_list,
             commands::storage_info,
             commands::storage_usage,
             commands::storage_change,

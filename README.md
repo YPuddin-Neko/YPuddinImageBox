@@ -19,6 +19,7 @@ pnpm tauri dev                            # 启动开发版
 pnpm build                                # 生成主题 CSS、类型检查并构建前端
 cd src-tauri && cargo test                # Rust 单元测试
 cd src-tauri && cargo run --example probe # 用真实网络检查 Danbooru 访问与 tag 额度
+cd src-tauri && cargo run --example download_probe # 用真实网络跑一遍下载队列（存到临时目录）
 ```
 
 ## 主题
