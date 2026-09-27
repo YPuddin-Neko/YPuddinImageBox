@@ -17,6 +17,11 @@ interface DialogProps {
 export function Dialog({ open, title, onClose, children, actions, initialFocus = "first" }: DialogProps) {
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
+  // 调用方一般传内联函数，每次渲染都是新的；放进 ref，免得对话框里一输入、一选择就把焦点抢回按钮上。
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -24,14 +29,14 @@ export function Dialog({ open, title, onClose, children, actions, initialFocus =
     const buttons = panel.current?.querySelectorAll<HTMLElement>(".dialog-actions button");
     buttons?.[initialFocus === "last" ? buttons.length - 1 : 0]?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") closeRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
       previous?.focus();
     };
-  }, [open, onClose, initialFocus]);
+  }, [open, initialFocus]);
 
   return (
     <AnimatePresence>
