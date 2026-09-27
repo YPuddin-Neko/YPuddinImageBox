@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
-use crate::sources::{timestamp, Post, PostTags, Rating, Source};
+use crate::sources::{timestamp, Post, PostTags, Rating, Sort, Source};
 
 const DB_FILE: &str = "library.sqlite3";
 /// 一次列表查询最多返回多少张。
@@ -37,6 +37,27 @@ pub struct LocalPost {
     pub downloaded_at: i64,
     /// 文件已经不在记录的位置（被移动或删除）。列表返回前由调用方检查。
     pub missing: bool,
+}
+
+/// 收藏的搜索条件。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSearch {
+    pub id: i64,
+    pub source: Source,
+    pub tags: String,
+    /// 为空表示全选。
+    pub ratings: Vec<Rating>,
+    pub sort: Sort,
+    pub created_at: i64,
+}
+
+/// 存进数据库前整理条件：tag 去掉多余空格，分级按固定顺序，全选和都不选都记成空。
+fn normalize_search(tags: &str, ratings: &[Rating]) -> (String, String) {
+    let tags = tags.split_whitespace().collect::<Vec<_>>().join(" ");
+    let chosen: Vec<&str> = Rating::ALL.into_iter().filter(|r| ratings.contains(r)).map(Rating::as_str).collect();
+    let ratings = if chosen.len() == Rating::ALL.len() { String::new() } else { chosen.join(",") };
+    (tags, ratings)
 }
 
 /// 图库的排序。
@@ -650,6 +671,50 @@ impl Library {
         rows.iter().map(subscription_from_row).collect()
     }
 
+    // ---------- 收藏的搜索 ----------
+
+    /// 收藏的搜索，后收藏的在前。
+    pub async fn saved_searches(&self) -> Result<Vec<SavedSearch>, sqlx::Error> {
+        let rows: Vec<(i64, String, String, String, String, i64)> =
+            sqlx::query_as("SELECT id, source, tags, ratings, sort, created_at FROM saved_searches ORDER BY id DESC")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, source, tags, ratings, sort, created_at)| {
+                Some(SavedSearch {
+                    id,
+                    source: Source::parse(&source)?,
+                    tags,
+                    ratings: ratings.split(',').filter_map(Rating::parse).collect(),
+                    sort: Sort::parse(&sort).unwrap_or_default(),
+                    created_at,
+                })
+            })
+            .collect())
+    }
+
+    /// 收藏一个搜索条件；同样的条件已经收藏过时什么也不做。
+    pub async fn add_saved_search(&self, source: Source, tags: &str, ratings: &[Rating], sort: Sort) -> Result<(), sqlx::Error> {
+        let (tags, ratings) = normalize_search(tags, ratings);
+        sqlx::query(
+            "INSERT OR IGNORE INTO saved_searches (source, tags, ratings, sort, created_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(source.as_str())
+        .bind(tags)
+        .bind(ratings)
+        .bind(sort.as_str())
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn remove_saved_search(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM saved_searches WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
     /// 到了检查时间的订阅。
     pub async fn due_subscriptions(&self, now: i64) -> Result<Vec<Subscription>, sqlx::Error> {
         let sql = format!(
@@ -1157,6 +1222,27 @@ mod tests {
         lib.backfill_posted_at().await.unwrap();
         let posted: Option<i64> = sqlx::query_scalar("SELECT posted_at FROM posts").fetch_one(&lib.pool).await.unwrap();
         assert_eq!(posted, timestamp::parse("2026-09-27T00:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn saved_searches_dedupe_and_remove() {
+        let lib = Library::in_memory().await;
+        lib.add_saved_search(Source::Danbooru, " sky  cloud ", &[Rating::Sensitive, Rating::General], Sort::Score)
+            .await
+            .unwrap();
+        // 空格、分级顺序不同的同一个条件只存一份；全选和都不选也算同一个。
+        lib.add_saved_search(Source::Danbooru, "sky cloud", &[Rating::General, Rating::Sensitive], Sort::Score)
+            .await
+            .unwrap();
+        lib.add_saved_search(Source::Gelbooru, "", &Rating::ALL, Sort::Newest).await.unwrap();
+        lib.add_saved_search(Source::Gelbooru, "", &[], Sort::Newest).await.unwrap();
+        let saved = lib.saved_searches().await.unwrap();
+        assert_eq!(saved.len(), 2);
+        assert_eq!((saved[1].tags.as_str(), saved[1].sort), ("sky cloud", Sort::Score));
+        assert_eq!(saved[1].ratings, vec![Rating::General, Rating::Sensitive]);
+        assert!(saved[0].ratings.is_empty());
+        lib.remove_saved_search(saved[0].id).await.unwrap();
+        assert_eq!(lib.saved_searches().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

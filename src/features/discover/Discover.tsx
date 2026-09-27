@@ -4,7 +4,7 @@ import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PostGrid } from "../../components/PostGrid";
 import type { View } from "../../components/Rail";
-import { MultiSelect, Select } from "../../components/Select";
+import { MenuButton, MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
 import { Toast } from "../../components/Toast";
 import { usePicker } from "../../components/usePicker";
@@ -18,6 +18,7 @@ import {
   errorMessage,
   postKey,
   RATING_OPTIONS,
+  RATINGS,
   remoteSortLabel,
   remoteSorts,
   searchRemote,
@@ -29,6 +30,15 @@ import {
 } from "../../lib/ipc";
 import type { PostRef } from "../../lib/library";
 import type { Navigate } from "../../lib/nav";
+import {
+  sameSearch,
+  savedHint,
+  savedSearchAdd,
+  savedSearchesList,
+  savedSearchRemove,
+  savedTitle,
+  type SavedSearch,
+} from "../../lib/saved";
 import { intervalOptions, subscriptionCreate, subscriptionPreview, subscriptionTitle } from "../../lib/subscriptions";
 import { useDownloads } from "../downloads/context";
 import { Inspector } from "./Inspector";
@@ -110,6 +120,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [subscribing, setSubscribing] = useState<SubscribeDraft | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<SavedSearch[]>([]);
   const committed = useRef<Criteria>(DEFAULT_CRITERIA);
   const requestId = useRef(0);
   const ratingTimer = useRef(0);
@@ -156,6 +167,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     void run(DEFAULT_CRITERIA, null);
     return () => window.clearTimeout(ratingTimer.current);
   }, [run]);
+
+  useEffect(() => {
+    savedSearchesList().then(setSaved, () => {});
+  }, []);
 
   useTauriEvent<PostRef[]>(EVENTS.libraryRemoved, (removed) =>
     setOwned((prev) => {
@@ -226,6 +241,37 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
   const firstLoad = loading && !results;
+  /** 当前结果对应的收藏（按已经搜过的条件算，不看输入框里还没提交的字）。 */
+  const currentSaved = saved.find((item) => sameSearch(item, committed.current)) ?? null;
+
+  const toggleSaved = async () => {
+    try {
+      if (currentSaved) {
+        setSaved(await savedSearchRemove(currentSaved.id));
+        setToast({ message: `已取消收藏「${savedTitle(currentSaved)}」` });
+      } else {
+        const criteria = committed.current;
+        setSaved(await savedSearchAdd(criteria));
+        setToast({ message: `已收藏「${criteria.tags.trim() || "全部帖子"}」` });
+      }
+    } catch (err) {
+      setToast({ message: errorMessage(err) });
+    }
+  };
+
+  const applySaved = (item: SavedSearch) => {
+    const criteria: Criteria = {
+      source: item.source,
+      tags: item.tags,
+      ratings: item.ratings.length ? item.ratings : RATINGS,
+      sort: item.sort,
+    };
+    setSource(criteria.source);
+    setTags(criteria.tags);
+    setRatings(criteria.ratings);
+    setSort(criteria.sort);
+    void run(criteria, null);
+  };
 
   // 点卡片看详情；按住 ⌘ / Ctrl / Shift 点卡片等同于点勾选框。
   const selectCard = (post: Post, event: MouseEvent) => {
@@ -400,6 +446,36 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               spellCheck={false}
               autoComplete="off"
             />
+            <MenuButton
+              className="search-bookmark"
+              name="收藏的搜索"
+              title={currentSaved ? "已收藏这个搜索" : "收藏这个搜索"}
+              state={currentSaved ? "saved" : undefined}
+              disabled={!results}
+              items={[
+                {
+                  key: "toggle",
+                  label: currentSaved ? "取消收藏这个搜索" : "收藏这个搜索",
+                  selected: false,
+                  divider: saved.length > 0,
+                },
+                ...saved.map((item) => ({
+                  key: String(item.id),
+                  label: savedTitle(item),
+                  hint: savedHint(item),
+                  selected: item.id === currentSaved?.id,
+                })),
+              ]}
+              onPick={(key) => {
+                if (key === "toggle") void toggleSaved();
+                else {
+                  const item = saved.find((entry) => String(entry.id) === key);
+                  if (item) applySaved(item);
+                }
+              }}
+            >
+              <Icon name="bookmark" size={17} />
+            </MenuButton>
             <button type="submit" className="search-go" aria-label="搜索">
               <Icon name="search" size={17} />
             </button>

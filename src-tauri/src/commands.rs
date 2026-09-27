@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
-use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery, NewSubscription, Subscription};
+use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery, NewSubscription, SavedSearch, Subscription};
 use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
 use crate::sources::{self, danbooru, gelbooru, Page, Post, SearchPage, SearchParams, Source};
@@ -236,6 +236,27 @@ const MIN_INTERVAL_MINUTES: u32 = 30;
 #[tauri::command]
 pub async fn subscriptions_list(state: State<'_, AppState>) -> Result<Vec<Subscription>, AppError> {
     Ok(state.library.subscriptions().await?)
+}
+
+// ---------- 收藏的搜索 ----------
+
+#[tauri::command]
+pub async fn saved_searches_list(state: State<'_, AppState>) -> Result<Vec<SavedSearch>, AppError> {
+    Ok(state.library.saved_searches().await?)
+}
+
+/// 收藏当前的搜索条件，返回收藏后的列表。
+#[tauri::command]
+pub async fn saved_search_add(state: State<'_, AppState>, params: SearchParams) -> Result<Vec<SavedSearch>, AppError> {
+    params.sort.term(params.source)?;
+    state.library.add_saved_search(params.source, &params.tags, &params.ratings, params.sort).await?;
+    Ok(state.library.saved_searches().await?)
+}
+
+#[tauri::command]
+pub async fn saved_search_remove(state: State<'_, AppState>, id: i64) -> Result<Vec<SavedSearch>, AppError> {
+    state.library.remove_saved_search(id).await?;
+    Ok(state.library.saved_searches().await?)
 }
 
 /// 订阅对话框里显示的条件：订阅按上传先后找新图、不带排序，超出 tag 上限时的拆分可能和当前搜索不一样。

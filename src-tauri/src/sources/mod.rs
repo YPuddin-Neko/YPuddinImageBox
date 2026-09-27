@@ -149,6 +149,26 @@ pub enum Sort {
 }
 
 impl Sort {
+    const ALL: [Sort; 7] =
+        [Sort::Newest, Sort::Oldest, Sort::Score, Sort::Favorites, Sort::Popular, Sort::Resolution, Sort::Filesize];
+
+    /// 数据库里存的名称，和界面上用的一致。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Sort::Newest => "newest",
+            Sort::Oldest => "oldest",
+            Sort::Score => "score",
+            Sort::Favorites => "favorites",
+            Sort::Popular => "popular",
+            Sort::Resolution => "resolution",
+            Sort::Filesize => "filesize",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Sort> {
+        Sort::ALL.into_iter().find(|sort| sort.as_str() == value)
+    }
+
     /// 加进查询的排序条件，默认顺序为 `None`。只有 Danbooru 能按收藏、热度、分辨率和文件大小排序。
     pub fn term(self, source: Source) -> Result<Option<&'static str>, AppError> {
         let term = match (source, self) {

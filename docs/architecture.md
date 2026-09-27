@@ -105,9 +105,7 @@
 - **subscriptions**（`0002_subscriptions.sql`）：来源、tag、分级、查询串、检查间隔、是否启用、已处理到的最大 id、上次检查时间和结果；jobs 表加 `subscription_id` 关联检查任务
 - **posts.posted_at**（`0004_posted_at.sql`）：帖子发布时间（Unix 毫秒）。两个站点 `created_at` 的格式不同（Danbooru 是 ISO 8601，Gelbooru 是 `Sat Sep 27 01:02:03 -0500 2026`），由程序解析后写入，旧记录在打开图库时补上；图库按上传先后排序用
 
-以后再加：
-
-- **saved_queries**：保存的查询
+- **saved_searches**（`0006_saved_searches.sql`）：收藏的搜索条件（来源、tag、分级、排序），同样的条件只存一份；只用来重新搜，不自动下载
 
 下载规则：
 

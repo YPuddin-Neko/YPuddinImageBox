@@ -226,6 +226,35 @@ button:disabled {
   color: var(--fg-3);
 }
 
+/* 搜索框里的收藏按钮：和搜索按钮同样大小，已收藏时图标填满并用强调色。 */
+.search-bookmark {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-3);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.search-bookmark:hover:not(:disabled),
+.search-bookmark[data-open] {
+  background: var(--chip);
+  color: var(--fg-1);
+}
+
+.search-bookmark[data-state="saved"] {
+  color: var(--accent);
+}
+
+.search-bookmark[data-state="saved"] .icon {
+  fill: currentColor;
+}
+
 .search-go {
   width: 34px;
   height: 34px;

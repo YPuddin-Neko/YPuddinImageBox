@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { Icon } from "./Icon";
 
@@ -20,7 +20,7 @@ interface CommonProps {
   disabled?: boolean;
 }
 
-interface MenuItem {
+export interface MenuItem {
   key: string;
   label: string;
   hint?: string;
@@ -37,6 +37,13 @@ interface DropdownProps extends CommonProps {
   items: MenuItem[];
   multiple?: boolean;
   onPick: (key: string) => void;
+  /** 换掉按钮里的文字，例如只放一个图标。 */
+  trigger?: ReactNode;
+  title?: string;
+  /** 菜单和按钮左边对齐（默认）还是右边对齐；靠右的按钮用右边对齐。 */
+  align?: "start" | "end";
+  /** 按钮上额外的状态标记，样式里用。 */
+  state?: string;
 }
 
 const GAP = 6;
@@ -56,7 +63,22 @@ function focusOption(menu: HTMLElement, option: HTMLElement | undefined) {
  * 应用里统一的下拉框。菜单放进浏览器顶层（popover），不会被对话框或滚动区域裁掉，
  * 贴着按钮下方打开，下方放不下时翻到上方。键盘：方向键移动，回车或空格选择，Esc 关闭。
  */
-function Dropdown({ className, id, name, label, disabled, text, sizers, items, multiple = false, onPick }: DropdownProps) {
+function Dropdown({
+  className,
+  id,
+  name,
+  label,
+  disabled,
+  text,
+  sizers,
+  items,
+  multiple = false,
+  onPick,
+  trigger: content,
+  title,
+  align = "start",
+  state,
+}: DropdownProps) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -72,11 +94,12 @@ function Dropdown({ className, id, name, label, disabled, text, sizers, items, m
     const { offsetWidth: width, offsetHeight: height } = el;
     const flip = rect.bottom + GAP + height > window.innerHeight - MARGIN && rect.top - GAP - height >= MARGIN;
     el.style.top = `${flip ? rect.top - GAP - height : rect.bottom + GAP}px`;
-    el.style.left = `${Math.max(MARGIN, Math.min(rect.left, window.innerWidth - width - MARGIN))}px`;
+    const left = align === "end" ? rect.right - width : rect.left;
+    el.style.left = `${Math.max(MARGIN, Math.min(left, window.innerWidth - width - MARGIN))}px`;
     el.dataset.placement = flip ? "above" : "below";
     const options = [...el.querySelectorAll<HTMLElement>('[role="option"]')];
     focusOption(el, options.find((option) => option.getAttribute("aria-selected") === "true") ?? options[0]);
-  }, [open]);
+  }, [open, align]);
 
   // 点到别处、滚动页面、窗口变化或失去焦点时收起。
   useEffect(() => {
@@ -167,7 +190,9 @@ function Dropdown({ className, id, name, label, disabled, text, sizers, items, m
         id={id}
         type="button"
         className={className}
-        aria-label={`${name}：${text}`}
+        aria-label={content ? name : `${name}：${text}`}
+        title={title}
+        data-state={state}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
@@ -176,15 +201,19 @@ function Dropdown({ className, id, name, label, disabled, text, sizers, items, m
         onClick={() => (open ? close() : setOpen(true))}
         onKeyDown={onTriggerKey}
       >
-        {label && <span className="dropdown-label">{label}</span>}
-        <span className="dropdown-value">
-          {sizers?.map((sizer) => (
-            <span key={sizer} className="dropdown-sizer" aria-hidden="true">
-              {sizer}
+        {content ?? (
+          <>
+            {label && <span className="dropdown-label">{label}</span>}
+            <span className="dropdown-value">
+              {sizers?.map((sizer) => (
+                <span key={sizer} className="dropdown-sizer" aria-hidden="true">
+                  {sizer}
+                </span>
+              ))}
+              <span>{text}</span>
             </span>
-          ))}
-          <span>{text}</span>
-        </span>
+          </>
+        )}
       </button>
       {open && (
         <div
@@ -223,6 +252,20 @@ function Dropdown({ className, id, name, label, disabled, text, sizers, items, m
         </div>
       )}
     </>
+  );
+}
+
+/** 图标按钮加菜单：点了菜单项就执行并收起，`selected` 的项前面打勾。 */
+export function MenuButton({
+  items,
+  onPick,
+  children,
+  title,
+  state,
+  ...common
+}: CommonProps & { items: MenuItem[]; onPick: (key: string) => void; children: ReactNode; title?: string; state?: string }) {
+  return (
+    <Dropdown {...common} text="" items={items} onPick={onPick} trigger={children} title={title} align="end" state={state} />
   );
 }
 
