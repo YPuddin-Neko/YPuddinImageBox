@@ -184,57 +184,54 @@ export function StorageSettings() {
       <div className="storage-list">
         {info?.locations.map((location) => (
           <section key={location.kind} className="storage-row" aria-labelledby={`storage-${location.kind}`}>
-            <div className="storage-main">
-              <div className="storage-title">
-                <h2 id={`storage-${location.kind}`}>{location.label}</h2>
-                {location.isDefault && <span className="badge">默认</span>}
-                <span className="storage-usage">{usageText(usage[location.kind])}</span>
-              </div>
-              <p className="storage-desc">
-                {DESCRIPTION[location.kind]}
-                {location.appliesOnRestart ? "，修改后重启生效" : ""}
-              </p>
-              <code className="storage-path" title={location.path}>
-                {location.path}
-              </code>
-              {location.pending && (
-                <p className="storage-pending">
-                  重启后{location.pending.mode === "move" ? "移到" : "改用"}
-                  <code>{location.pending.to}</code>
-                  <button
-                    type="button"
-                    className="link"
-                    onClick={() => void update(() => storageCancelPending(location.kind))}
-                  >
-                    撤销
-                  </button>
-                </p>
-              )}
-            </div>
-            <div className="storage-actions">
-              <button
-                type="button"
-                className="btn"
-                onClick={() => void pick(location)}
-                disabled={busy !== null}
-              >
-                {busy === location.kind ? "正在处理…" : "更改位置…"}
-              </button>
-              <button type="button" className="btn ghost" onClick={() => void reveal(location)}>
-                <Icon name="folder" size={15} />
-                {revealLabel}
-              </button>
-              {!location.isDefault && (
+            <div className="storage-title">
+              <h2 id={`storage-${location.kind}`}>{location.label}</h2>
+              {/* 「恢复默认」放在标题行，每行右侧的按钮保持一样，路径框才能上下对齐。 */}
+              {location.isDefault ? (
+                <span className="badge">默认</span>
+              ) : (
                 <button
                   type="button"
-                  className="btn ghost"
+                  className="link"
                   onClick={() => request(location, null)}
                   disabled={busy !== null}
                 >
                   恢复默认
                 </button>
               )}
+              <span className="storage-usage">{usageText(usage[location.kind])}</span>
             </div>
+            <p className="storage-desc">
+              {DESCRIPTION[location.kind]}
+              {location.appliesOnRestart ? "，修改后重启生效" : ""}
+            </p>
+            <div className="storage-line">
+              <code className="storage-path" title={location.path}>
+                <span>{location.path}</span>
+              </code>
+              <div className="storage-actions">
+                <button type="button" className="btn" onClick={() => void pick(location)} disabled={busy !== null}>
+                  {busy === location.kind ? "正在处理…" : "更改位置…"}
+                </button>
+                <button type="button" className="btn ghost" onClick={() => void reveal(location)}>
+                  <Icon name="folder" size={15} />
+                  {revealLabel}
+                </button>
+              </div>
+            </div>
+            {location.pending && (
+              <p className="storage-pending">
+                重启后{location.pending.mode === "move" ? "移到" : "改用"}
+                <code>{location.pending.to}</code>
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => void update(() => storageCancelPending(location.kind))}
+                >
+                  撤销
+                </button>
+              </p>
+            )}
           </section>
         ))}
       </div>
