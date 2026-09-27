@@ -1,0 +1,930 @@
+/* 夜幕画廊。颜色全部来自主题变量（themes.css），这里不写死颜色；
+   叠在图片上的角标固定用深色半透明，不随主题变。 */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg-1);
+  font: 13px/1.45 "Manrope Variable", "Manrope", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.icon {
+  display: block;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mono,
+.query {
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* ---------- 外框 ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  height: 100%;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 0;
+  border-right: 1px solid var(--line);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* macOS 标题栏为 Overlay，红黄绿按钮压在侧栏顶部。 */
+.is-mac .rail {
+  padding-top: 42px;
+}
+
+.rail-logo {
+  width: 38px;
+  height: 38px;
+  margin-bottom: 10px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.rail-btn {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--fg-3);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.rail-btn:hover {
+  background: var(--chip);
+  color: var(--fg-1);
+}
+
+.rail-btn[aria-current="page"] {
+  background: var(--raised);
+  color: var(--fg-1);
+}
+
+.rail-space {
+  flex: 1;
+  align-self: stretch;
+}
+
+.app-main {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.view {
+  position: absolute;
+  inset: 0;
+}
+
+/* ---------- 发现 ---------- */
+
+.discover {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  height: 100%;
+}
+
+.center {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  padding: 14px 20px 10px;
+}
+
+.search {
+  height: 46px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--line-2);
+  border-radius: 23px;
+  background: var(--raised);
+  transition: box-shadow 0.2s ease;
+}
+
+.search:focus-within {
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.search-source {
+  height: 34px;
+  padding: 0 30px 0 14px;
+  border: 0;
+  border-radius: 17px;
+  appearance: none;
+  background-color: var(--raised-2);
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-3) 50%),
+    linear-gradient(135deg, var(--fg-3) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 52%, calc(100% - 11px) 52%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  font-weight: 700;
+  font-size: 12.5px;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 13.5px;
+}
+
+.search-input::placeholder {
+  color: var(--fg-3);
+}
+
+.search-go {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-fg);
+  transition: transform 0.12s ease, filter 0.15s ease;
+}
+
+.search-go:hover {
+  filter: brightness(1.06);
+}
+
+.search-go:active {
+  transform: scale(0.94);
+}
+
+.filters {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px 12px;
+}
+
+.chips {
+  display: flex;
+  gap: 4px;
+}
+
+.chip {
+  height: 30px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-3);
+  font-size: 12.5px;
+  font-weight: 700;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.chip:hover {
+  color: var(--fg-1);
+}
+
+.chip[aria-pressed="true"] {
+  border-color: var(--fg-1);
+  background: var(--fg-1);
+  color: var(--bg);
+}
+
+.filters-space {
+  flex: 1;
+}
+
+.query {
+  max-width: 44%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  color: var(--fg-3);
+}
+
+.count {
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+}
+
+.scroll,
+.insp,
+.settings {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 20px 28px;
+}
+
+.grid {
+  columns: 210px;
+  column-gap: 12px;
+}
+
+/* 位移由 Motion 负责，这里不给 transform 加 transition，避免两边打架。 */
+.card {
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 10px;
+  background: var(--raised);
+  break-inside: avoid;
+  transition: box-shadow 0.18s ease, filter 0.18s ease;
+}
+
+.card:hover {
+  filter: brightness(1.07);
+}
+
+.card[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+.card .shimmer-img {
+  position: absolute;
+  inset: 0;
+}
+
+.sentinel {
+  height: 1px;
+}
+
+.more {
+  display: flex;
+  margin: 6px auto 0;
+}
+
+.hint {
+  margin: 40px 0;
+  text-align: center;
+  color: var(--fg-3);
+  animation: fade-in 0.2s ease both;
+}
+
+.alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--err);
+  border-radius: 12px;
+  background: var(--raised);
+  animation: fade-in 0.2s ease both;
+}
+
+.alert span {
+  flex: 1;
+}
+
+.btn {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--raised-2);
+  color: var(--fg-1);
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 700;
+  transition: filter 0.15s ease, transform 0.12s ease;
+}
+
+.btn:hover:not(:disabled) {
+  filter: brightness(1.12);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* ---------- 图片加载：扫光占位 ---------- */
+
+.shimmer-img {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--raised);
+}
+
+.shimmer-img::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, var(--shimmer) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: shimmer 1.4s linear infinite;
+  transition: opacity 0.2s ease;
+}
+
+.shimmer-img img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.28s ease;
+}
+
+.shimmer-img[data-fit="contain"] img {
+  object-fit: contain;
+}
+
+.shimmer-img[data-state="loaded"] img {
+  opacity: 1;
+}
+
+.shimmer-img[data-state="loaded"]::before,
+.shimmer-img[data-state="failed"]::before {
+  opacity: 0;
+  animation: none;
+}
+
+/* 加载失败：静态虚线圆，不再扫光。 */
+.shimmer-img[data-state="failed"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 26px;
+  height: 26px;
+  margin: auto;
+  border: 2px dashed var(--line-2);
+  border-radius: 50%;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 125% 0;
+  }
+  to {
+    background-position: -125% 0;
+  }
+}
+
+/* ---------- 详情 ---------- */
+
+.insp {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 18px;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.insp-empty {
+  display: grid;
+  place-items: center;
+  color: var(--fg-3);
+}
+
+.insp-body {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.insp-pv {
+  position: relative;
+  height: 260px;
+  flex: none;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--raised);
+}
+
+.insp-res {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  background: rgba(10, 12, 18, 0.62);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.insp-id {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.insp-id b {
+  font-size: 17px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 11px;
+  background: var(--raised);
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.insp-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 10px;
+  margin: 0;
+}
+
+.insp-meta .wide {
+  grid-column: 1 / -1;
+}
+
+.insp-meta dt {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--fg-3);
+}
+
+.insp-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.insp-meta dd.mono {
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.insp-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.insp-tags h3 {
+  margin: 0 0 5px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--fg-3);
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tags li {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--tag-general);
+  font-size: 11.5px;
+  font-weight: 700;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.tag-artist li {
+  color: var(--tag-artist);
+}
+
+.tag-copyright li {
+  color: var(--tag-copyright);
+}
+
+.tag-character li {
+  color: var(--tag-character);
+}
+
+.tag-meta li {
+  color: var(--tag-meta);
+}
+
+.insp-acts {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+/* ---------- 设置 ---------- */
+
+.settings {
+  height: 100%;
+  overflow-y: auto;
+  padding: 28px 36px 40px;
+}
+
+.is-mac .settings {
+  padding-top: 40px;
+}
+
+.settings-head .eyebrow {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-3);
+}
+
+.settings-head h1 {
+  margin: 4px 0;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.settings-head p {
+  margin: 0;
+  color: var(--fg-3);
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 26px 0 12px;
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.section-head span {
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.theme-grid {
+  max-width: 980px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.theme-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--raised);
+  text-align: left;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.theme-card:hover {
+  border-color: var(--line-2);
+}
+
+.theme-card[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.theme-check {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: 0 0 0 2px var(--raised);
+}
+
+.theme-name {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 2px;
+}
+
+.theme-name b {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.theme-name small {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+/* 主题卡片里的缩略界面，颜色取自卡片自身的 data-theme。 */
+.mini {
+  position: relative;
+  display: block;
+  height: 86px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+}
+
+.mini i,
+.mini b {
+  position: absolute;
+  display: block;
+}
+
+.mini-rail {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 14px;
+  border-right: 1px solid var(--line);
+}
+
+.mini-rail::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.mini-bar {
+  top: 7px;
+  left: 21px;
+  right: 62px;
+  height: 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+.mini-bar::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  width: 24px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--tag-artist);
+}
+
+.mini .mini-grid {
+  top: 24px;
+  bottom: 8px;
+  left: 21px;
+  right: 62px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.mini .mini-grid i {
+  position: static;
+  border-radius: 3px;
+  background: var(--raised-2);
+}
+
+.mini .mini-grid i:first-child {
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+
+.mini .mini-panel {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 54px;
+  padding: 6px;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.mini .mini-panel i {
+  position: static;
+  height: 4px;
+  margin-bottom: 4px;
+  border-radius: 2px;
+  background: var(--fg-3);
+  opacity: 0.55;
+}
+
+.mini .mini-panel i:first-child {
+  height: 20px;
+  border-radius: 3px;
+  background: var(--raised);
+  opacity: 1;
+}
+
+.mini .mini-panel i:nth-child(2) {
+  width: 72%;
+  background: var(--tag-general);
+  opacity: 0.9;
+}
+
+.mini .mini-panel i:nth-child(3) {
+  width: 48%;
+  background: var(--tag-copyright);
+  opacity: 0.9;
+}
+
+.mini .mini-panel b {
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  height: 9px;
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.setting-row {
+  max-width: 980px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.setting-row b {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.setting-row span {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.switch {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  flex: none;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: var(--raised-2);
+  transition: background-color 0.18s ease;
+}
+
+.switch span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border-radius: 50%;
+  background: var(--fg-2);
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.18s ease;
+}
+
+.switch[aria-checked="true"] {
+  background: var(--accent);
+}
+
+.switch[aria-checked="true"] span {
+  transform: translateX(16px);
+  background: var(--accent-fg);
+}
+
+/* ---------- 动效 ---------- */
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.26s;
+}
+
+/* 不支持 View Transitions 时，换主题期间给颜色加过渡。 */
+html.theme-fade,
+html.theme-fade * {
+  transition: background-color 0.22s ease, color 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .shimmer-img::before {
+    background: var(--chip);
+  }
+}

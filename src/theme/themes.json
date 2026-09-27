@@ -1,0 +1,249 @@
+{
+  "version": 1,
+  "defaults": {
+    "dark": "sakura-night",
+    "light": "mist"
+  },
+  "tagColors": {
+    "dark": {
+      "artist": "#ff8a8b",
+      "copyright": "#c797ff",
+      "character": "#4fd08a",
+      "general": "#6bb6ff",
+      "meta": "#ead084"
+    },
+    "light": {
+      "artist": "#c00004",
+      "copyright": "#9a00a0",
+      "character": "#00852c",
+      "general": "#0062d1",
+      "meta": "#a86400"
+    }
+  },
+  "modeTokens": {
+    "dark": {
+      "shimmer": "rgba(255,255,255,.07)"
+    },
+    "light": {
+      "shimmer": "rgba(255,255,255,.72)"
+    }
+  },
+  "themes": [
+    {
+      "id": "sakura-night",
+      "name": "樱夜",
+      "en": "Sakura Night",
+      "mode": "dark",
+      "mood": "墨蓝底配樱粉，默认主题",
+      "tokens": {
+        "bg": "#0e0f14",
+        "panel": "#14161d",
+        "raised": "#1b1e27",
+        "raised2": "#262a37",
+        "line": "rgba(255,255,255,.07)",
+        "line2": "rgba(255,255,255,.13)",
+        "chip": "rgba(255,255,255,.06)",
+        "fg1": "#eceef5",
+        "fg2": "#b3b8c7",
+        "fg3": "#7d8396",
+        "accent": "#ff8fb3",
+        "accentFg": "#2a0c17",
+        "accentSoft": "rgba(255,143,179,.18)",
+        "glass": "rgba(22,24,32,.74)",
+        "ok": "#6fdca0",
+        "warn": "#f5c26b",
+        "err": "#ff7a7a",
+        "shadow": "0 22px 44px -14px rgba(0,0,0,.7)"
+      }
+    },
+    {
+      "id": "abyss",
+      "name": "深海",
+      "en": "Abyss",
+      "mode": "dark",
+      "mood": "藏青底配天蓝，冷静克制",
+      "tokens": {
+        "bg": "#0a1019",
+        "panel": "#0f1623",
+        "raised": "#152031",
+        "raised2": "#1e2b3f",
+        "line": "rgba(170,205,255,.08)",
+        "line2": "rgba(170,205,255,.15)",
+        "chip": "rgba(170,205,255,.07)",
+        "fg1": "#e6eef9",
+        "fg2": "#a8b8cd",
+        "fg3": "#71849d",
+        "accent": "#5cc8ff",
+        "accentFg": "#032031",
+        "accentSoft": "rgba(92,200,255,.18)",
+        "glass": "rgba(14,22,35,.76)",
+        "ok": "#5fd6a0",
+        "warn": "#f2c166",
+        "err": "#ff7f7f",
+        "shadow": "0 22px 44px -14px rgba(0,4,12,.75)"
+      }
+    },
+    {
+      "id": "amber",
+      "name": "琥珀",
+      "en": "Amber",
+      "mode": "dark",
+      "mood": "暖棕黑配琥珀，夜里看图不刺眼",
+      "tokens": {
+        "bg": "#13110e",
+        "panel": "#1a1713",
+        "raised": "#221e19",
+        "raised2": "#2d2821",
+        "line": "rgba(255,236,210,.07)",
+        "line2": "rgba(255,236,210,.13)",
+        "chip": "rgba(255,236,210,.06)",
+        "fg1": "#f4ede3",
+        "fg2": "#c3b7a7",
+        "fg3": "#8b8072",
+        "accent": "#f3b45a",
+        "accentFg": "#2a1904",
+        "accentSoft": "rgba(243,180,90,.18)",
+        "glass": "rgba(29,25,20,.76)",
+        "ok": "#7fd39b",
+        "warn": "#ff8f66",
+        "err": "#ff7a6e",
+        "shadow": "0 22px 44px -14px rgba(0,0,0,.72)"
+      }
+    },
+    {
+      "id": "jade",
+      "name": "翡翠",
+      "en": "Jade",
+      "mode": "dark",
+      "mood": "墨绿底配翡翠绿，柔和耐看",
+      "tokens": {
+        "bg": "#0b1210",
+        "panel": "#101916",
+        "raised": "#16221e",
+        "raised2": "#1f2e29",
+        "line": "rgba(200,255,230,.07)",
+        "line2": "rgba(200,255,230,.13)",
+        "chip": "rgba(200,255,230,.06)",
+        "fg1": "#e6f3ed",
+        "fg2": "#a9c0b5",
+        "fg3": "#70887d",
+        "accent": "#45d6a2",
+        "accentFg": "#03261b",
+        "accentSoft": "rgba(69,214,162,.18)",
+        "glass": "rgba(16,27,23,.76)",
+        "ok": "#7ee3b8",
+        "warn": "#f5c26b",
+        "err": "#ff7a7a",
+        "shadow": "0 22px 44px -14px rgba(0,0,0,.72)"
+      }
+    },
+    {
+      "id": "twilight",
+      "name": "暮紫",
+      "en": "Twilight",
+      "mode": "dark",
+      "mood": "紫调暗底配薰衣草紫",
+      "tokens": {
+        "bg": "#100e17",
+        "panel": "#16131f",
+        "raised": "#1d1a29",
+        "raised2": "#282437",
+        "line": "rgba(220,210,255,.07)",
+        "line2": "rgba(220,210,255,.14)",
+        "chip": "rgba(220,210,255,.06)",
+        "fg1": "#efecf8",
+        "fg2": "#bab4cd",
+        "fg3": "#827b98",
+        "accent": "#b49cff",
+        "accentFg": "#1b1036",
+        "accentSoft": "rgba(180,156,255,.2)",
+        "glass": "rgba(25,21,35,.76)",
+        "ok": "#6fdca0",
+        "warn": "#f5c26b",
+        "err": "#ff7f8f",
+        "shadow": "0 22px 44px -14px rgba(0,0,0,.72)"
+      }
+    },
+    {
+      "id": "oled",
+      "name": "纯黑",
+      "en": "OLED",
+      "mode": "dark",
+      "mood": "纯黑底、白色强调，适合 OLED 屏，图片最突出",
+      "tokens": {
+        "bg": "#000000",
+        "panel": "#0a0a0b",
+        "raised": "#151517",
+        "raised2": "#202023",
+        "line": "rgba(255,255,255,.09)",
+        "line2": "rgba(255,255,255,.16)",
+        "chip": "rgba(255,255,255,.08)",
+        "fg1": "#f5f5f6",
+        "fg2": "#b1b1b7",
+        "fg3": "#76767d",
+        "accent": "#f5f5f6",
+        "accentFg": "#000000",
+        "accentSoft": "rgba(255,255,255,.14)",
+        "glass": "rgba(20,20,22,.8)",
+        "ok": "#6fdca0",
+        "warn": "#f5c26b",
+        "err": "#ff7a7a",
+        "shadow": "0 22px 44px -14px rgba(0,0,0,.9)"
+      }
+    },
+    {
+      "id": "mist",
+      "name": "晨雾",
+      "en": "Mist",
+      "mode": "light",
+      "mood": "浅灰底配玫红，白天用",
+      "tokens": {
+        "bg": "#f3f3f6",
+        "panel": "#ffffff",
+        "raised": "#ebedf2",
+        "raised2": "#e0e3ea",
+        "line": "rgba(18,20,30,.08)",
+        "line2": "rgba(18,20,30,.14)",
+        "chip": "rgba(18,20,30,.045)",
+        "fg1": "#15161c",
+        "fg2": "#4a4f5e",
+        "fg3": "#6a7183",
+        "accent": "#cc3d73",
+        "accentFg": "#ffffff",
+        "accentSoft": "rgba(204,61,115,.12)",
+        "glass": "rgba(255,255,255,.82)",
+        "ok": "#1f8f55",
+        "warn": "#a86a12",
+        "err": "#cc3333",
+        "shadow": "0 20px 40px -16px rgba(20,24,40,.3)"
+      }
+    },
+    {
+      "id": "paper",
+      "name": "宣纸",
+      "en": "Paper",
+      "mode": "light",
+      "mood": "暖白纸色配靛蓝",
+      "tokens": {
+        "bg": "#f5f2ea",
+        "panel": "#fcfaf5",
+        "raised": "#ece7dc",
+        "raised2": "#e2dccf",
+        "line": "rgba(60,45,20,.09)",
+        "line2": "rgba(60,45,20,.16)",
+        "chip": "rgba(60,45,20,.05)",
+        "fg1": "#1f1b16",
+        "fg2": "#534b40",
+        "fg3": "#776d5f",
+        "accent": "#3456c8",
+        "accentFg": "#ffffff",
+        "accentSoft": "rgba(52,86,200,.12)",
+        "glass": "rgba(252,250,245,.84)",
+        "ok": "#2f8a4f",
+        "warn": "#a86a12",
+        "err": "#c43c2c",
+        "shadow": "0 20px 40px -16px rgba(60,45,20,.28)"
+      }
+    }
+  ]
+}
