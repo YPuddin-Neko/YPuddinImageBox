@@ -56,8 +56,8 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
 
-      - name: 单元测试
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+      - name: 测试
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --test language
 
       - name: 打包
         run: pnpm tauri build ${{ matrix.build-args }}

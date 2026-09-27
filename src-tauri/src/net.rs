@@ -14,6 +14,7 @@ use reqwest::{RequestBuilder, Response, StatusCode};
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::error::AppError;
+use crate::i18n::tr;
 use crate::settings::{parse_proxy_url, ProxyMode, ProxySettings};
 
 pub const APP_UA: &str = concat!("YPuddinImageBox/", env!("CARGO_PKG_VERSION"));
@@ -153,7 +154,10 @@ pub fn build_client(proxy: &ProxySettings) -> Result<reqwest::Client, AppError> 
         ProxyMode::Manual => {
             let url = parse_proxy_url(&proxy.url)?;
             let proxy = reqwest::Proxy::all(url.as_str())
-                .map_err(|e| AppError::InvalidInput(format!("代理地址无效：{}", network_detail(&e))))?;
+                .map_err(|e| {
+                    let detail = network_detail(&e);
+                    AppError::InvalidInput(tr!("代理地址无效：{detail}", "Invalid proxy address: {detail}"))
+                })?;
             builder.proxy(proxy)
         }
     };
@@ -176,14 +180,17 @@ pub async fn test_connection(proxy: &ProxySettings) -> Result<Duration, AppError
 /// 网络错误的说明：超时、连不上直接说清楚，其余给出最底层的原因（例如 dns error）。
 pub fn network_detail(err: &reqwest::Error) -> String {
     if err.is_timeout() {
-        return "连接超时".into();
+        return tr!("连接超时", "The connection timed out");
     }
     let mut root: &dyn std::error::Error = err;
     while let Some(next) = root.source() {
         root = next;
     }
     if err.is_connect() {
-        format!("连不上服务器（{root}），请检查网络或代理设置")
+        tr!(
+            "连不上服务器（{root}），请检查网络或代理设置",
+            "Can't reach the server ({root}). Check your network or proxy settings"
+        )
     } else {
         root.to_string()
     }

@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
+import { t } from "../lib/i18n";
 import { Icon } from "./Icon";
 
 export interface SelectOption<T extends string | number> {
@@ -312,7 +313,12 @@ export function MultiSelect<T extends string | number>({
   const chosen = options.filter((option) => values.includes(option.value)).map((option) => option.value);
   const all = chosen.length === 0 || chosen.length === options.length;
   const effective = all ? options.map((option) => option.value) : chosen;
-  const text = all ? allLabel : options.filter((option) => chosen.includes(option.value)).map((o) => o.label).join("、");
+  const text = all
+    ? allLabel
+    : options
+        .filter((option) => chosen.includes(option.value))
+        .map((o) => o.label)
+        .join(t("、::list"));
 
   const toggle = (key: string) => {
     if (key === ALL_KEY) {
@@ -343,7 +349,7 @@ export function MultiSelect<T extends string | number>({
             label: option.label,
             hint: option.hint,
             selected,
-            title: selected && effective.length === 1 ? "至少保留一项" : undefined,
+            title: selected && effective.length === 1 ? t("至少保留一项") : undefined,
           };
         }),
       ]}

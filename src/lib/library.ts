@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { t, type Msg } from "./i18n";
 import type { Post, Rating, Source } from "./ipc";
 
 /** 图库里的一张图。thumbUrl / sampleUrl 指向本地路由，照常用 imageSrc 加载。 */
@@ -31,7 +32,7 @@ export type LibrarySort =
   | "resolution"
   | "filesize";
 
-export const LIBRARY_SORTS: { value: LibrarySort; label: string }[] = [
+const LIBRARY_SORTS: { value: LibrarySort; label: Msg }[] = [
   { value: "downloaded", label: "最近下载" },
   { value: "downloadedAsc", label: "最早下载" },
   { value: "newest", label: "最新上传" },
@@ -41,6 +42,8 @@ export const LIBRARY_SORTS: { value: LibrarySort; label: string }[] = [
   { value: "resolution", label: "分辨率最高" },
   { value: "filesize", label: "文件最大" },
 ];
+
+export const librarySorts = () => LIBRARY_SORTS.map(({ value, label }) => ({ value, label: t(label) }));
 
 export interface LibraryQuery {
   source: Source | null;

@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::{text, tr};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageKind {
@@ -24,12 +26,13 @@ pub enum StorageKind {
 impl StorageKind {
     pub const ALL: [StorageKind; 4] = [StorageKind::Images, StorageKind::Database, StorageKind::Data, StorageKind::Cache];
 
+    /// 错误信息里用的名称。
     pub fn label(self) -> &'static str {
         match self {
-            StorageKind::Images => "图片",
-            StorageKind::Database => "数据库",
-            StorageKind::Data => "软件数据",
-            StorageKind::Cache => "缓存",
+            StorageKind::Images => text("图片", "Images"),
+            StorageKind::Database => text("数据库", "Database"),
+            StorageKind::Data => text("软件数据", "App data"),
+            StorageKind::Cache => text("缓存", "Cache"),
         }
     }
 
@@ -85,29 +88,50 @@ pub struct Defaults {
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
-    #[error("请选择完整的文件夹路径")]
     NotAbsolute,
-    #[error("新位置和当前位置相同")]
     Same,
-    #[error("新位置不能在当前位置里面，当前位置也不能在新位置里面")]
     Nested,
-    #[error("新位置不能和「{0}」的位置重叠")]
-    Overlap(&'static str),
-    #[error("新位置已有文件，移动时请选一个空文件夹")]
+    /// 和另一类内容的位置重叠。
+    Overlap(StorageKind),
     TargetNotEmpty,
-    #[error("无法写入新位置：{0}")]
     NotWritable(String),
-    #[error("移动失败：{0}")]
     Move(String),
-    #[error("保存位置设置失败：{0}")]
     Save(String),
+}
+
+impl std::fmt::Display for StorageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            StorageError::NotAbsolute => tr!("请选择完整的文件夹路径", "Choose a full folder path"),
+            StorageError::Same => tr!("新位置和当前位置相同", "The new location is the same as the current one"),
+            StorageError::Nested => tr!(
+                "新位置不能在当前位置里面，当前位置也不能在新位置里面",
+                "The new location can't be inside the current one, or the other way around"
+            ),
+            StorageError::Overlap(kind) => {
+                let label = kind.label();
+                tr!("新位置不能和「{label}」的位置重叠", "The new location can't overlap the “{label}” location")
+            }
+            StorageError::TargetNotEmpty => tr!(
+                "新位置已有文件，移动时请选一个空文件夹",
+                "The new location already contains files. Choose an empty folder to move into"
+            ),
+            StorageError::NotWritable(detail) => {
+                tr!("无法写入新位置：{detail}", "Can't write to the new location: {detail}")
+            }
+            StorageError::Move(detail) => tr!("移动失败：{detail}", "Moving failed: {detail}"),
+            StorageError::Save(detail) => {
+                tr!("保存位置设置失败：{detail}", "Couldn't save the location settings: {detail}")
+            }
+        };
+        f.write_str(&message)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocationInfo {
     pub kind: StorageKind,
-    pub label: &'static str,
     pub path: String,
     pub default_path: String,
     pub is_default: bool,
@@ -232,7 +256,6 @@ impl Storage {
                 });
                 LocationInfo {
                     kind,
-                    label: kind.label(),
                     path: path.display().to_string(),
                     default_path: self.default_path(kind).display().to_string(),
                     is_default: self.is_default(kind),
@@ -316,10 +339,19 @@ impl Storage {
                     let target = self.canonical_target(change.kind, change.to);
                     self.set_configured(change.kind, target);
                 }
-                Err(err) => errors.push(format!("{}：{}", change.kind.label(), err)),
+                Err(err) => {
+                    let label = change.kind.label();
+                    errors.push(tr!("{label}：{err}", "{label}: {err}"));
+                }
             }
         }
-        self.state.last_error = (!errors.is_empty()).then(|| format!("上次启动时迁移失败，位置保持不变。{}", errors.join("；")));
+        self.state.last_error = (!errors.is_empty()).then(|| {
+            let errors = errors.join(text("；", "; "));
+            tr!(
+                "上次启动时迁移失败，位置保持不变。{errors}",
+                "Moving failed at the last launch, so the locations stayed unchanged. {errors}"
+            )
+        });
         let _ = self.save();
     }
 
@@ -355,7 +387,7 @@ impl Storage {
             }
             let other_n = normalize(&self.path(other));
             if to_n == other_n || to_n.starts_with(&other_n) || other_n.starts_with(&to_n) {
-                return Err(StorageError::Overlap(other.label()));
+                return Err(StorageError::Overlap(other));
             }
         }
         if mode == ChangeMode::Move && has_entries(&to_n) {
@@ -459,7 +491,8 @@ fn copy_recursive(source: &Path, target: &Path) -> io::Result<()> {
     }
     let copied = fs::copy(source, target)?;
     if copied != fs::metadata(source)?.len() {
-        return Err(io::Error::other(format!("{} 复制后大小不一致", source.display())));
+        let path = source.display();
+        return Err(io::Error::other(tr!("{path} 复制后大小不一致", "{path} has a different size after copying")));
     }
     Ok(())
 }

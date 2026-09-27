@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { Icon } from "../../components/Icon";
 import { Toast, useToast } from "../../components/Toast";
+import { t, type Msg } from "../../lib/i18n";
 import { errorMessage, SOURCE_LABEL, type Source } from "../../lib/ipc";
 import { isMac } from "../../lib/platform";
 import {
@@ -16,12 +17,12 @@ import {
 } from "../../lib/settings";
 
 interface SiteText {
-  nameLabel: string;
-  namePlaceholder: string;
-  description: string;
-  help: string;
+  nameLabel: Msg;
+  namePlaceholder: Msg;
+  description: Msg;
+  help: Msg;
   helpUrl: string;
-  helpLink: string;
+  helpLink: Msg;
 }
 
 const SITES: Record<Source, SiteText> = {
@@ -43,18 +44,18 @@ const SITES: Record<Source, SiteText> = {
   },
 };
 
-const KEYCHAIN = isMac ? "钥匙串" : "Windows 凭据管理器";
+const keychain = () => (isMac ? t("钥匙串") : t("Windows 凭据管理器"));
 
-const STORAGE_OPTIONS: { value: KeyStorage; title: string; description: string }[] = [
+const storageOptions = (): { value: KeyStorage; title: string; description: string }[] => [
   {
     value: "keychain",
-    title: isMac ? "系统钥匙串" : "凭据管理器",
-    description: `交给系统的${KEYCHAIN}保管，最安全，推荐使用。`,
+    title: isMac ? t("系统钥匙串") : t("凭据管理器"),
+    description: t("交给系统的{keychain}保管，最安全，推荐使用。", { keychain: keychain() }),
   },
   {
     value: "file",
-    title: "设置文件",
-    description: "用这台电脑专属的密钥加密后存在设置文件里；文件被复制到别的电脑上解不开，换电脑需要重新填写。",
+    title: t("设置文件"),
+    description: t("用这台电脑专属的密钥加密后存在设置文件里；文件被复制到别的电脑上解不开，换电脑需要重新填写。"),
   },
 ];
 
@@ -84,7 +85,7 @@ function AccountCard({
       onChange(await accountSave(account.source, name, apiKey));
       setApiKey("");
       setEditing(false);
-      onNotice(`已登录 ${label}`);
+      onNotice(t("已登录 {site}", { site: label }));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -99,7 +100,7 @@ function AccountCard({
       onChange(await accountRemove(account.source));
       setName("");
       setEditing(true);
-      onNotice(`已退出 ${label}`);
+      onNotice(t("已退出 {site}", { site: label }));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -108,11 +109,11 @@ function AccountCard({
   };
 
   const status = signedIn ? (
-    <span className="badge ok">已登录</span>
+    <span className="badge ok">{t("已登录")}</span>
   ) : account.keyMissing ? (
-    <span className="badge warn">需要重新填写 API Key</span>
+    <span className="badge warn">{t("需要重新填写 API Key")}</span>
   ) : (
-    <span className="badge">未登录</span>
+    <span className="badge">{t("未登录")}</span>
   );
 
   return (
@@ -121,7 +122,7 @@ function AccountCard({
         <h2 id={`account-${account.source}`}>{label}</h2>
         {status}
       </div>
-      <p className="set-desc">{site.description}</p>
+      <p className="set-desc">{t(site.description)}</p>
 
       {signedIn && !editing ? (
         <div className="set-line">
@@ -132,22 +133,22 @@ function AccountCard({
           </div>
           <div className="set-actions">
             <button type="button" className="btn" onClick={() => setEditing(true)} disabled={busy !== null}>
-              更换账号
+              {t("更换账号")}
             </button>
             <button type="button" className="btn ghost" onClick={() => void remove()} disabled={busy !== null}>
-              {busy === "remove" ? "正在退出…" : "退出登录"}
+              {busy === "remove" ? t("正在退出…") : t("退出登录")}
             </button>
           </div>
         </div>
       ) : (
         <form className="form-row" onSubmit={(event) => void save(event)}>
           <label className="field">
-            <span>{site.nameLabel}</span>
+            <span>{t(site.nameLabel)}</span>
             <input
               className="field-input"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder={site.namePlaceholder}
+              placeholder={t(site.namePlaceholder)}
               autoComplete="off"
               spellCheck={false}
             />
@@ -159,23 +160,23 @@ function AccountCard({
               type="password"
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
-              placeholder="粘贴 API Key"
+              placeholder={t("粘贴 API Key")}
               autoComplete="off"
               spellCheck={false}
             />
           </label>
           <div className="set-actions">
             <button type="submit" className="btn primary" disabled={busy !== null}>
-              {busy === "save" ? "正在验证…" : "保存并验证"}
+              {busy === "save" ? t("正在验证…") : t("保存并验证")}
             </button>
             {signedIn && (
               <button type="button" className="btn ghost" onClick={() => setEditing(false)} disabled={busy !== null}>
-                取消
+                {t("取消")}
               </button>
             )}
             {account.keyMissing && (
               <button type="button" className="btn ghost" onClick={() => void remove()} disabled={busy !== null}>
-                退出登录
+                {t("退出登录")}
               </button>
             )}
           </div>
@@ -185,9 +186,9 @@ function AccountCard({
       {error && <p className="form-error">{error}</p>}
       {(!signedIn || editing) && (
         <p className="form-hint">
-          <span>{site.help}</span>
+          <span>{t(site.help)}</span>
           <button type="button" className="link" onClick={() => void openUrl(site.helpUrl)}>
-            {site.helpLink}
+            {t(site.helpLink)}
           </button>
         </p>
       )}
@@ -210,7 +211,11 @@ export function AccountsSettings() {
     setError(null);
     try {
       setInfo(await accountKeyStorage(storage));
-      setNotice(storage === "file" ? "API Key 已改为加密保存在设置文件里" : `API Key 已改为保存在系统${KEYCHAIN}里`);
+      setNotice(
+        storage === "file"
+          ? t("API Key 已改为加密保存在设置文件里")
+          : t("API Key 已改为保存在系统{keychain}里", { keychain: keychain() }),
+      );
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -218,18 +223,18 @@ export function AccountsSettings() {
     }
   };
 
-  const where = info?.keyStorage === "file" ? "加密后存在设置文件里" : `存在系统${KEYCHAIN}里`;
+  const where = info?.keyStorage === "file" ? t("加密后存在设置文件里") : t("存在系统{keychain}里", { keychain: keychain() });
 
   return (
     <div className="settings-page">
       <header className="settings-head">
-        <h1>账号</h1>
-        <p>保存前会先用填写的账号访问一次站点。API Key {where}。</p>
+        <h1>{t("账号")}</h1>
+        <p>{t("保存前会先用填写的账号访问一次站点。API Key {where}。", { where })}</p>
       </header>
 
       {(error ?? info?.error) && (
         <div className="alert" role="alert">
-          <span>{error ?? `读取 API Key 失败：${info?.error}`}</span>
+          <span>{error ?? t("读取 API Key 失败：{error}", { error: info?.error ?? "" })}</span>
         </div>
       )}
 
@@ -246,11 +251,11 @@ export function AccountsSettings() {
         {info && (
           <section className="set-card" aria-labelledby="key-storage-title">
             <div className="set-title">
-              <h2 id="key-storage-title">API Key 的保存方式</h2>
+              <h2 id="key-storage-title">{t("API Key 的保存方式")}</h2>
             </div>
-            <p className="set-desc">切换后，已经保存的 API Key 会一起搬过去。</p>
+            <p className="set-desc">{t("切换后，已经保存的 API Key 会一起搬过去。")}</p>
             <div className="options" role="radiogroup" aria-labelledby="key-storage-title">
-              {STORAGE_OPTIONS.map((option) => (
+              {storageOptions().map((option) => (
                 <label key={option.value} className="option" data-checked={info.keyStorage === option.value || undefined}>
                   <input
                     type="radio"

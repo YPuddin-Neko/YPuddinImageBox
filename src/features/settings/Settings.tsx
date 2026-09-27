@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { Icon, type IconName } from "../../components/Icon";
+import { t, type Msg } from "../../lib/i18n";
 import { EASE_OUT } from "../../lib/motion";
 import { AccountsSettings } from "./AccountsSettings";
 import { Appearance } from "./Appearance";
@@ -11,7 +12,7 @@ import { StorageSettings } from "./StorageSettings";
 
 export type SettingsSection = "general" | "appearance" | "accounts" | "network" | "storage";
 
-const SECTIONS: { id: SettingsSection; label: string; icon: IconName }[] = [
+const SECTIONS: { id: SettingsSection; label: Msg; icon: IconName }[] = [
   { id: "general", label: "通用", icon: "gear" },
   { id: "appearance", label: "外观", icon: "palette" },
   { id: "accounts", label: "账号", icon: "user" },
@@ -38,9 +39,9 @@ export function Settings({
   const Page = PAGES[section];
   return (
     <div className="settings">
-      <nav className="settings-nav" aria-label="设置分类">
+      <nav className="settings-nav" aria-label={t("设置分类")}>
         <p className="settings-nav-title" data-tauri-drag-region>
-          设置
+          {t("设置")}
         </p>
         {SECTIONS.map((item) => (
           <button
@@ -51,7 +52,7 @@ export function Settings({
             onClick={() => onSectionChange(item.id)}
           >
             <Icon name={item.icon} size={17} />
-            {item.label}
+            {t(item.label)}
           </button>
         ))}
       </nav>

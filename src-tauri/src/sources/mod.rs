@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::error::AppError;
+use crate::i18n::tr;
 use crate::net::Net;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,7 +183,8 @@ impl Sort {
             (Source::Gelbooru, Sort::Oldest) => "sort:id:asc",
             (Source::Gelbooru, Sort::Score) => "sort:score:desc",
             (Source::Gelbooru, _) => {
-                return Err(AppError::InvalidInput(format!("{} 不支持这种排序", source.site_name())));
+                let site = source.site_name();
+                return Err(AppError::InvalidInput(tr!("{site} 不支持这种排序", "{site} doesn't support this sort order")));
             }
         };
         Ok(Some(term))

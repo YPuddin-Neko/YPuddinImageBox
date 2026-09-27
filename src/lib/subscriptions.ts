@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { Job } from "./downloads";
+import { t, type Msg } from "./i18n";
 import type { Rating, SearchParams, Source } from "./ipc";
 
 export interface Subscription {
@@ -28,7 +29,7 @@ export interface Subscription {
 }
 
 /** 可选的检查间隔（分钟）。 */
-export const INTERVALS: { minutes: number; label: string }[] = [
+const INTERVALS: { minutes: number; label: Msg }[] = [
   { minutes: 60, label: "每小时" },
   { minutes: 180, label: "每 3 小时" },
   { minutes: 360, label: "每 6 小时" },
@@ -36,19 +37,21 @@ export const INTERVALS: { minutes: number; label: string }[] = [
   { minutes: 1440, label: "每天" },
 ];
 
-export const intervalLabel = (minutes: number) =>
-  INTERVALS.find((option) => option.minutes === minutes)?.label ?? `每 ${minutes} 分钟`;
+export function intervalLabel(minutes: number): string {
+  const option = INTERVALS.find((item) => item.minutes === minutes);
+  return option ? t(option.label) : t("每 {n} 分钟", { n: minutes });
+}
 
 /** 下拉框的选项；当前间隔不在列表里时（例如旧版本设的）也列出来。 */
 export function intervalOptions(current?: number) {
-  const options = INTERVALS.map((option) => ({ value: option.minutes, label: option.label }));
+  const options = INTERVALS.map((option) => ({ value: option.minutes, label: t(option.label) }));
   if (current !== undefined && !INTERVALS.some((option) => option.minutes === current)) {
     options.unshift({ value: current, label: intervalLabel(current) });
   }
   return options;
 }
 
-export const subscriptionTitle = (sub: Pick<Subscription, "tags">) => sub.tags.trim() || "全部帖子";
+export const subscriptionTitle = (sub: Pick<Subscription, "tags">) => sub.tags.trim() || t("全部帖子");
 
 export const SUBSCRIPTION_EVENT = "subscription-updated";
 

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { Language, LanguageSetting } from "./i18n";
 import type { Source } from "./ipc";
 
 export interface AccountView {
@@ -45,13 +46,18 @@ export interface GeneralSettings {
   closeToTray: boolean;
   /** 登录系统后自动在后台启动。 */
   launchAtLogin: boolean;
+  language: LanguageSetting;
 }
 
 export interface GeneralInfo extends GeneralSettings {
+  /** 实际使用的语言（跟随系统时是系统语言对应的那一种）。 */
+  resolvedLanguage: Language;
   /** 日志文件的完整路径。 */
   logFile: string;
 }
 
 export const generalInfo = () => invoke<GeneralInfo>("general_info");
-export const generalSave = ({ closeToTray, launchAtLogin }: GeneralSettings) =>
-  invoke<GeneralInfo>("general_save", { closeToTray, launchAtLogin });
+export const generalSave = ({ closeToTray, launchAtLogin, language }: GeneralSettings) =>
+  invoke<GeneralInfo>("general_save", { closeToTray, launchAtLogin, language });
+/** 当前界面语言，启动时渲染前先问一次。 */
+export const languageCurrent = () => invoke<Language>("language_current");

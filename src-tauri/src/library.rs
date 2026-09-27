@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
+use crate::i18n::{text, tr};
 use crate::sources::{timestamp, Post, PostTags, Rating, Sort, Source};
 
 const DB_FILE: &str = "library.sqlite3";
@@ -233,7 +234,7 @@ impl Subscription {
     /// 界面和任务列表里显示的名字。
     pub fn title(&self) -> String {
         if self.tags.trim().is_empty() {
-            "全部帖子".into()
+            text("全部帖子", "All posts").into()
         } else {
             self.tags.clone()
         }
@@ -269,18 +270,28 @@ fn db_err(message: impl Into<String>) -> sqlx::Error {
     sqlx::Error::Protocol(message.into())
 }
 
+fn unknown_source(source: &str) -> sqlx::Error {
+    db_err(tr!("未知的来源 {source}", "Unknown source {source}"))
+}
+
+/// 刚写进去的任务读不出来。
+fn job_missing() -> sqlx::Error {
+    db_err(tr!("任务写入后读取失败", "Couldn't read the job back after saving it"))
+}
+
 fn job_from_row(row: &SqliteRow) -> Result<JobInfo, sqlx::Error> {
     let kind: String = row.try_get("kind")?;
     let source: String = row.try_get("source")?;
     let status: String = row.try_get("status")?;
     Ok(JobInfo {
         id: row.try_get("id")?,
-        kind: JobKind::parse(&kind).ok_or_else(|| db_err(format!("未知的任务类型 {kind}")))?,
-        source: Source::parse(&source).ok_or_else(|| db_err(format!("未知的来源 {source}")))?,
+        kind: JobKind::parse(&kind).ok_or_else(|| db_err(tr!("未知的任务类型 {kind}", "Unknown job kind {kind}")))?,
+        source: Source::parse(&source).ok_or_else(|| unknown_source(&source))?,
         title: row.try_get("title")?,
         query: row.try_get("query")?,
         max_posts: row.try_get("max_posts")?,
-        status: JobStatus::parse(&status).ok_or_else(|| db_err(format!("未知的任务状态 {status}")))?,
+        status: JobStatus::parse(&status)
+            .ok_or_else(|| db_err(tr!("未知的任务状态 {status}", "Unknown job status {status}")))?,
         total: row.try_get("total")?,
         saved: row.try_get("saved")?,
         skipped: row.try_get("skipped")?,
@@ -299,7 +310,7 @@ fn subscription_from_row(row: &SqliteRow) -> Result<Subscription, sqlx::Error> {
     let ratings: String = row.try_get("ratings")?;
     Ok(Subscription {
         id: row.try_get("id")?,
-        source: Source::parse(&source).ok_or_else(|| db_err(format!("未知的来源 {source}")))?,
+        source: Source::parse(&source).ok_or_else(|| unknown_source(&source))?,
         tags: row.try_get("tags")?,
         ratings: ratings.split(',').filter_map(Rating::parse).collect(),
         query: row.try_get("query")?,
@@ -318,7 +329,7 @@ fn subscription_from_row(row: &SqliteRow) -> Result<Subscription, sqlx::Error> {
 
 fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
     let source: String = row.try_get("source")?;
-    let source = Source::parse(&source).ok_or_else(|| db_err(format!("未知的来源 {source}")))?;
+    let source = Source::parse(&source).ok_or_else(|| unknown_source(&source))?;
     let post_id: i64 = row.try_get("post_id")?;
     let rating: Option<String> = row.try_get("rating")?;
     let file_size: Option<i64> = row.try_get("file_size")?;
@@ -655,7 +666,9 @@ impl Library {
         .bind(now)
         .fetch_one(&self.pool)
         .await?;
-        self.subscription(id).await?.ok_or_else(|| db_err("订阅写入后读取失败"))
+        self.subscription(id)
+            .await?
+            .ok_or_else(|| db_err(tr!("订阅写入后读取失败", "Couldn't read the subscription back after saving it")))
     }
 
     pub async fn subscription(&self, id: i64) -> Result<Option<Subscription>, sqlx::Error> {
@@ -760,7 +773,10 @@ impl Library {
              VALUES ('query', ?, ?, ?, 'queued', ?, ?, ?, ?, ?) RETURNING id",
         )
         .bind(sub.source.as_str())
-        .bind(format!("订阅：{}", sub.title()))
+        .bind({
+            let title = sub.title();
+            tr!("订阅：{title}", "Subscription: {title}")
+        })
         .bind(&sub.query)
         .bind(format!("a{}", sub.last_seen_id))
         .bind(sub.id)
@@ -778,7 +794,7 @@ impl Library {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        self.job(job_id).await?.ok_or_else(|| db_err("任务写入后读取失败"))
+        self.job(job_id).await?.ok_or_else(job_missing)
     }
 
     /// 检查任务结束后记下出错原因（成功时清空）。
@@ -810,7 +826,7 @@ impl Library {
         .await?;
         insert_items(&mut tx, id, 0, posts).await?;
         tx.commit().await?;
-        self.job(id).await?.ok_or_else(|| db_err("任务写入后读取失败"))
+        self.job(id).await?.ok_or_else(job_missing)
     }
 
     pub async fn create_query_job(
@@ -842,7 +858,7 @@ impl Library {
         .bind(now)
         .fetch_one(&self.pool)
         .await?;
-        self.job(id).await?.ok_or_else(|| db_err("任务写入后读取失败"))
+        self.job(id).await?.ok_or_else(job_missing)
     }
 
     pub async fn job(&self, id: i64) -> Result<Option<JobInfo>, sqlx::Error> {
@@ -949,7 +965,7 @@ impl Library {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        self.job(job_id).await?.ok_or_else(|| db_err("任务已被删除"))
+        self.job(job_id).await?.ok_or_else(|| db_err(tr!("任务已被删除", "The job has been removed")))
     }
 
     pub async fn item_count(&self, job_id: i64) -> Result<i64, sqlx::Error> {
@@ -968,7 +984,8 @@ impl Library {
         .await?;
         rows.into_iter()
             .map(|(seq, data)| {
-                let post = serde_json::from_str(&data).map_err(|e| db_err(format!("任务数据无法读取：{e}")))?;
+                let post = serde_json::from_str(&data)
+                    .map_err(|e| db_err(tr!("任务数据无法读取：{e}", "Couldn't read the job data: {e}")))?;
                 Ok(JobItem { seq, post })
             })
             .collect()

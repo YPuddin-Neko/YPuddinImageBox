@@ -1,6 +1,7 @@
 mod commands;
 pub mod downloader;
 pub mod error;
+pub mod i18n;
 mod keys;
 pub mod library;
 pub mod net;
@@ -20,13 +21,14 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 #[cfg(target_os = "macos")]
 use tauri::RunEvent;
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WindowEvent};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use downloader::{Downloader, Event, EventSink};
 use error::AppError;
+use i18n::{text, tr};
 use library::Library;
 use settings::{ProxySettings, Settings};
 use sources::{AccountStore, Source};
@@ -80,6 +82,7 @@ impl AppState {
 }
 
 const MAIN_WINDOW: &str = "main";
+const TRAY_ID: &str = "main";
 /// 开机自动启动时带上这个参数：启动后不弹出窗口，直接在后台运行。
 const BACKGROUND_ARG: &str = "--background";
 /// 下次打开时恢复窗口的大小、位置和是否最大化。显示与否由启动方式决定，不恢复。
@@ -134,15 +137,28 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+/// 托盘菜单，文字按当前界面语言。
+fn tray_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
+    let open = MenuItem::with_id(app, "open", text("打开 YPuddinImageBox", "Open YPuddinImageBox"), true, None::<&str>)?;
+    let check = MenuItem::with_id(app, "check", text("立即检查订阅", "Check Subscriptions Now"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", text("退出 YPuddinImageBox", "Quit YPuddinImageBox"), true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    Menu::with_items(app, &[&open, &check, &separator, &quit])
+}
+
+/// 切换界面语言后换上新语言的托盘菜单。
+pub(crate) fn refresh_tray(app: &AppHandle) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
+    if let Err(err) = tray_menu(app).and_then(|menu| tray.set_menu(Some(menu))) {
+        log::warn!("更新托盘菜单失败：{err}");
+    }
+}
+
 /// 菜单栏（Windows 上是托盘）图标：打开窗口、立即检查订阅、退出。
 /// macOS 上点图标弹菜单；Windows 上左键打开窗口、右键弹菜单。
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "打开 YPuddinImageBox", true, None::<&str>)?;
-    let check = MenuItem::with_id(app, "check", "立即检查订阅", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 YPuddinImageBox", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&open, &check, &separator, &quit])?;
-    let tray = TrayIconBuilder::with_id("main")
+    let menu = tray_menu(app)?;
+    let tray = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("YPuddinImageBox")
         .menu(&menu)
         .show_menu_on_left_click(cfg!(target_os = "macos"))
@@ -153,7 +169,13 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 tauri::async_runtime::spawn(async move {
                     let started = app.state::<AppState>().downloader.check_all_subscriptions().await;
                     if let Ok(0) = started {
-                        notify(&app, "订阅都在检查中，或者还没有启用的订阅");
+                        notify(
+                            &app,
+                            text(
+                                "订阅都在检查中，或者还没有启用的订阅",
+                                "All subscriptions are already being checked, or none are enabled",
+                            ),
+                        );
                     }
                 });
             }
@@ -196,7 +218,8 @@ fn emit_event(app: &AppHandle, event: Event) {
         Event::Saved { source, post_id } => app.emit("library-changed", SavedPayload { source, post_id }),
         Event::Subscription(sub) => app.emit("subscription-updated", sub),
         Event::NewPosts { title, saved } => {
-            notify(app, &format!("订阅「{title}」下载了 {saved} 张新图"));
+            let images = if saved == 1 { "image" } else { "images" };
+            notify(app, &tr!("订阅「{title}」下载了 {saved} 张新图", "“{title}” downloaded {saved} new {images}"));
             Ok(())
         }
     };
@@ -215,6 +238,8 @@ fn load_storage(app: &tauri::App) -> Result<Storage, Box<dyn std::error::Error>>
         cache: paths.app_cache_dir()?.join("image-cache"),
     };
     let mut storage = Storage::load(paths.app_config_dir()?.join("storage.json"), defaults);
+    // 迁移失败的原因会按界面语言记下来，所以先从当前的软件数据位置读出语言设置。
+    i18n::set(Settings::load(&storage.path(StorageKind::Data)).language.resolve());
     storage.apply_pending();
     storage.ensure_runtime_dirs()?;
     Ok(storage)
@@ -236,6 +261,7 @@ pub fn run() {
             setup_logging(app, &data_dir)?;
             let storage = Arc::new(RwLock::new(storage));
             let settings = Settings::load(&data_dir);
+            i18n::set(settings.language.resolve());
             // 存下来的代理地址失效时先用系统代理启动，设置页里还能看到原来填的地址。
             let net = net::Net::new(&settings.proxy).or_else(|_| net::Net::new(&ProxySettings::default()))?;
             let net = Arc::new(net);
@@ -326,6 +352,7 @@ pub fn run() {
             commands::subscription_check,
             commands::subscriptions_check_all,
             commands::general_info,
+            commands::language_current,
             commands::general_save,
             commands::proxy_info,
             commands::proxy_save,

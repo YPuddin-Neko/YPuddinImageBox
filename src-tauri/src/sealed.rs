@@ -13,6 +13,7 @@ use hkdf::Hkdf;
 use sha2::Sha256;
 
 use crate::error::AppError;
+use crate::i18n::tr;
 
 const VERSION: &str = "v1.";
 const INFO: &[u8] = b"com.ypuddin.imagebox api-key v1";
@@ -20,7 +21,8 @@ const NONCE_LEN: usize = 24;
 
 fn random<const N: usize>() -> Result<[u8; N], AppError> {
     let mut bytes = [0u8; N];
-    getrandom::fill(&mut bytes).map_err(|e| AppError::Internal(format!("无法生成随机数：{e}")))?;
+    getrandom::fill(&mut bytes)
+        .map_err(|e| AppError::Internal(tr!("无法生成随机数：{e}", "Couldn't generate random bytes: {e}")))?;
     Ok(bytes)
 }
 
@@ -30,16 +32,17 @@ pub fn new_salt() -> Result<String, AppError> {
 }
 
 fn cipher(salt: &str, machine_id: &str) -> Result<XChaCha20Poly1305, AppError> {
-    let salt = URL_SAFE_NO_PAD.decode(salt).map_err(|_| AppError::Internal("设置文件里的加密盐已损坏".into()))?;
+    let salt = URL_SAFE_NO_PAD.decode(salt).map_err(|_| {
+        AppError::Internal(tr!("设置文件里的加密盐已损坏", "The encryption salt in the settings file is damaged"))
+    })?;
+    let derive_failed = || AppError::Internal(tr!("派生密钥失败", "Couldn't derive the encryption key"));
     let mut key = [0u8; 32];
-    Hkdf::<Sha256>::new(Some(&salt), machine_id.as_bytes())
-        .expand(INFO, &mut key)
-        .map_err(|_| AppError::Internal("派生密钥失败".into()))?;
-    XChaCha20Poly1305::new_from_slice(&key).map_err(|_| AppError::Internal("派生密钥失败".into()))
+    Hkdf::<Sha256>::new(Some(&salt), machine_id.as_bytes()).expand(INFO, &mut key).map_err(|_| derive_failed())?;
+    XChaCha20Poly1305::new_from_slice(&key).map_err(|_| derive_failed())
 }
 
 fn machine_id() -> Result<String, AppError> {
-    machine_uid::get().map_err(|e| AppError::Internal(format!("读取设备标识失败：{e}")))
+    machine_uid::get().map_err(|e| AppError::Internal(tr!("读取设备标识失败：{e}", "Couldn't read the device ID: {e}")))
 }
 
 /// 加密 API Key。`context` 是「站点:用户名」。
@@ -58,14 +61,20 @@ fn seal_with(plain: &str, salt: &str, context: &str, machine_id: &str) -> Result
     let payload = Payload { msg: plain.as_bytes(), aad: context.as_bytes() };
     let sealed = cipher(salt, machine_id)?
         .encrypt(&nonce, payload)
-        .map_err(|_| AppError::Internal("加密失败".into()))?;
+        .map_err(|_| AppError::Internal(tr!("加密失败", "Encryption failed")))?;
     let mut bytes = nonce_bytes.to_vec();
     bytes.extend_from_slice(&sealed);
     Ok(format!("{VERSION}{}", URL_SAFE_NO_PAD.encode(bytes)))
 }
 
 fn open_with(sealed: &str, salt: &str, context: &str, machine_id: &str) -> Result<String, AppError> {
-    let unreadable = || AppError::Internal("设置文件里的 API Key 无法解密（可能是从别的电脑复制来的），请重新填写".into());
+    let unreadable = || {
+        AppError::Internal(tr!(
+            "设置文件里的 API Key 无法解密（可能是从别的电脑复制来的），请重新填写",
+            "The API key in the settings file can't be decrypted (it may have been copied from another computer). \
+             Enter it again"
+        ))
+    };
     let bytes = sealed.strip_prefix(VERSION).and_then(|b| URL_SAFE_NO_PAD.decode(b).ok()).ok_or_else(unreadable)?;
     if bytes.len() <= NONCE_LEN {
         return Err(unreadable());

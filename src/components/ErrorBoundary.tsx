@@ -1,6 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { error as logError } from "@tauri-apps/plugin-log";
 
+import { t } from "../lib/i18n";
+
 interface State {
   error: Error | null;
 }
@@ -26,13 +28,13 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
     if (!error) return this.props.children;
     return (
       <div className="crash" role="alert" data-tauri-drag-region>
-        <h1>界面出了点问题</h1>
-        <p>重新加载一般就能恢复。下载和订阅在后台照常进行，不受影响。</p>
+        <h1>{t("界面出了点问题")}</h1>
+        <p>{t("重新加载一般就能恢复。下载和订阅在后台照常进行，不受影响。")}</p>
         <button type="button" className="btn primary" onClick={() => window.location.reload()}>
-          重新加载
+          {t("重新加载")}
         </button>
         <details>
-          <summary>出错信息</summary>
+          <summary>{t("出错信息")}</summary>
           <code>{error.message}</code>
         </details>
       </div>

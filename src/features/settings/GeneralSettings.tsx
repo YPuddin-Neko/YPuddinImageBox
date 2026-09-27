@@ -2,28 +2,37 @@ import { useEffect, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { Icon } from "../../components/Icon";
+import { Select } from "../../components/Select";
 import { Toast, useToast } from "../../components/Toast";
 import { MOD } from "../../lib/hotkeys";
+import { setLanguage, t, type LanguageSetting, type Msg } from "../../lib/i18n";
 import { errorMessage } from "../../lib/ipc";
 import { isMac, revealLabel } from "../../lib/platform";
 import { generalInfo, generalSave, type GeneralInfo, type GeneralSettings as General } from "../../lib/settings";
 
-const TRAY = isMac ? "菜单栏" : "任务栏托盘";
+const tray = () => (isMac ? t("菜单栏") : t("任务栏托盘"));
 
-const CLOSE_OPTIONS: { value: boolean; title: string; description: string }[] = [
+const closeOptions = (): { value: boolean; title: string; description: string }[] => [
   {
     value: true,
-    title: "后台继续运行",
-    description: `订阅检查和下载不中断，从${TRAY}里的图标重新打开窗口。`,
+    title: t("后台继续运行"),
+    description: t("订阅检查和下载不中断，从{tray}里的图标重新打开窗口。", { tray: tray() }),
   },
   {
     value: false,
-    title: "退出软件",
-    description: "关掉窗口就退出，订阅只在软件打开时检查。",
+    title: t("退出软件"),
+    description: t("关掉窗口就退出，订阅只在软件打开时检查。"),
   },
 ];
 
-const SHORTCUTS: { keys: string[]; action: string }[] = [
+/** 语言名称总用它自己的文字写，切错了也认得出来。 */
+const languageOptions = (): { value: LanguageSetting; label: string }[] => [
+  { value: "system", label: t("跟随系统") },
+  { value: "zh", label: "简体中文" },
+  { value: "en", label: "English" },
+];
+
+const SHORTCUTS: { keys: string[]; action: Msg }[] = [
   { keys: [MOD, "F"], action: "跳到搜索框" },
   { keys: [MOD, "1～4"], action: "切换到发现、图库、订阅、下载" },
   { keys: [MOD, ","], action: "打开设置" },
@@ -34,6 +43,9 @@ const SHORTCUTS: { keys: string[]; action: string }[] = [
   { keys: [MOD, "D"], action: "发现页：下载当前这张，有勾选时下载勾选的" },
   { keys: [isMac ? "⌫" : "Delete"], action: "图库：删除当前这张，有勾选时删除勾选的" },
 ];
+
+/** 快捷键里需要翻译的按键名称。 */
+const keyLabel = (key: string) => (key === "空格" || key === "1～4" ? t(key) : key);
 
 export function GeneralSettings() {
   const [settings, setSettings] = useState<GeneralInfo | null>(null);
@@ -50,16 +62,19 @@ export function GeneralSettings() {
     try {
       await revealItemInDir(path);
     } catch (err) {
-      setError(`${revealLabel}失败：${errorMessage(err)}`);
+      setError(t("{action}失败：{error}", { action: revealLabel(), error: errorMessage(err) }));
     }
   };
 
-  const save = async (next: General, message: string) => {
+  /** `message` 在保存之后才生成，切换语言时提示用的就是新语言。 */
+  const save = async (next: General, message: () => string) => {
     setBusy(true);
     setError(null);
     try {
-      setSettings(await generalSave(next));
-      setNotice(message);
+      const saved = await generalSave(next);
+      setLanguage(saved.resolvedLanguage);
+      setSettings(saved);
+      setNotice(message());
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -70,8 +85,8 @@ export function GeneralSettings() {
   return (
     <div className="settings-page">
       <header className="settings-head">
-        <h1>通用</h1>
-        <p>软件在后台怎么运行。订阅要按时检查，需要软件一直开着。</p>
+        <h1>{t("通用")}</h1>
+        <p>{t("界面语言，以及软件在后台怎么运行。订阅要按时检查，需要软件一直开着。")}</p>
       </header>
 
       {error && (
@@ -82,12 +97,27 @@ export function GeneralSettings() {
 
       {settings && (
         <div className="set-list">
+          <section className="set-card" aria-labelledby="language-title">
+            <div className="set-title">
+              <h2 id="language-title">{t("语言")}</h2>
+              <Select
+                className="select"
+                name={t("语言")}
+                value={settings.language}
+                options={languageOptions()}
+                disabled={busy}
+                onChange={(language) => void save({ ...settings, language }, () => t("界面语言已切换"))}
+              />
+            </div>
+            <p className="set-desc">{t("界面、提示信息、{tray}菜单和系统通知使用的语言。", { tray: tray() })}</p>
+          </section>
+
           <section className="set-card" aria-labelledby="close-title">
             <div className="set-title">
-              <h2 id="close-title">关闭窗口时</h2>
+              <h2 id="close-title">{t("关闭窗口时")}</h2>
             </div>
             <div className="options" role="radiogroup" aria-labelledby="close-title">
-              {CLOSE_OPTIONS.map((option) => (
+              {closeOptions().map((option) => (
                 <label key={String(option.value)} className="option" data-checked={settings.closeToTray === option.value || undefined}>
                   <input
                     type="radio"
@@ -95,7 +125,9 @@ export function GeneralSettings() {
                     checked={settings.closeToTray === option.value}
                     disabled={busy}
                     onChange={() =>
-                      void save({ ...settings, closeToTray: option.value }, option.value ? "关闭窗口后会在后台继续运行" : "关闭窗口时会退出软件")
+                      void save({ ...settings, closeToTray: option.value }, () =>
+                        option.value ? t("关闭窗口后会在后台继续运行") : t("关闭窗口时会退出软件"),
+                      )
                     }
                   />
                   <span className="option-title">{option.title}</span>
@@ -107,7 +139,7 @@ export function GeneralSettings() {
 
           <section className="set-card" aria-labelledby="login-title">
             <div className="set-title">
-              <h2 id="login-title">开机启动</h2>
+              <h2 id="login-title">{t("开机启动")}</h2>
               <button
                 type="button"
                 role="switch"
@@ -116,31 +148,30 @@ export function GeneralSettings() {
                 aria-labelledby="login-title"
                 disabled={busy}
                 onClick={() =>
-                  void save(
-                    { ...settings, launchAtLogin: !settings.launchAtLogin },
-                    settings.launchAtLogin ? "已关闭开机启动" : "登录系统后会自动在后台启动",
+                  void save({ ...settings, launchAtLogin: !settings.launchAtLogin }, () =>
+                    settings.launchAtLogin ? t("已关闭开机启动") : t("登录系统后会自动在后台启动"),
                   )
                 }
               >
                 <span />
               </button>
             </div>
-            <p className="set-desc">登录系统后自动在后台启动，不弹出窗口，订阅照常按时检查。</p>
+            <p className="set-desc">{t("登录系统后自动在后台启动，不弹出窗口，订阅照常按时检查。")}</p>
           </section>
 
           <section className="set-card" aria-labelledby="keys-title">
             <div className="set-title">
-              <h2 id="keys-title">快捷键</h2>
+              <h2 id="keys-title">{t("快捷键")}</h2>
             </div>
             <dl className="shortcuts">
               {SHORTCUTS.map((shortcut) => (
                 <div key={shortcut.action} className="shortcut">
                   <dt>
                     {shortcut.keys.map((key) => (
-                      <kbd key={key}>{key}</kbd>
+                      <kbd key={key}>{keyLabel(key)}</kbd>
                     ))}
                   </dt>
-                  <dd>{shortcut.action}</dd>
+                  <dd>{t(shortcut.action)}</dd>
                 </div>
               ))}
             </dl>
@@ -148,9 +179,9 @@ export function GeneralSettings() {
 
           <section className="set-card" aria-labelledby="log-title">
             <div className="set-title">
-              <h2 id="log-title">日志</h2>
+              <h2 id="log-title">{t("日志")}</h2>
             </div>
-            <p className="set-desc">记录下载任务、订阅检查和出错的情况，文件超过 2 MB 会换新的。</p>
+            <p className="set-desc">{t("记录下载任务、订阅检查和出错的情况，文件超过 2 MB 会换新的。")}</p>
             <div className="set-line">
               <code className="storage-path" title={settings.logFile}>
                 <span>{settings.logFile}</span>
@@ -158,7 +189,7 @@ export function GeneralSettings() {
               <div className="set-actions">
                 <button type="button" className="btn ghost" onClick={() => void revealLog(settings.logFile)}>
                   <Icon name="folder" size={15} />
-                  {revealLabel}
+                  {revealLabel()}
                 </button>
               </div>
             </div>

@@ -1,6 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import { RATING_LABEL, RATINGS, remoteSortLabel, SOURCE_LABEL, type Rating, type RemoteSort, type SearchParams, type Source } from "./ipc";
+import { t } from "./i18n";
+import {
+  ratingLabel,
+  RATINGS,
+  remoteSortLabel,
+  SOURCE_LABEL,
+  type Rating,
+  type RemoteSort,
+  type SearchParams,
+  type Source,
+} from "./ipc";
 
 /** 收藏的搜索条件。`ratings` 为空表示全选。 */
 export interface SavedSearch {
@@ -32,11 +42,11 @@ export function sameSearch(saved: SavedSearch, criteria: { source: Source; tags:
   );
 }
 
-export const savedTitle = (saved: SavedSearch) => saved.tags || "全部帖子";
+export const savedTitle = (saved: SavedSearch) => saved.tags || t("全部帖子");
 
 /** 菜单里标在右侧的说明：站点、分级，排序不是默认时也写上。 */
 export function savedHint(saved: SavedSearch) {
-  const ratings = saved.ratings.length ? saved.ratings.map((rating) => RATING_LABEL[rating]).join("、") : "全部分级";
+  const ratings = saved.ratings.length ? saved.ratings.map(ratingLabel).join(t("、::list")) : t("全部分级");
   const parts = [SOURCE_LABEL[saved.source], ratings];
   if (saved.sort !== "newest") parts.push(remoteSortLabel(saved.sort));
   return parts.join(" · ");

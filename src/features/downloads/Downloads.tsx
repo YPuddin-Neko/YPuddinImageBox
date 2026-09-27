@@ -2,8 +2,17 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { Icon, type IconName } from "../../components/Icon";
-import { isActive, jobNotes, processed, STATUS_LABEL, type ItemNote, type Job, type JobAction } from "../../lib/downloads";
+import {
+  isActive,
+  jobNotes,
+  processed,
+  statusLabel,
+  type ItemNote,
+  type Job,
+  type JobAction,
+} from "../../lib/downloads";
 import { formatCount, formatTime } from "../../lib/format";
+import { t, tx, type Msg } from "../../lib/i18n";
 import { errorMessage, SOURCE_LABEL } from "../../lib/ipc";
 import { EASE_OUT } from "../../lib/motion";
 import type { Navigate } from "../../lib/nav";
@@ -19,34 +28,31 @@ interface ActionButton {
   title?: string;
 }
 
-const REMOVE: ActionButton = {
-  action: "remove",
-  label: "移除",
-  icon: "trash",
-  ghost: true,
-  title: "只移除这条任务，已下载的图片不受影响",
-};
+const actionButton = (action: JobAction, label: Msg, icon: IconName, ghost = false): ActionButton => ({
+  action,
+  label: t(label),
+  icon,
+  ghost,
+});
 
 function actionsFor(job: Job): ActionButton[] {
+  const remove: ActionButton = {
+    ...actionButton("remove", "移除", "trash", true),
+    title: t("只移除这条任务，已下载的图片不受影响"),
+  };
   switch (job.status) {
     case "queued":
     case "running":
-      return [
-        { action: "pause", label: "暂停", icon: "pause" },
-        { action: "cancel", label: "取消", icon: "close", ghost: true },
-      ];
+      return [actionButton("pause", "暂停", "pause"), actionButton("cancel", "取消", "close", true)];
     case "paused":
-      return [
-        { action: "resume", label: "继续", icon: "play" },
-        { action: "cancel", label: "取消", icon: "close", ghost: true },
-      ];
+      return [actionButton("resume", "继续", "play"), actionButton("cancel", "取消", "close", true)];
     case "failed":
     case "canceled":
-      return [{ action: "resume", label: "继续", icon: "play" }, REMOVE];
+      return [actionButton("resume", "继续", "play"), remove];
     case "done":
       return job.failed > 0
-        ? [{ action: "retry", label: `重试失败的 ${job.failed} 张`, icon: "retry" }, REMOVE]
-        : [REMOVE];
+        ? [{ action: "retry", label: t("重试失败的 {n} 张", { n: formatCount(job.failed) }), icon: "retry" }, remove]
+        : [remove];
   }
 }
 
@@ -54,10 +60,13 @@ function summary(jobs: Job[]): string {
   const running = jobs.filter((job) => job.status === "running").length;
   const queued = jobs.filter((job) => job.status === "queued").length;
   if (running + queued === 0) {
-    return jobs.length === 0 ? "下载的图片保存在「设置 → 存储」里的图片位置。" : "没有进行中的任务。";
+    return jobs.length === 0 ? t("下载的图片保存在「设置 → 存储」里的图片位置。") : t("没有进行中的任务。");
   }
-  const parts = [running > 0 ? `${running} 个正在下载` : "", queued > 0 ? `${queued} 个排队中` : ""];
-  return `${parts.filter(Boolean).join("，")}。一次下载一个任务，其余按加入顺序排队。`;
+  const parts = [
+    running > 0 ? t("{n} 个正在下载", { n: running }) : "",
+    queued > 0 ? t("{n} 个排队中", { n: queued }) : "",
+  ];
+  return t("{status}。一次下载一个任务，其余按加入顺序排队。", { status: parts.filter(Boolean).join(t("，::list")) });
 }
 
 function Progress({ job }: { job: Job }) {
@@ -77,22 +86,22 @@ function Progress({ job }: { job: Job }) {
         <i style={indeterminate ? undefined : { width: `${job.status === "done" ? 100 : (percent ?? 0)}%` }} />
       </div>
       <span className="job-count">
-        {job.total != null ? `${formatCount(done)} / ${formatCount(job.total)}` : `${formatCount(done)} 张`}
+        {job.total != null ? `${formatCount(done)} / ${formatCount(job.total)}` : t("{n} 张", { n: formatCount(done) })}
       </span>
     </div>
   );
 }
 
 function NoteList({ notes }: { notes: Notes | undefined }) {
-  if (notes === undefined || notes === "loading") return <p className="job-notes-hint">正在读取…</p>;
-  if (notes === "failed") return <p className="job-notes-hint">读取失败，请稍后再试。</p>;
-  if (notes.length === 0) return <p className="job-notes-hint">没有跳过或失败的图。</p>;
+  if (notes === undefined || notes === "loading") return <p className="job-notes-hint">{t("正在读取…")}</p>;
+  if (notes === "failed") return <p className="job-notes-hint">{t("读取失败，请稍后再试。")}</p>;
+  if (notes.length === 0) return <p className="job-notes-hint">{t("没有跳过或失败的图。")}</p>;
   return (
     <ul className="job-notes">
       {notes.map((note) => (
         <li key={`${note.postId}-${note.status}`}>
           <span className="mono">#{note.postId}</span>
-          <span className={`note-status ${note.status}`}>{note.status === "failed" ? "失败" : "跳过"}</span>
+          <span className={`note-status ${note.status}`}>{note.status === "failed" ? t("失败") : t("跳过")}</span>
           <span>{note.note ?? "—"}</span>
         </li>
       ))}
@@ -137,12 +146,12 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
     <div className="page">
       <header className="page-head" data-tauri-drag-region>
         <div className="page-title">
-          <h1>下载</h1>
+          <h1>{t("下载::page")}</h1>
           <p>{summary(jobs)}</p>
         </div>
         <button type="button" className="btn ghost" onClick={() => void run(clearFinished)} disabled={finished === 0}>
           <Icon name="trash" size={15} />
-          清除已完成
+          {t("清除已完成")}
         </button>
       </header>
 
@@ -151,7 +160,7 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
           <span>{error ?? loadError}</span>
           {error && (
             <button type="button" className="btn" onClick={() => setError(null)}>
-              关闭
+              {t("关闭")}
             </button>
           )}
         </div>
@@ -159,11 +168,11 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
 
       {loaded && jobs.length === 0 && !loadError && (
         <div className="empty page-block">
-          <p className="empty-title">还没有下载任务</p>
-          <p>在「发现」里勾选图片，或者点「下载全部结果」，任务会排在这里。</p>
+          <p className="empty-title">{t("还没有下载任务")}</p>
+          <p>{t("在「发现」里勾选图片，或者点「下载全部结果」，任务会排在这里。")}</p>
           <button type="button" className="btn primary" onClick={() => onNavigate("discover")}>
             <Icon name="compass" size={15} />
-            去发现
+            {t("去发现")}
           </button>
         </div>
       )}
@@ -186,7 +195,7 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
                   <span className="badge">{SOURCE_LABEL[job.source]}</span>
                   <h2 title={job.title}>{job.title}</h2>
                   <span className="job-status" data-status={job.status}>
-                    {STATUS_LABEL[job.status]}
+                    {statusLabel(job.status)}
                   </span>
                 </div>
                 <div className="job-actions">
@@ -205,24 +214,18 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
                 </div>
               </div>
               {job.query !== null && (
-                <code className="job-query" title="发给站点的查询">
-                  {job.query || "全部帖子"}
-                  {job.localFilter ? ` · 本地筛选 ${job.localFilter}` : ""}
-                  {job.maxPosts ? ` · 最多 ${formatCount(job.maxPosts)} 张` : ""}
+                <code className="job-query" title={t("发给站点的查询")}>
+                  {job.query || t("全部帖子")}
+                  {job.localFilter ? t(" · 本地筛选 {filter}", { filter: job.localFilter }) : ""}
+                  {job.maxPosts ? t(" · 最多 {n} 张", { n: formatCount(job.maxPosts) }) : ""}
                 </code>
               )}
               <Progress job={job} />
               <div className="job-meta">
-                <span>
-                  已保存 <b>{formatCount(job.saved)}</b>
-                </span>
-                <span>
-                  跳过 <b>{formatCount(job.skipped)}</b>
-                </span>
-                <span>
-                  失败 <b>{formatCount(job.failed)}</b>
-                </span>
-                <span>{formatTime(job.createdAt)} 加入</span>
+                <span>{tx("已保存 {n}", { n: <b>{formatCount(job.saved)}</b> })}</span>
+                <span>{tx("跳过 {n}", { n: <b>{formatCount(job.skipped)}</b> })}</span>
+                <span>{tx("失败 {n}", { n: <b>{formatCount(job.failed)}</b> })}</span>
+                <span>{t("{time} 加入", { time: formatTime(job.createdAt) })}</span>
                 {job.skipped + job.failed > 0 && (
                   <button
                     type="button"
@@ -230,7 +233,7 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
                     aria-expanded={open === job.id}
                     onClick={() => setOpen(open === job.id ? null : job.id)}
                   >
-                    {open === job.id ? "收起原因" : "查看跳过和失败的原因"}
+                    {open === job.id ? t("收起原因") : t("查看跳过和失败的原因")}
                   </button>
                 )}
               </div>

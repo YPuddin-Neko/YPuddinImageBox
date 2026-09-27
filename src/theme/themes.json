@@ -35,6 +35,7 @@
       "en": "Sakura Night",
       "mode": "dark",
       "mood": "墨蓝底配樱粉，默认主题",
+      "moodEn": "Ink blue with sakura pink. The default theme",
       "tokens": {
         "bg": "#0e0f14",
         "panel": "#14161d",
@@ -62,6 +63,7 @@
       "en": "Abyss",
       "mode": "dark",
       "mood": "藏青底配天蓝，冷静克制",
+      "moodEn": "Navy with sky blue, calm and restrained",
       "tokens": {
         "bg": "#0a1019",
         "panel": "#0f1623",
@@ -89,6 +91,7 @@
       "en": "Amber",
       "mode": "dark",
       "mood": "暖棕黑配琥珀，夜里看图不刺眼",
+      "moodEn": "Warm brown-black with amber, easy on the eyes at night",
       "tokens": {
         "bg": "#13110e",
         "panel": "#1a1713",
@@ -116,6 +119,7 @@
       "en": "Jade",
       "mode": "dark",
       "mood": "墨绿底配翡翠绿，柔和耐看",
+      "moodEn": "Deep green with jade, soft and easy on the eyes",
       "tokens": {
         "bg": "#0b1210",
         "panel": "#101916",
@@ -143,6 +147,7 @@
       "en": "Twilight",
       "mode": "dark",
       "mood": "紫调暗底配薰衣草紫",
+      "moodEn": "Dusky purple with lavender",
       "tokens": {
         "bg": "#100e17",
         "panel": "#16131f",
@@ -170,6 +175,7 @@
       "en": "OLED",
       "mode": "dark",
       "mood": "纯黑底、白色强调，适合 OLED 屏，图片最突出",
+      "moodEn": "Pure black with white accents. Made for OLED screens, lets images stand out the most",
       "tokens": {
         "bg": "#000000",
         "panel": "#0a0a0b",
@@ -197,6 +203,7 @@
       "en": "Mist",
       "mode": "light",
       "mood": "浅灰底配玫红，白天用",
+      "moodEn": "Light gray with rose, for daytime",
       "tokens": {
         "bg": "#f3f3f6",
         "panel": "#ffffff",
@@ -224,6 +231,7 @@
       "en": "Paper",
       "mode": "light",
       "mood": "暖白纸色配靛蓝",
+      "moodEn": "Warm paper white with indigo",
       "tokens": {
         "bg": "#f5f2ea",
         "panel": "#fcfaf5",

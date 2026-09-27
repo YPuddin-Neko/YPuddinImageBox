@@ -7,7 +7,9 @@ import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./styles/themes.css";
 import "./styles/app.css";
+import { setLanguage } from "./lib/i18n";
 import { isMac, isWindows } from "./lib/platform";
+import { languageCurrent } from "./lib/settings";
 import { applyTheme, loadPrefs, resolveThemeId, systemDarkQuery } from "./theme/themes";
 
 // 首帧前套上主题并标记平台，避免启动时闪一下默认配色。
@@ -23,10 +25,16 @@ window.addEventListener("unhandledrejection", (event) => {
   logError(`未处理的异常：${String(event.reason)}`).catch(() => {});
 });
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </React.StrictMode>,
-);
+// 先问 Rust 端用哪种语言（设置里选的，或者跟随系统）再渲染，免得先闪一下另一种语言。
+languageCurrent()
+  .catch(() => "zh" as const)
+  .then((language) => {
+    setLanguage(language);
+    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+      <React.StrictMode>
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
+      </React.StrictMode>,
+    );
+  });

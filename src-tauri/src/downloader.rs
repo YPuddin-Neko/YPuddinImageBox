@@ -18,6 +18,7 @@ use tokio::task::JoinSet;
 use url::Url;
 
 use crate::error::AppError;
+use crate::i18n::{text, tr};
 use crate::library::{now_ms, ItemStatus, JobInfo, JobItem, JobKind, JobStatus, Library, Subscription};
 use crate::net::Net;
 use crate::protocol::sniff;
@@ -33,11 +34,29 @@ const ATTEMPTS: u32 = 3;
 const FILE_TIMEOUT: Duration = Duration::from_secs(600);
 const IMAGE_EXTS: [&str; 6] = ["jpg", "jpeg", "png", "gif", "webp", "avif"];
 
-const NOTE_OWNED: &str = "已在图库中";
-const NOTE_DUPLICATE: &str = "图库里已有同一张图";
-const NOTE_NOT_IMAGE: &str = "不是图片（视频、动图压缩包等暂不下载）";
-const NOTE_NO_FILE: &str = "原图需要登录后才能下载";
-const NOTE_BAD_URL: &str = "原图地址无效";
+/// 跳过或失败的原因，写进任务记录，按写入时的界面语言。
+fn note_owned() -> &'static str {
+    text("已在图库中", "Already in the library")
+}
+
+fn note_duplicate() -> &'static str {
+    text("图库里已有同一张图", "The same image is already in the library")
+}
+
+fn note_not_image() -> &'static str {
+    text(
+        "不是图片（视频、动图压缩包等暂不下载）",
+        "Not an image (videos, animation archives and the like aren't downloaded)",
+    )
+}
+
+fn note_no_file() -> &'static str {
+    text("原图需要登录后才能下载", "Sign in to download the original")
+}
+
+fn note_bad_url() -> &'static str {
+    text("原图地址无效", "Invalid original file address")
+}
 
 /// 推给界面的变化。
 pub enum Event {
@@ -151,13 +170,20 @@ impl Downloader {
     // ---------- 界面操作 ----------
 
     pub async fn enqueue_posts(&self, posts: Vec<Post>) -> Result<JobInfo, AppError> {
-        let source = posts.first().map(|p| p.source).ok_or_else(|| AppError::Internal("没有选中图片".into()))?;
+        let source = posts
+            .first()
+            .map(|p| p.source)
+            .ok_or_else(|| AppError::Internal(tr!("没有选中图片", "No images selected")))?;
         if posts.iter().any(|p| p.source != source) {
-            return Err(AppError::Internal("一次只能下载同一个站点的图片".into()));
+            return Err(AppError::Internal(tr!(
+                "一次只能下载同一个站点的图片",
+                "Images from different sites can't be downloaded together"
+            )));
         }
+        let count = posts.len();
         let title = match posts.as_slice() {
             [post] => format!("#{}", post.id),
-            _ => format!("选中的 {} 张", posts.len()),
+            _ => tr!("选中的 {count} 张", "{count} selected images"),
         };
         let job = self.library.create_posts_job(source, &title, &posts).await?;
         self.emit(Event::Job(job.clone()));
@@ -244,7 +270,11 @@ impl Downloader {
     /// 立即检查一个订阅：建一个从上次处理到的 id 往新的方向翻页的下载任务。
     /// 这个订阅已经有检查任务在排队、下载或暂停时不重复建，返回 `None`。
     pub async fn check_subscription(&self, id: i64) -> Result<Option<JobInfo>, AppError> {
-        let sub = self.library.subscription(id).await?.ok_or_else(|| AppError::Internal("订阅不存在".into()))?;
+        let sub = self
+            .library
+            .subscription(id)
+            .await?
+            .ok_or_else(|| AppError::Internal(tr!("订阅不存在", "This subscription no longer exists")))?;
         if sub.active_job.is_some() {
             return Ok(None);
         }
@@ -442,7 +472,9 @@ impl Downloader {
                     let Some(joined) = joined else { continue };
                     let (task, outcome) = match joined {
                         Ok(done) => done,
-                        Err(err) => (err.id(), Outcome::Failed(format!("下载意外中断：{err}"))),
+                        Err(err) => {
+                            (err.id(), Outcome::Failed(tr!("下载意外中断：{err}", "The download stopped unexpectedly: {err}")))
+                        }
                     };
                     let Some((seq, source, post_id)) = running.remove(&task) else { continue };
                     if let Some(updated) =
@@ -493,20 +525,20 @@ impl Downloader {
     async fn save(&self, post: &Post) -> Result<Outcome, AppError> {
         if let Some(path) = self.library.local_path(post.source, post.id).await? {
             if exists(&path).await {
-                return Ok(Outcome::Skipped(NOTE_OWNED));
+                return Ok(Outcome::Skipped(note_owned()));
             }
         }
-        let Some(ext) = image_ext(post) else { return Ok(Outcome::Skipped(NOTE_NOT_IMAGE)) };
-        let Some(url) = post.file_url.as_deref() else { return Ok(Outcome::Failed(NOTE_NO_FILE.into())) };
+        let Some(ext) = image_ext(post) else { return Ok(Outcome::Skipped(note_not_image())) };
+        let Some(url) = post.file_url.as_deref() else { return Ok(Outcome::Failed(note_no_file().into())) };
         let url = match Url::parse(url) {
             // 只从帖子所属站点的域名下载。
             Ok(url) if sources::source_for_url(&url) == Some(post.source) => url,
-            _ => return Ok(Outcome::Failed(NOTE_BAD_URL.into())),
+            _ => return Ok(Outcome::Failed(note_bad_url().into())),
         };
         if let Some(md5) = post.md5.as_deref() {
             for path in self.library.paths_with_md5(md5, post.source, post.id).await? {
                 if exists(&path).await {
-                    return Ok(Outcome::Skipped(NOTE_DUPLICATE));
+                    return Ok(Outcome::Skipped(note_duplicate()));
                 }
             }
         }
@@ -612,12 +644,17 @@ impl FetchError {
 impl std::fmt::Display for FetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FetchError::Network(err) => write!(f, "网络错误：{}", crate::net::network_detail(err)),
-            FetchError::Status(code) => write!(f, "服务器返回 HTTP {code}"),
-            FetchError::Incomplete => f.write_str("文件没有下载完整"),
-            FetchError::Checksum => f.write_str("文件校验不通过（md5 不一致）"),
-            FetchError::NotImage => f.write_str("下载到的不是图片"),
-            FetchError::Io(err) => write!(f, "保存文件失败：{err}"),
+            FetchError::Network(err) => {
+                let detail = crate::net::network_detail(err);
+                f.write_str(&tr!("网络错误：{detail}", "Network error: {detail}"))
+            }
+            FetchError::Status(code) => f.write_str(&tr!("服务器返回 HTTP {code}", "The server returned HTTP {code}")),
+            FetchError::Incomplete => f.write_str(text("文件没有下载完整", "The file didn't download completely")),
+            FetchError::Checksum => {
+                f.write_str(text("文件校验不通过（md5 不一致）", "Checksum mismatch (the md5 doesn't match)"))
+            }
+            FetchError::NotImage => f.write_str(text("下载到的不是图片", "The downloaded file isn't an image")),
+            FetchError::Io(err) => f.write_str(&tr!("保存文件失败：{err}", "Couldn't save the file: {err}")),
             FetchError::Other(message) => f.write_str(message),
         }
     }
@@ -825,10 +862,10 @@ mod tests {
         assert_eq!(
             notes,
             vec![
-                (1, NOTE_OWNED.to_string()),
-                (2, NOTE_NOT_IMAGE.to_string()),
-                (3, NOTE_NO_FILE.to_string()),
-                (4, NOTE_BAD_URL.to_string()),
+                (1, note_owned().to_string()),
+                (2, note_not_image().to_string()),
+                (3, note_no_file().to_string()),
+                (4, note_bad_url().to_string()),
             ]
         );
         let events = h.events.lock().unwrap().clone();

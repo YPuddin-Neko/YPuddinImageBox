@@ -12,12 +12,13 @@ import { EVENTS, type SavedPayload } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
 import { hasMod, spaceForButton, useHotkeys } from "../../lib/hotkeys";
+import { collapsedTitle, sentences, t, tx } from "../../lib/i18n";
 import {
   countRemote,
   errorCode,
   errorMessage,
   postKey,
-  RATING_OPTIONS,
+  ratingOptions,
   RATINGS,
   remoteSortLabel,
   remoteSorts,
@@ -95,10 +96,10 @@ const PAGE_SIZE = 40;
 const RATING_DEBOUNCE_MS = 300;
 
 function countText(count: Bulk["count"]): string {
-  if (count === "loading") return "正在统计…";
-  if (count === "failed") return "暂时无法统计，可以直接开始";
-  if (count === null) return "站点没有给出总数（条件较复杂时会这样），可以直接开始";
-  return `约 ${formatCount(count)} 张`;
+  if (count === "loading") return t("正在统计…");
+  if (count === "failed") return t("暂时无法统计，可以直接开始");
+  if (count === null) return t("站点没有给出总数（条件较复杂时会这样），可以直接开始");
+  return t("约 {n} 张", { n: formatCount(count) });
 }
 
 export function Discover({ active, onNavigate }: { active: boolean; onNavigate: Navigate }) {
@@ -248,11 +249,11 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     try {
       if (currentSaved) {
         setSaved(await savedSearchRemove(currentSaved.id));
-        setToast({ message: `已取消收藏「${savedTitle(currentSaved)}」` });
+        setToast({ message: t("已取消收藏「{title}」", { title: savedTitle(currentSaved) }) });
       } else {
         const criteria = committed.current;
         setSaved(await savedSearchAdd(criteria));
-        setToast({ message: `已收藏「${criteria.tags.trim() || "全部帖子"}」` });
+        setToast({ message: t("已收藏「{title}」", { title: criteria.tags.trim() || t("全部帖子") }) });
       }
     } catch (err) {
       setToast({ message: errorMessage(err) });
@@ -299,7 +300,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   };
 
   const downloadPicked = async () => {
-    if (await enqueue(pickedPosts, `已加入下载队列：${pickedPosts.length} 张`)) clearPicks();
+    if (await enqueue(pickedPosts, t("已加入下载队列：{n} 张", { n: formatCount(pickedPosts.length) }))) clearPicks();
   };
 
   const openBulk = () => {
@@ -316,7 +317,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     setBulk(null);
     try {
       await addQuery(bulk.criteria, Number.isFinite(max) && max > 0 ? max : null);
-      setToast({ message: `已加入下载队列：${bulk.query || "全部帖子"}`, link: "downloads" });
+      setToast({ message: t("已加入下载队列：{query}", { query: bulk.query || t("全部帖子") }), link: "downloads" });
     } catch (err) {
       setToast({ message: errorMessage(err) });
     }
@@ -355,7 +356,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         draft.existing && Number.isFinite(max) && max > 0 ? max : null,
       );
       setSubscribing(null);
-      setToast({ message: `已订阅「${subscriptionTitle(sub)}」`, link: "subscriptions" });
+      setToast({ message: t("已订阅「{title}」", { title: subscriptionTitle(sub) }), link: "subscriptions" });
     } catch (err) {
       setSubscribing((current) => current && { ...current, busy: false, error: errorMessage(err) });
     }
@@ -388,7 +389,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
       if (picked.size > 0) {
         if (!busy) void downloadPicked();
       } else if (selectedPost?.fileUrl && selectedKey && !owned.has(selectedKey) && !queued.has(selectedKey) && !busy) {
-        void enqueue([selectedPost], `已加入下载队列：#${selectedPost.id}`);
+        void enqueue([selectedPost], t("已加入下载队列：#{id}", { id: selectedPost.id }));
       }
       return true;
     }
@@ -399,26 +400,26 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     owned.has(postKey(selectedPost)) ? (
       <button type="button" className="btn" disabled>
         <Icon name="check" size={15} />
-        已在图库中
+        {t("已在图库中")}
       </button>
     ) : queued.has(postKey(selectedPost)) ? (
       <button type="button" className="btn" disabled>
         <Icon name="check" size={15} />
-        已加入下载队列
+        {t("已加入下载队列")}
       </button>
     ) : selectedPost.fileUrl ? (
       <button
         type="button"
         className="btn primary"
         disabled={busy}
-        onClick={() => void enqueue([selectedPost], `已加入下载队列：#${selectedPost.id}`)}
+        onClick={() => void enqueue([selectedPost], t("已加入下载队列：#{id}", { id: selectedPost.id }))}
       >
         <Icon name="download" size={15} />
-        下载原图
+        {t("下载原图")}
       </button>
     ) : (
-      <button type="button" className="btn" disabled title="站点对未登录用户隐藏了这张图的原图">
-        原图需要登录后才能下载
+      <button type="button" className="btn" disabled title={t("站点对未登录用户隐藏了这张图的原图")}>
+        {t("原图需要登录后才能下载")}
       </button>
     )
   ) : null;
@@ -431,7 +432,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             <Select
               id="search-source"
               className="search-source"
-              name="来源"
+              name={t("来源")}
               value={source}
               options={SOURCE_OPTIONS}
               onChange={changeSource}
@@ -439,8 +440,8 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             <input
               id="search-tags"
               className="search-input"
-              aria-label="搜索 tag"
-              placeholder="输入 tag，空格分隔，例如 scenery sky"
+              aria-label={t("搜索 tag")}
+              placeholder={t("输入 tag，空格分隔，例如 scenery sky")}
               value={tags}
               onChange={(event) => setTags(event.target.value)}
               spellCheck={false}
@@ -448,14 +449,14 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             />
             <MenuButton
               className="search-bookmark"
-              name="收藏的搜索"
-              title={currentSaved ? "已收藏这个搜索" : "收藏这个搜索"}
+              name={t("收藏的搜索")}
+              title={currentSaved ? t("已收藏这个搜索") : t("收藏这个搜索")}
               state={currentSaved ? "saved" : undefined}
               disabled={!results}
               items={[
                 {
                   key: "toggle",
-                  label: currentSaved ? "取消收藏这个搜索" : "收藏这个搜索",
+                  label: currentSaved ? t("取消收藏这个搜索") : t("收藏这个搜索"),
                   selected: false,
                   divider: saved.length > 0,
                 },
@@ -476,7 +477,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             >
               <Icon name="bookmark" size={17} />
             </MenuButton>
-            <button type="submit" className="search-go" aria-label="搜索">
+            <button type="submit" className="search-go" aria-label={t("搜索")}>
               <Icon name="search" size={17} />
             </button>
           </form>
@@ -484,43 +485,57 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         <div className="filters">
           <MultiSelect
             className="filter-select"
-            name="分级"
-            label="分级"
-            allLabel="全部"
+            name={t("分级")}
+            label={t("分级")}
+            allLabel={t("全部")}
             values={ratings}
-            options={RATING_OPTIONS}
+            options={ratingOptions()}
             onChange={changeRatings}
           />
           <Select
             className="filter-select"
-            name="排序"
-            label="排序"
+            name={t("排序")}
+            label={t("排序")}
             value={sort}
             options={remoteSorts(source)}
             onChange={changeSort}
           />
           <span className="filters-space" />
           {results && (
-            <span className="query" title="实际发给站点的查询">
-              {results.query || "最新帖子"}
+            <span className="query" title={t("实际发给站点的查询")}>
+              {results.query || t("最新帖子")}
             </span>
           )}
           {results?.localFilter && (
             <span
               className="local-filter"
-              title={`站点一次能搜的 tag 数有限，「${results.localFilter}」在本地逐页筛选，加载会慢一些。登录后能直接搜更多 tag。`}
+              title={t("站点一次能搜的 tag 数有限，「{filter}」在本地逐页筛选，加载会慢一些。登录后能直接搜更多 tag。", {
+                filter: results.localFilter,
+              })}
             >
-              本地筛选 {results.localFilter}
+              {t("本地筛选 {filter}", { filter: results.localFilter })}
             </span>
           )}
-          <span className="count">{posts.length} 张</span>
-          <button type="button" className="btn sm" onClick={() => void openSubscribe()} disabled={!results || loading}>
+          <span className="count">{t("{n} 张", { n: formatCount(posts.length) })}</span>
+          <button
+            type="button"
+            className="btn sm collapsible"
+            title={collapsedTitle(t("订阅"))}
+            onClick={() => void openSubscribe()}
+            disabled={!results || loading}
+          >
             <Icon name="bell" size={14} />
-            订阅
+            <span className="btn-text">{t("订阅")}</span>
           </button>
-          <button type="button" className="btn sm" onClick={openBulk} disabled={posts.length === 0 || loading}>
+          <button
+            type="button"
+            className="btn sm collapsible"
+            title={collapsedTitle(t("下载全部结果"))}
+            onClick={openBulk}
+            disabled={posts.length === 0 || loading}
+          >
             <Icon name="download" size={14} />
-            下载全部结果
+            <span className="btn-text">{t("下载全部结果")}</span>
           </button>
         </div>
         <div className="scroll">
@@ -530,22 +545,22 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               {error.code === "credentials_missing" || error.code === "bad_credentials" ? (
                 <button type="button" className="btn" onClick={() => onNavigate("settings", "accounts")}>
                   <Icon name="user" size={15} />
-                  填写账号
+                  {t("填写账号")}
                 </button>
               ) : (
                 <button type="button" className="btn" onClick={() => void run(committed.current, error.cursor)}>
                   <Icon name="retry" size={15} />
-                  重试
+                  {t("重试")}
                 </button>
               )}
             </div>
           )}
-          {firstLoad && <p className="hint">正在加载…</p>}
+          {firstLoad && <p className="hint">{t("正在加载…")}</p>}
           {results && posts.length === 0 && !loading && !error && (
             <p className="hint">
               {committed.current.sort === "popular"
-                ? "没有找到符合条件的图片。「近期热门」只包含最近两天上传的图，可以换个排序再试。"
-                : "没有找到符合条件的图片。可以减少 tag 或放宽分级再试。"}
+                ? t("没有找到符合条件的图片。「近期热门」只包含最近两天上传的图，可以换个排序再试。")
+                : t("没有找到符合条件的图片。可以减少 tag 或放宽分级再试。")}
             </p>
           )}
           <PostGrid
@@ -560,7 +575,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
           <div ref={sentinel} className="sentinel" aria-hidden="true" />
           {results?.next && !error && (
             <button type="button" className="btn more" onClick={loadMore} disabled={loading}>
-              {loading ? "正在加载…" : "加载更多"}
+              {loading ? t("正在加载…") : t("加载更多")}
             </button>
           )}
         </div>
@@ -568,7 +583,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         <SelectionDock count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
           <button type="button" className="btn primary" onClick={() => void downloadPicked()} disabled={busy}>
             <Icon name="download" size={15} />
-            下载
+            {t("下载")}
           </button>
         </SelectionDock>
 
@@ -585,7 +600,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                   if (target) onNavigate(target);
                 }}
               >
-                查看
+                {t("查看")}
               </button>
             )
           }
@@ -596,16 +611,16 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
       <Dialog
         open={bulk !== null}
-        title="下载全部搜索结果？"
+        title={t("下载全部搜索结果？")}
         onClose={() => setBulk(null)}
         actions={
           <>
             <button type="button" className="btn primary" onClick={() => void confirmBulk()}>
               <Icon name="download" size={15} />
-              开始下载
+              {t("开始下载")}
             </button>
             <button type="button" className="btn ghost" onClick={() => setBulk(null)}>
-              取消
+              {t("取消")}
             </button>
           </>
         }
@@ -613,15 +628,19 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         {bulk && (
           <>
             <dl className="dialog-paths">
-              <dt>条件</dt>
+              <dt>{t("条件")}</dt>
               <dd>
-                <code>{bulk.query || "全部帖子"}</code>
-                {bulk.localFilter && <span className="dialog-sub">，本地筛选 <code>{bulk.localFilter}</code></span>}
+                <code>{bulk.query || t("全部帖子")}</code>
+                {bulk.localFilter && (
+                  <span className="dialog-sub">
+                    {tx("，本地筛选 {filter}", { filter: <code>{bulk.localFilter}</code> })}
+                  </span>
+                )}
               </dd>
-              <dt>数量</dt>
+              <dt>{t("数量")}</dt>
               <dd>{countText(bulk.count)}</dd>
               <dt>
-                <label htmlFor="bulk-max">上限</label>
+                <label htmlFor="bulk-max">{t("上限")}</label>
               </dt>
               <dd className="dialog-field">
                 <input
@@ -631,7 +650,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                   min={1}
                   step={1}
                   inputMode="numeric"
-                  placeholder="不限"
+                  placeholder={t("不限")}
                   value={bulk.max}
                   onChange={(event) => {
                     const max = event.target.value;
@@ -640,19 +659,19 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 />
                 <span>
                   {bulk.criteria.sort === "newest"
-                    ? "张，留空表示全部下载"
-                    : `张，按「${remoteSortLabel(bulk.criteria.sort)}」取排在前面的，留空表示全部下载`}
+                    ? t("张，留空表示全部下载")
+                    : t("张，按「{sort}」取排在前面的，留空表示全部下载", { sort: remoteSortLabel(bulk.criteria.sort) })}
                 </span>
               </dd>
             </dl>
-            <p className="dialog-note">已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。</p>
+            <p className="dialog-note">{t("已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。")}</p>
           </>
         )}
       </Dialog>
 
       <Dialog
         open={subscribing !== null}
-        title="订阅这个搜索条件？"
+        title={t("订阅这个搜索条件？")}
         onClose={() => setSubscribing(null)}
         actions={
           <>
@@ -663,10 +682,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               disabled={subscribing?.busy}
             >
               <Icon name="bell" size={15} />
-              {subscribing?.busy ? "正在订阅…" : "订阅"}
+              {subscribing?.busy ? t("正在订阅…") : t("订阅")}
             </button>
             <button type="button" className="btn ghost" onClick={() => setSubscribing(null)}>
-              取消
+              {t("取消")}
             </button>
           </>
         }
@@ -674,27 +693,29 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         {subscribing && (
           <>
             <dl className="dialog-paths">
-              <dt>条件</dt>
+              <dt>{t("条件")}</dt>
               <dd>
-                <code>{subscribing.query || "全部帖子"}</code>
+                <code>{subscribing.query || t("全部帖子")}</code>
                 {subscribing.localFilter && (
-                  <span className="dialog-sub">，本地筛选 <code>{subscribing.localFilter}</code></span>
+                  <span className="dialog-sub">
+                    {tx("，本地筛选 {filter}", { filter: <code>{subscribing.localFilter}</code> })}
+                  </span>
                 )}
               </dd>
               <dt>
-                <label htmlFor="subscribe-interval">检查</label>
+                <label htmlFor="subscribe-interval">{t("检查")}</label>
               </dt>
               <dd className="dialog-field">
                 <Select
                   id="subscribe-interval"
                   className="select"
-                  name="检查间隔"
+                  name={t("检查间隔")}
                   value={subscribing.interval}
                   options={intervalOptions()}
                   onChange={(interval) => setSubscribing((current) => current && { ...current, interval })}
                 />
               </dd>
-              <dt>已有的图</dt>
+              <dt>{t("已有的图")}</dt>
               <dd className="dialog-choices">
                 <label className="choice">
                   <input
@@ -703,7 +724,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                     checked={!subscribing.existing}
                     onChange={() => setSubscribing((current) => current && { ...current, existing: false })}
                   />
-                  不下载，只下载以后的新图
+                  {t("不下载，只下载以后的新图")}
                 </label>
                 <label className="choice">
                   <input
@@ -712,32 +733,36 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                     checked={subscribing.existing}
                     onChange={() => setSubscribing((current) => current && { ...current, existing: true })}
                   />
-                  现在也下载，最多
-                  <input
-                    className="field-input"
-                    type="number"
-                    min={1}
-                    step={1}
-                    inputMode="numeric"
-                    placeholder="不限"
-                    aria-label="最多下载多少张已有的图"
-                    value={subscribing.max}
-                    onFocus={() => setSubscribing((current) => current && { ...current, existing: true })}
-                    onChange={(event) => {
-                      const max = event.target.value;
-                      setSubscribing((current) => current && { ...current, max, existing: true });
-                    }}
-                  />
-                  张
+                  {tx("现在也下载，最多{input}张", {
+                    input: (
+                      <input
+                        className="field-input"
+                        type="number"
+                        min={1}
+                        step={1}
+                        inputMode="numeric"
+                        placeholder={t("不限")}
+                        aria-label={t("最多下载多少张已有的图")}
+                        value={subscribing.max}
+                        onFocus={() => setSubscribing((current) => current && { ...current, existing: true })}
+                        onChange={(event) => {
+                          const max = event.target.value;
+                          setSubscribing((current) => current && { ...current, max, existing: true });
+                        }}
+                      />
+                    ),
+                  })}
                 </label>
               </dd>
             </dl>
             {subscribing.error && <p className="form-error">{subscribing.error}</p>}
             <p className="dialog-note">
-              以后按设定的间隔检查，有新图就自动下载。
-              {subscribing.criteria.sort !== "newest" &&
-                `订阅按上传先后找新图，不使用「${remoteSortLabel(subscribing.criteria.sort)}」排序。`}
-              关掉窗口后会在后台继续，可以在「设置 → 通用」里修改。
+              {sentences(
+                t("以后按设定的间隔检查，有新图就自动下载。"),
+                subscribing.criteria.sort !== "newest" &&
+                  t("订阅按上传先后找新图，不使用「{sort}」排序。", { sort: remoteSortLabel(subscribing.criteria.sort) }),
+                t("关掉窗口后会在后台继续，可以在「设置 → 通用」里修改。"),
+              )}
             </p>
           </>
         )}

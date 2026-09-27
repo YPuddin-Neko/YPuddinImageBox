@@ -1,33 +1,60 @@
 use serde::Serialize;
 
-/// 返回给前端的错误。序列化为 `{ code, message }`，界面按 code 决定怎么提示。
+use crate::i18n::tr;
+
+/// 返回给前端的错误。序列化为 `{ code, message }`，界面按 code 决定怎么提示；message 按当前界面语言生成。
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    #[error("网络请求失败：{}", crate::net::network_detail(.0))]
     Network(#[from] reqwest::Error),
-    #[error("{site} 返回 HTTP {status}")]
     Http { site: &'static str, status: u16 },
-    #[error("{site} 一次最多搜索 {limit} 个 tag，排除项和 order: 也计入")]
     TagLimit { site: &'static str, limit: u32 },
-    #[error("{site}：{message}")]
+    /// 站点自己返回的错误说明，原样显示。
     Upstream { site: &'static str, message: String },
-    #[error("{0} 需要账号和 API Key")]
     CredentialsMissing(&'static str),
-    #[error("{site} 的响应无法解析：{detail}")]
     Parse { site: &'static str, detail: String },
-    #[error("{0}")]
     Storage(#[from] crate::storage::StorageError),
-    #[error("图库数据库出错：{0}")]
     Database(#[from] sqlx::Error),
     /// 用户填写的内容不对，消息直接给用户看。
-    #[error("{0}")]
     InvalidInput(String),
-    #[error("{site} 的账号或 API Key 不对")]
     BadCredentials { site: &'static str },
-    #[error("读写系统钥匙串失败：{0}")]
     Keychain(String),
-    #[error("{0}")]
     Internal(String),
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            AppError::Network(err) => {
+                let detail = crate::net::network_detail(err);
+                tr!("网络请求失败：{detail}", "Network request failed: {detail}")
+            }
+            AppError::Http { site, status } => tr!("{site} 返回 HTTP {status}", "{site} returned HTTP {status}"),
+            AppError::TagLimit { site, limit } => tr!(
+                "{site} 一次最多搜索 {limit} 个 tag，排除项和 order: 也计入",
+                "{site} allows at most {limit} tags per search, counting excluded tags and order:"
+            ),
+            AppError::Upstream { site, message } => tr!("{site}：{message}", "{site}: {message}"),
+            AppError::CredentialsMissing(site) => {
+                tr!("{site} 需要账号和 API Key", "{site} requires an account and an API key")
+            }
+            AppError::Parse { site, detail } => {
+                tr!("{site} 的响应无法解析：{detail}", "Couldn't read the response from {site}: {detail}")
+            }
+            AppError::Storage(err) => err.to_string(),
+            AppError::Database(err) => tr!("图库数据库出错：{err}", "Library database error: {err}"),
+            AppError::InvalidInput(message) | AppError::Internal(message) => message.clone(),
+            AppError::BadCredentials { site } => {
+                tr!("{site} 的账号或 API Key 不对", "The {site} account or API key is incorrect")
+            }
+            AppError::Keychain(detail) if cfg!(target_os = "windows") => {
+                tr!("读写 Windows 凭据管理器失败：{detail}", "Couldn't access Windows Credential Manager: {detail}")
+            }
+            AppError::Keychain(detail) => {
+                tr!("读写系统钥匙串失败：{detail}", "Couldn't access the system keychain: {detail}")
+            }
+        };
+        f.write_str(&message)
+    }
 }
 
 impl AppError {

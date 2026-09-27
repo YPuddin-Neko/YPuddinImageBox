@@ -4,6 +4,7 @@
 //! 钥匙串调用可能等待系统弹窗，这里的函数都要在阻塞线程里调用。
 
 use crate::error::AppError;
+use crate::i18n::{text, tr};
 use crate::settings::{AccountNames, KeyStorage, SavedAccount, Settings};
 use crate::sources::{Accounts, Source};
 use crate::{sealed, secrets};
@@ -18,7 +19,10 @@ fn context(source: Source, name: &str) -> String {
 fn read(settings: &Settings, source: Source, saved: &SavedAccount) -> Result<Option<String>, AppError> {
     match (&saved.sealed_key, &settings.key_salt) {
         (Some(sealed), Some(salt)) => sealed::open(sealed, salt, &context(source, &saved.name)).map(Some),
-        (Some(_), None) => Err(AppError::Internal("设置文件里缺少加密盐，请重新填写 API Key".into())),
+        (Some(_), None) => Err(AppError::Internal(tr!(
+            "设置文件里缺少加密盐，请重新填写 API Key",
+            "The settings file is missing its encryption salt. Enter the API key again"
+        ))),
         (None, _) => secrets::read(source, &saved.name),
     }
 }
@@ -32,10 +36,13 @@ pub fn load(settings: &Settings) -> (Accounts, Option<String>) {
         match read(settings, source, saved) {
             Ok(Some(key)) => accounts.set(source, Some((saved.name.clone(), key))),
             Ok(None) => {}
-            Err(err) => errors.push(format!("{}：{err}", source.site_name())),
+            Err(err) => {
+                let site = source.site_name();
+                errors.push(tr!("{site}：{err}", "{site}: {err}"));
+            }
         }
     }
-    (accounts, (!errors.is_empty()).then(|| errors.join("；")))
+    (accounts, (!errors.is_empty()).then(|| errors.join(text("；", "; "))))
 }
 
 /// 按当前方式保存一个账号的 Key，返回写进设置的密文（钥匙串方式为 `None`）。

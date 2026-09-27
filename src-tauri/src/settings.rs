@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::error::AppError;
+use crate::i18n::{tr, LanguageSetting};
 use crate::sources::Source;
 
 pub const FILE_NAME: &str = "settings.json";
@@ -32,6 +33,9 @@ pub struct Settings {
     /// 关闭窗口后在后台继续运行（订阅检查和下载不中断），从菜单栏 / 托盘图标重新打开。
     #[serde(default = "default_true")]
     pub close_to_tray: bool,
+    /// 界面语言。
+    #[serde(default)]
+    pub language: LanguageSetting,
 }
 
 fn default_true() -> bool {
@@ -46,6 +50,7 @@ impl Default for Settings {
             key_storage: KeyStorage::default(),
             key_salt: None,
             close_to_tray: true,
+            language: LanguageSetting::default(),
         }
     }
 }
@@ -144,28 +149,32 @@ impl Settings {
             fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
             fs::rename(&temp, &file)
         };
-        write().map_err(|e| AppError::Internal(format!("保存设置失败：{e}")))
+        write().map_err(|e| AppError::Internal(tr!("保存设置失败：{e}", "Couldn't save the settings: {e}")))
     }
 }
 
 /// 检查手动代理地址：支持 http、https、socks5、socks5h；没写协议时按 http 处理
 /// （常见的「127.0.0.1:7890」直接可用）。socks 代理没有默认端口，必须写明。
 pub fn parse_proxy_url(value: &str) -> Result<Url, AppError> {
-    let invalid = |detail: &str| AppError::InvalidInput(format!("代理地址{detail}，例如 http://127.0.0.1:7890"));
+    const EXAMPLE: &str = "http://127.0.0.1:7890";
+    let invalid = |zh: &str, en: &str| AppError::InvalidInput(tr!("代理地址{zh}，例如 {EXAMPLE}", "{en}, e.g. {EXAMPLE}"));
     let value = value.trim();
     if value.is_empty() {
-        return Err(invalid("不能为空"));
+        return Err(invalid("不能为空", "Enter a proxy address"));
     }
     let with_scheme = if value.contains("://") { value.to_string() } else { format!("http://{value}") };
-    let url = Url::parse(&with_scheme).map_err(|_| invalid("格式不对"))?;
+    let url = Url::parse(&with_scheme).map_err(|_| invalid("格式不对", "The proxy address isn't valid"))?;
     if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") {
-        return Err(AppError::InvalidInput("代理只支持 http、https、socks5 和 socks5h".into()));
+        return Err(AppError::InvalidInput(tr!(
+            "代理只支持 http、https、socks5 和 socks5h",
+            "Only http, https, socks5 and socks5h proxies are supported"
+        )));
     }
     if url.host_str().is_none_or(str::is_empty) {
-        return Err(invalid("缺少主机"));
+        return Err(invalid("缺少主机", "The proxy address is missing a host"));
     }
     if url.port_or_known_default().is_none() {
-        return Err(invalid("缺少端口"));
+        return Err(invalid("缺少端口", "The proxy address is missing a port"));
     }
     Ok(url)
 }
@@ -209,6 +218,7 @@ mod tests {
             key_storage: KeyStorage::File,
             key_salt: Some("salt".into()),
             close_to_tray: false,
+            language: LanguageSetting::En,
         };
         settings.save(&dir.path().join("nested")).unwrap();
         assert_eq!(Settings::load(&dir.path().join("nested")), settings);

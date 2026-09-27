@@ -1,16 +1,20 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
+import { t, type Msg } from "./i18n";
+
 export type Source = "danbooru" | "gelbooru";
 export type Rating = "general" | "sensitive" | "questionable" | "explicit";
 
 export const RATINGS: Rating[] = ["general", "sensitive", "questionable", "explicit"];
 
-export const RATING_LABEL: Record<Rating, string> = {
+const RATING_LABEL: Record<Rating, Msg> = {
   general: "一般",
   sensitive: "敏感",
   questionable: "存疑",
   explicit: "成人",
 };
+
+export const ratingLabel = (rating: Rating) => t(RATING_LABEL[rating]);
 
 export const SOURCE_LABEL: Record<Source, string> = {
   danbooru: "Danbooru",
@@ -19,12 +23,12 @@ export const SOURCE_LABEL: Record<Source, string> = {
 
 export const SOURCES = Object.keys(SOURCE_LABEL) as Source[];
 export const SOURCE_OPTIONS = SOURCES.map((value) => ({ value, label: SOURCE_LABEL[value] }));
-export const RATING_OPTIONS = RATINGS.map((value) => ({ value, label: RATING_LABEL[value] }));
+export const ratingOptions = () => RATINGS.map((value) => ({ value, label: ratingLabel(value) }));
 
 /** 站点搜索的排序；默认按上传先后，新的在前。 */
 export type RemoteSort = "newest" | "oldest" | "score" | "favorites" | "popular" | "resolution" | "filesize";
 
-const REMOTE_SORTS: { value: RemoteSort; label: string; hint?: string; danbooruOnly?: boolean }[] = [
+const REMOTE_SORTS: { value: RemoteSort; label: Msg; hint?: Msg; danbooruOnly?: boolean }[] = [
   { value: "newest", label: "最新上传" },
   { value: "oldest", label: "最早上传" },
   { value: "score", label: "分数最高" },
@@ -38,12 +42,15 @@ const REMOTE_SORTS: { value: RemoteSort; label: string; hint?: string; danbooruO
 export function remoteSorts(source: Source) {
   return REMOTE_SORTS.filter((sort) => source === "danbooru" || !sort.danbooruOnly).map(({ value, label, hint }) => ({
     value,
-    label,
-    hint,
+    label: t(label),
+    hint: hint && t(hint),
   }));
 }
 
-export const remoteSortLabel = (sort: RemoteSort) => REMOTE_SORTS.find((option) => option.value === sort)?.label ?? "";
+export function remoteSortLabel(sort: RemoteSort): string {
+  const option = REMOTE_SORTS.find((item) => item.value === sort);
+  return option ? t(option.label) : "";
+}
 
 export interface PostTags {
   artist: string[];

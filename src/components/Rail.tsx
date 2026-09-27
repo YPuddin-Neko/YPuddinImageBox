@@ -1,19 +1,20 @@
 import appIcon from "../assets/app-icon.png";
+import { t, type Msg } from "../lib/i18n";
 import { Icon, type IconName } from "./Icon";
 
 export type View = "discover" | "library" | "subscriptions" | "downloads" | "settings";
 
 interface Item {
   view: View;
-  label: string;
+  label: Msg;
   icon: IconName;
 }
 
 const ITEMS: Item[] = [
   { view: "discover", label: "发现", icon: "compass" },
   { view: "library", label: "图库", icon: "library" },
-  { view: "subscriptions", label: "订阅", icon: "bell" },
-  { view: "downloads", label: "下载", icon: "download" },
+  { view: "subscriptions", label: "订阅::page", icon: "bell" },
+  { view: "downloads", label: "下载::page", icon: "download" },
 ];
 
 const SETTINGS: Item = { view: "settings", label: "设置", icon: "gear" };
@@ -28,13 +29,14 @@ interface RailProps {
 export function Rail({ view, onChange, badges = {} }: RailProps) {
   const button = (item: Item) => {
     const badge = badges[item.view] ?? 0;
+    const label = t(item.label);
     return (
       <button
         key={item.view}
         type="button"
         className="rail-btn"
-        aria-label={badge > 0 ? `${item.label}（${badge} 个进行中）` : item.label}
-        title={item.label}
+        aria-label={badge > 0 ? t("{label}（{n} 个进行中）", { label, n: badge }) : label}
+        title={label}
         aria-current={view === item.view ? "page" : undefined}
         onClick={() => onChange(item.view)}
       >
@@ -44,7 +46,7 @@ export function Rail({ view, onChange, badges = {} }: RailProps) {
     );
   };
   return (
-    <nav className="rail" aria-label="主导航" data-tauri-drag-region>
+    <nav className="rail" aria-label={t("主导航")} data-tauri-drag-region>
       <img className="rail-logo" src={appIcon} alt="" draggable={false} data-tauri-drag-region />
       {ITEMS.map(button)}
       <span className="rail-space" data-tauri-drag-region />

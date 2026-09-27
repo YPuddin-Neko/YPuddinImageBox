@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 
 import { Icon } from "../../components/Icon";
 import { Toast, useToast } from "../../components/Toast";
+import { t, type Msg } from "../../lib/i18n";
 import { errorMessage } from "../../lib/ipc";
 import { proxyInfo, proxySave, proxyTest, type ProxyMode, type ProxySettings } from "../../lib/settings";
 
-const OPTIONS: { mode: ProxyMode; title: string; description: string }[] = [
+const OPTIONS: { mode: ProxyMode; title: Msg; description?: Msg }[] = [
   { mode: "system", title: "跟随系统", description: "使用系统设置里的代理，没设置就直接连接" },
   { mode: "none", title: "不使用代理", description: "总是直接连接站点" },
-  { mode: "manual", title: "手动设置", description: "" },
+  { mode: "manual", title: "手动设置" },
 ];
 
 type TestState = { state: "idle" } | { state: "testing" } | { state: "ok"; ms: number } | { state: "failed"; message: string };
@@ -55,7 +56,7 @@ export function NetworkSettings() {
       const next = await proxySave(draft);
       setSaved(next);
       setDraft(next);
-      setNotice("代理设置已保存，之后的请求立即使用");
+      setNotice(t("代理设置已保存，之后的请求立即使用"));
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -68,14 +69,14 @@ export function NetworkSettings() {
   return (
     <div className="settings-page">
       <header className="settings-head">
-        <h1>网络</h1>
-        <p>代理用于搜索、预览图和原图下载，保存后立即生效。</p>
+        <h1>{t("网络")}</h1>
+        <p>{t("代理用于搜索、预览图和原图下载，保存后立即生效。")}</p>
       </header>
 
       <div className="set-list">
         <section className="set-card" aria-labelledby="proxy-title">
           <div className="set-title">
-            <h2 id="proxy-title">代理</h2>
+            <h2 id="proxy-title">{t("代理")}</h2>
           </div>
           <div className="options" role="radiogroup" aria-labelledby="proxy-title">
             {OPTIONS.map((option) => (
@@ -86,20 +87,20 @@ export function NetworkSettings() {
                   checked={draft.mode === option.mode}
                   onChange={() => change({ ...draft, mode: option.mode })}
                 />
-                <span className="option-title">{option.title}</span>
+                <span className="option-title">{t(option.title)}</span>
                 {option.mode === "manual" ? (
                   <input
                     className="field-input option-input"
-                    aria-label="代理地址"
+                    aria-label={t("代理地址")}
                     value={draft.url}
-                    placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                    placeholder={t("http://127.0.0.1:7890 或 socks5://127.0.0.1:1080")}
                     spellCheck={false}
                     autoComplete="off"
                     onFocus={() => draft.mode !== "manual" && change({ ...draft, mode: "manual" })}
                     onChange={(event) => change({ mode: "manual", url: event.target.value })}
                   />
                 ) : (
-                  <span className="option-desc">{option.description}</span>
+                  <span className="option-desc">{option.description && t(option.description)}</span>
                 )}
               </label>
             ))}
@@ -107,14 +108,14 @@ export function NetworkSettings() {
           <div className="set-line">
             <button type="button" className="btn" onClick={() => void runTest()} disabled={test.state === "testing"}>
               <Icon name="globe" size={15} />
-              {test.state === "testing" ? "正在连接…" : "测试连接"}
+              {test.state === "testing" ? t("正在连接…") : t("测试连接")}
             </button>
             <span className="test-result" data-state={test.state} role="status">
-              {test.state === "ok" && `连接正常，访问 Danbooru 用了 ${test.ms} ms`}
+              {test.state === "ok" && t("连接正常，访问 Danbooru 用了 {ms} ms", { ms: test.ms })}
               {test.state === "failed" && test.message}
             </span>
             <button type="button" className="btn primary" onClick={() => void save()} disabled={!dirty || saving}>
-              {saving ? "正在保存…" : "保存"}
+              {saving ? t("正在保存…") : t("保存")}
             </button>
           </div>
           {error && <p className="form-error">{error}</p>}

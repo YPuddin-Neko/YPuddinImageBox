@@ -11,6 +11,7 @@ import { Library } from "./features/library/Library";
 import { Settings, type SettingsSection } from "./features/settings/Settings";
 import { Subscriptions } from "./features/subscriptions/Subscriptions";
 import { dialogOpen, hasMod } from "./lib/hotkeys";
+import { useLanguage } from "./lib/i18n";
 import { VIEW_VARIANTS } from "./lib/motion";
 import type { Navigate } from "./lib/nav";
 import { isWindows } from "./lib/platform";
@@ -96,6 +97,8 @@ function Shell() {
 }
 
 export default function App() {
+  // 切换语言时从这里整个重新渲染。
+  useLanguage();
   return (
     <ThemeProvider>
       {/* 系统开启「减弱动态效果」时，Motion 只保留淡入淡出，不做位移。 */}

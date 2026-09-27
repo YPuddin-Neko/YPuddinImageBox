@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
+use crate::i18n::{self, text, tr, Language, LanguageSetting};
 use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery, NewSubscription, SavedSearch, Subscription};
 use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
@@ -108,7 +109,7 @@ pub async fn download_query(
     let plan = filter::plan_query(params.source, &tags, &params.ratings, tag_limit(&state, params.source))?;
     let count_query = sources::build_query(params.source, &params.tags_for_count()?, &params.ratings);
     let words = params.tags.split_whitespace().collect::<Vec<_>>().join(" ");
-    let title = if words.is_empty() { "全部帖子".to_string() } else { words };
+    let title = if words.is_empty() { text("全部帖子", "All posts").to_string() } else { words };
     let local = plan.local.to_query();
     state
         .downloader
@@ -233,6 +234,13 @@ fn join_error(err: tauri::Error) -> AppError {
 /// 检查间隔的下限：太频繁对站点不友好，新图也不会那么快出现。
 const MIN_INTERVAL_MINUTES: u32 = 30;
 
+fn interval_too_short() -> AppError {
+    AppError::InvalidInput(tr!(
+        "检查间隔至少 {MIN_INTERVAL_MINUTES} 分钟",
+        "The check interval must be at least {MIN_INTERVAL_MINUTES} minutes"
+    ))
+}
+
 #[tauri::command]
 pub async fn subscriptions_list(state: State<'_, AppState>) -> Result<Vec<Subscription>, AppError> {
     Ok(state.library.subscriptions().await?)
@@ -289,10 +297,13 @@ pub async fn subscription_create(
     let plan = filter::plan_query(params.source, &params.tags, &params.ratings, tag_limit(&state, params.source))?;
     let query = plan.server_query.clone();
     if sources::has_custom_order(&query) {
-        return Err(AppError::InvalidInput("订阅按上传先后找新图，条件里不能带 order: 或 sort: 这类排序".into()));
+        return Err(AppError::InvalidInput(tr!(
+            "订阅按上传先后找新图，条件里不能带 order: 或 sort: 这类排序",
+            "Subscriptions find new posts by upload time, so the search can't include sorting like order: or sort:"
+        )));
     }
     if interval_minutes < MIN_INTERVAL_MINUTES {
-        return Err(AppError::InvalidInput(format!("检查间隔至少 {MIN_INTERVAL_MINUTES} 分钟")));
+        return Err(interval_too_short());
     }
     // 顺便验证条件能搜（tag 数量、账号），出错直接提示，不建订阅。
     let accounts = state.accounts.get();
@@ -330,13 +341,13 @@ pub async fn subscription_update(
     interval_minutes: Option<u32>,
 ) -> Result<Subscription, AppError> {
     if interval_minutes.is_some_and(|m| m < MIN_INTERVAL_MINUTES) {
-        return Err(AppError::InvalidInput(format!("检查间隔至少 {MIN_INTERVAL_MINUTES} 分钟")));
+        return Err(interval_too_short());
     }
     let sub = state
         .library
         .update_subscription(id, enabled, interval_minutes.map(i64::from))
         .await?
-        .ok_or_else(|| AppError::Internal("订阅不存在".into()))?;
+        .ok_or_else(|| AppError::Internal(tr!("订阅不存在", "This subscription no longer exists")))?;
     state.downloader.reschedule();
     Ok(sub)
 }
@@ -366,16 +377,31 @@ pub async fn subscriptions_check_all(state: State<'_, AppState>) -> Result<usize
 pub struct GeneralInfo {
     close_to_tray: bool,
     launch_at_login: bool,
+    language: LanguageSetting,
+    /// 实际使用的语言（跟随系统时是系统语言对应的那一种）。
+    resolved_language: Language,
     log_file: PathBuf,
 }
 
 fn general_info_of(app: &AppHandle, state: &AppState) -> GeneralInfo {
     use tauri_plugin_autostart::ManagerExt;
+    let (close_to_tray, language) = {
+        let settings = state.settings();
+        (settings.close_to_tray, settings.language)
+    };
     GeneralInfo {
-        close_to_tray: state.settings().close_to_tray,
+        close_to_tray,
         launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
+        language,
+        resolved_language: i18n::current(),
         log_file: crate::log_file(&state.storage().path(StorageKind::Data)),
     }
+}
+
+/// 界面启动时先问用哪种语言，再开始渲染。
+#[tauri::command]
+pub fn language_current() -> Language {
+    i18n::current()
 }
 
 #[tauri::command]
@@ -389,14 +415,23 @@ pub fn general_save(
     state: State<'_, AppState>,
     close_to_tray: bool,
     launch_at_login: bool,
+    language: LanguageSetting,
 ) -> Result<GeneralInfo, AppError> {
     use tauri_plugin_autostart::ManagerExt;
     let autostart = app.autolaunch();
     if autostart.is_enabled().unwrap_or(false) != launch_at_login {
         let result = if launch_at_login { autostart.enable() } else { autostart.disable() };
-        result.map_err(|e| AppError::Internal(format!("设置开机启动失败：{e}")))?;
+        result.map_err(|e| AppError::Internal(tr!("设置开机启动失败：{e}", "Couldn't change launch at login: {e}")))?;
     }
-    state.update_settings(|settings| settings.close_to_tray = close_to_tray)?;
+    let changed = state.settings().language != language;
+    state.update_settings(|settings| {
+        settings.close_to_tray = close_to_tray;
+        settings.language = language;
+    })?;
+    if changed {
+        i18n::set(language.resolve());
+        crate::refresh_tray(&app);
+    }
     Ok(general_info_of(&app, &state))
 }
 
@@ -464,11 +499,14 @@ pub async fn account_save(
     let name = name.trim().to_string();
     let api_key = api_key.trim().to_string();
     if name.is_empty() {
-        let field = if source == Source::Danbooru { "用户名" } else { "User ID" };
-        return Err(AppError::InvalidInput(format!("请填写{field}")));
+        return Err(AppError::InvalidInput(if source == Source::Danbooru {
+            tr!("请填写用户名", "Enter your username")
+        } else {
+            tr!("请填写 User ID", "Enter your User ID")
+        }));
     }
     if api_key.is_empty() {
-        return Err(AppError::InvalidInput("请填写 API Key".into()));
+        return Err(AppError::InvalidInput(tr!("请填写 API Key", "Enter your API key")));
     }
     let level = match source {
         Source::Danbooru => {

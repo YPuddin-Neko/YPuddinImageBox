@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { t } from "../lib/i18n";
+
 /**
  * Windows 上不用系统标题栏：右上角自己画最小化、最大化 / 还原、关闭，尺寸和系统的一样（46 × 32）；
  * 顶部一条拖拽区可以拖动窗口，双击最大化。关闭按钮照常走「关闭窗口时」的设置。
@@ -25,7 +27,7 @@ export function WindowControls() {
     <>
       <div className="titlebar-drag" data-tauri-drag-region />
       <div className="window-controls">
-        <button type="button" className="window-control" aria-label="最小化" onClick={() => void win.minimize()}>
+        <button type="button" className="window-control" aria-label={t("最小化")} onClick={() => void win.minimize()}>
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
             <path d="M0 5h10" />
           </svg>
@@ -33,7 +35,7 @@ export function WindowControls() {
         <button
           type="button"
           className="window-control"
-          aria-label={maximized ? "还原" : "最大化"}
+          aria-label={maximized ? t("还原") : t("最大化")}
           onClick={() => void win.toggleMaximize()}
         >
           {maximized ? (
@@ -46,7 +48,7 @@ export function WindowControls() {
             </svg>
           )}
         </button>
-        <button type="button" className="window-control close" aria-label="关闭" onClick={() => void win.close()}>
+        <button type="button" className="window-control close" aria-label={t("关闭")} onClick={() => void win.close()}>
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
             <path d="m0 0 10 10M10 0 0 10" />
           </svg>

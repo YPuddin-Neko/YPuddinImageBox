@@ -5,10 +5,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Icon } from "../../components/Icon";
 import { ShimmerImage } from "../../components/ShimmerImage";
 import { formatBytes } from "../../lib/format";
+import { t, type Msg } from "../../lib/i18n";
+import { imageSrc, ratingLabel, SOURCE_LABEL, type Post, type PostTags } from "../../lib/ipc";
 import { PANEL_ENTER } from "../../lib/motion";
-import { imageSrc, RATING_LABEL, SOURCE_LABEL, type Post, type PostTags } from "../../lib/ipc";
 
-const TAG_GROUPS: { key: keyof PostTags; label: string }[] = [
+const TAG_GROUPS: { key: keyof PostTags; label: Msg }[] = [
   { key: "artist", label: "画师" },
   { key: "copyright", label: "作品" },
   { key: "character", label: "角色" },
@@ -33,13 +34,13 @@ interface InspectorProps {
   notice?: string;
 }
 
-export function Inspector({ post, emptyText = "点一张图查看详情", localPath, primaryAction, notice }: InspectorProps) {
+export function Inspector({ post, emptyText, localPath, primaryAction, notice }: InspectorProps) {
   const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
 
   if (!post) {
     return (
-      <aside className="insp insp-empty" aria-label="详情">
-        <p>{emptyText}</p>
+      <aside className="insp insp-empty" aria-label={t("详情")}>
+        <p>{emptyText ?? t("点一张图查看详情")}</p>
       </aside>
     );
   }
@@ -56,7 +57,7 @@ export function Inspector({ post, emptyText = "点一张图查看详情", localP
   };
 
   return (
-    <aside className="insp" aria-label="详情">
+    <aside className="insp" aria-label={t("详情")}>
       <motion.div className="insp-body" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} transition={PANEL_ENTER}>
         <figure className="insp-figure">
           <div className="insp-pv">
@@ -71,23 +72,23 @@ export function Inspector({ post, emptyText = "点一张图查看详情", localP
         <div className="insp-id">
           <b>#{post.id.toLocaleString("en-US")}</b>
           <span className="badge">{SOURCE_LABEL[post.source]}</span>
-          {post.rating && <span className="badge">{RATING_LABEL[post.rating]}</span>}
+          {post.rating && <span className="badge">{ratingLabel(post.rating)}</span>}
         </div>
         <dl className="insp-meta">
           <div>
-            <dt>大小</dt>
+            <dt>{t("大小")}</dt>
             <dd>{formatBytes(post.fileSize)}</dd>
           </div>
           <div>
-            <dt>分数</dt>
+            <dt>{t("分数")}</dt>
             <dd>{post.score}</dd>
           </div>
           <div>
-            <dt>收藏</dt>
+            <dt>{t("收藏")}</dt>
             <dd>{post.favCount ?? "—"}</dd>
           </div>
           <div>
-            <dt>发布</dt>
+            <dt>{t("发布")}</dt>
             <dd>{formatDate(post.createdAt)}</dd>
           </div>
           <div className="wide">
@@ -96,7 +97,7 @@ export function Inspector({ post, emptyText = "点一张图查看详情", localP
           </div>
           {localPath && (
             <div className="wide">
-              <dt>保存位置</dt>
+              <dt>{t("保存位置")}</dt>
               <dd className="mono" title={localPath}>
                 {localPath}
               </dd>
@@ -106,7 +107,7 @@ export function Inspector({ post, emptyText = "点一张图查看详情", localP
         <div className="insp-tags">
           {TAG_GROUPS.filter(({ key }) => post.tags[key].length > 0).map(({ key, label }) => (
             <section key={key}>
-              <h3>{label}</h3>
+              <h3>{t(label)}</h3>
               <ul className={`tags tag-${key}`}>
                 {post.tags[key].map((tag) => (
                   <li key={tag}>{tag}</li>
@@ -119,11 +120,11 @@ export function Inspector({ post, emptyText = "点一张图查看详情", localP
           {primaryAction && <div className="insp-primary">{primaryAction}</div>}
           <button type="button" className="btn" onClick={() => void openUrl(post.postUrl)}>
             <Icon name="ext" size={15} />
-            打开原帖
+            {t("打开原帖")}
           </button>
           <button type="button" className="btn" onClick={() => void copyTags()} disabled={allTags.length === 0}>
             <Icon name={copied === "ok" ? "check" : "copy"} size={15} />
-            {copied === "ok" ? "已复制" : copied === "failed" ? "复制失败" : "复制 tag"}
+            {copied === "ok" ? t("已复制") : copied === "failed" ? t("复制失败") : t("复制 tag")}
           </button>
         </div>
       </motion.div>

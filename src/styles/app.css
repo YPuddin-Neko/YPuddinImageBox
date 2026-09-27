@@ -170,6 +170,23 @@ button:disabled {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
+}
+
+/*
+ * 英文比中文长：中间一栏窄到放不下一整行时，筛选行右侧的按钮（订阅、下载全部结果、新下载的图）只留图标，
+ * 完整文字在悬停提示里。中文在最小窗口下也放得下，不受影响。
+ */
+@container (max-width: 740px) {
+  .btn.sm.collapsible:lang(en) {
+    width: 30px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .btn.sm.collapsible:lang(en) .btn-text {
+    display: none;
+  }
 }
 
 /* 搜索框 46px，比对齐带高 8px，上移 4px 让两者中线重合。 */
@@ -609,6 +626,19 @@ button:disabled {
 }
 
 .dropdown-sizer {
+  visibility: hidden;
+}
+
+/* 按钮里切换的几种文字也叠在同一格里，见 SwapLabel。 */
+.swap-label {
+  display: inline-grid;
+}
+
+.swap-label > * {
+  grid-area: 1 / 1;
+}
+
+.swap-label > [data-hidden] {
   visibility: hidden;
 }
 
@@ -1418,7 +1448,8 @@ code {
   gap: 8px;
 }
 
-.set-title .switch {
+.set-title .switch,
+.set-title .select {
   margin-left: auto;
 }
 
@@ -1615,6 +1646,11 @@ kbd {
   border-radius: 10px;
   cursor: pointer;
   transition: background-color 0.15s ease;
+}
+
+/* 英文的选项标题长，标题一列放宽，同一页里的几组选项照样上下对齐。 */
+.option:lang(en) {
+  grid-template-columns: 16px 140px minmax(0, 1fr);
 }
 
 .option:hover {

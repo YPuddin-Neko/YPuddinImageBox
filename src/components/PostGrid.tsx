@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { motion } from "motion/react";
 
+import { t } from "../lib/i18n";
 import { imageSrc, postKey, type Post } from "../lib/ipc";
 import { cardEnter } from "../lib/motion";
 import { Icon } from "./Icon";
@@ -187,7 +188,7 @@ export function PostGrid<T extends Post>({
               type="button"
               className="card-hit"
               aria-pressed={key === selected}
-              aria-label={`#${post.id}，${post.width} × ${post.height}`}
+              aria-label={t("#{id}，{width} × {height}", { id: post.id, width: post.width, height: post.height })}
               onClick={(event) => onSelect(post, event)}
             >
               <ShimmerImage src={imageSrc(post.thumbUrl)} alt="" />
@@ -198,19 +199,19 @@ export function PostGrid<T extends Post>({
                 className="card-pick"
                 role="checkbox"
                 aria-checked={isPicked}
-                aria-label={`选择 #${post.id}`}
+                aria-label={t("选择 #{id}", { id: post.id })}
                 onClick={(event) => onPick(post, event)}
               >
                 <Icon name="check" size={13} />
               </button>
             )}
             {missing?.has(key) ? (
-              <span className="card-owned is-missing">文件缺失</span>
+              <span className="card-owned is-missing">{t("文件缺失")}</span>
             ) : (
               owned?.has(key) && (
                 <span className="card-owned">
                   <Icon name="check" size={11} />
-                  已下载
+                  {t("已下载")}
                 </span>
               )
             )}

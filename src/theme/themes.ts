@@ -1,3 +1,4 @@
+import { language } from "../lib/i18n";
 import data from "./themes.json";
 
 export type ThemeMode = "dark" | "light";
@@ -5,16 +6,24 @@ export type ThemeMode = "dark" | "light";
 export interface ThemeInfo {
   id: string;
   name: string;
+  /** 英文界面用的名字和说明。 */
+  en: string;
   mode: ThemeMode;
   mood: string;
+  moodEn: string;
 }
 
-export const THEMES: ThemeInfo[] = data.themes.map(({ id, name, mode, mood }) => ({
+export const THEMES: ThemeInfo[] = data.themes.map(({ id, name, en, mode, mood, moodEn }) => ({
   id,
   name,
+  en,
   mode: mode as ThemeMode,
   mood,
+  moodEn,
 }));
+
+export const themeName = (theme: ThemeInfo) => (language() === "en" ? theme.en : theme.name);
+export const themeMood = (theme: ThemeInfo) => (language() === "en" ? theme.moodEn : theme.mood);
 
 export const DEFAULT_THEME: Record<ThemeMode, string> = {
   dark: data.defaults.dark,

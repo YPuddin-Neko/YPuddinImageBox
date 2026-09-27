@@ -12,11 +12,12 @@ import { EVENTS, type SavedPayload } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
 import { hasMod, spaceForButton, useHotkeys } from "../../lib/hotkeys";
-import { errorMessage, postKey, RATING_OPTIONS, RATINGS, SOURCE_OPTIONS, type Rating, type Source } from "../../lib/ipc";
+import { collapsedTitle, t, tx } from "../../lib/i18n";
+import { errorMessage, postKey, ratingOptions, RATINGS, SOURCE_OPTIONS, type Rating, type Source } from "../../lib/ipc";
 import {
-  LIBRARY_SORTS,
   libraryDelete,
   libraryList,
+  librarySorts,
   type LibrarySort,
   type LocalPost,
   type PostRef,
@@ -41,7 +42,10 @@ interface Listing {
 
 const PAGE_SIZE = 60;
 const EMPTY_FILTER: Filter = { source: "all", tags: "", ratings: [], sort: "downloaded" };
-const SOURCE_FILTERS: { value: Filter["source"]; label: string }[] = [{ value: "all", label: "全部来源" }, ...SOURCE_OPTIONS];
+const sourceFilters = (): { value: Filter["source"]; label: string }[] => [
+  { value: "all", label: t("全部来源") },
+  ...SOURCE_OPTIONS,
+];
 
 const isFiltered = (filter: Filter) =>
   filter.source !== "all" || filter.tags.trim() !== "" || (filter.ratings.length > 0 && filter.ratings.length < RATINGS.length);
@@ -185,7 +189,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
     try {
       await revealItemInDir(post.path);
     } catch (err) {
-      setActionError(`${revealLabel}失败：${errorMessage(err)}`);
+      setActionError(t("{action}失败：{error}", { action: revealLabel(), error: errorMessage(err) }));
     }
   };
 
@@ -195,7 +199,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
     try {
       await addPosts([post]);
       setRequeued((prev) => new Set(prev).add(postKey(post)));
-      setNotice(`已加入下载队列：#${post.id}`);
+      setNotice(t("已加入下载队列：#{id}", { id: post.id }));
     } catch (err) {
       setActionError(errorMessage(err));
     }
@@ -213,10 +217,17 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
         keepFiles,
       );
       if (outcome.removed.length > 0) {
-        setNotice(keepFiles ? `已从图库移除 ${outcome.removed.length} 张` : `已删除 ${outcome.removed.length} 张`);
+        const n = formatCount(outcome.removed.length);
+        setNotice(keepFiles ? t("已从图库移除 {n} 张", { n }) : t("已删除 {n} 张", { n }));
       }
       if (outcome.failed.length > 0) {
-        setActionError(`有 ${outcome.failed.length} 张没能移到${trashLabel}：${outcome.failed[0].message}`);
+        setActionError(
+          t("有 {n} 张没能移到{trash}：{error}", {
+            n: formatCount(outcome.failed.length),
+            trash: trashLabel(),
+            error: outcome.failed[0].message,
+          }),
+        );
       }
     } catch (err) {
       setActionError(errorMessage(err));
@@ -270,21 +281,21 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
           <form className="search" onSubmit={submit} role="search">
             <Select
               className="search-source"
-              name="来源"
+              name={t("来源")}
               value={source}
-              options={SOURCE_FILTERS}
+              options={sourceFilters()}
               onChange={changeSource}
             />
             <input
               className="search-input"
-              aria-label="按 tag 筛选"
-              placeholder="按 tag 筛选图库，空格分隔，-tag 表示排除"
+              aria-label={t("按 tag 筛选")}
+              placeholder={t("按 tag 筛选图库，空格分隔，-tag 表示排除")}
               value={tags}
               onChange={(event) => setTags(event.target.value)}
               spellCheck={false}
               autoComplete="off"
             />
-            <button type="submit" className="search-go" aria-label="筛选">
+            <button type="submit" className="search-go" aria-label={t("筛选")}>
               <Icon name="search" size={17} />
             </button>
           </form>
@@ -292,29 +303,34 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
         <div className="filters">
           <MultiSelect
             className="filter-select"
-            name="分级"
-            label="分级"
-            allLabel="全部"
+            name={t("分级")}
+            label={t("分级")}
+            allLabel={t("全部")}
             values={ratings}
-            options={RATING_OPTIONS}
+            options={ratingOptions()}
             onChange={changeRatings}
           />
           <Select
             className="filter-select"
-            name="排序"
-            label="排序"
+            name={t("排序")}
+            label={t("排序")}
             value={sort}
-            options={LIBRARY_SORTS}
+            options={librarySorts()}
             onChange={changeSort}
           />
           <span className="filters-space" />
           {fresh > 0 && deep && (
-            <button type="button" className="btn sm" onClick={() => void load(committed.current, 0)}>
+            <button
+              type="button"
+              className="btn sm collapsible"
+              title={collapsedTitle(t("有 {n} 张新下载的图", { n: formatCount(fresh) }))}
+              onClick={() => void load(committed.current, 0)}
+            >
               <Icon name="retry" size={14} />
-              有 {formatCount(fresh)} 张新下载的图
+              <span className="btn-text">{t("有 {n} 张新下载的图", { n: formatCount(fresh) })}</span>
             </button>
           )}
-          <span className="count">共 {formatCount(listing?.total ?? 0)} 张</span>
+          <span className="count">{t("共 {n} 张", { n: formatCount(listing?.total ?? 0) })}</span>
         </div>
         <div className="scroll">
           {error && (
@@ -322,7 +338,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
               <span>{error.message}</span>
               <button type="button" className="btn" onClick={() => void load(committed.current, error.offset)}>
                 <Icon name="retry" size={15} />
-                重试
+                {t("重试")}
               </button>
             </div>
           )}
@@ -330,21 +346,21 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
             <div className="alert" role="alert">
               <span>{actionError}</span>
               <button type="button" className="btn" onClick={() => setActionError(null)}>
-                关闭
+                {t("关闭")}
               </button>
             </div>
           )}
-          {!listing && loading && <p className="hint">正在加载…</p>}
+          {!listing && loading && <p className="hint">{t("正在加载…")}</p>}
           {listing && posts.length === 0 && !loading && !error && (
             filtered ? (
-              <p className="hint">没有符合条件的图片。可以减少 tag 或放宽分级再试。</p>
+              <p className="hint">{t("没有符合条件的图片。可以减少 tag 或放宽分级再试。")}</p>
             ) : (
               <div className="empty">
-                <p className="empty-title">图库里还没有图片</p>
-                <p>在「发现」里下载的图片会出现在这里。</p>
+                <p className="empty-title">{t("图库里还没有图片")}</p>
+                <p>{t("在「发现」里下载的图片会出现在这里。")}</p>
                 <button type="button" className="btn primary" onClick={() => onNavigate("discover")}>
                   <Icon name="compass" size={15} />
-                  去发现
+                  {t("去发现")}
                 </button>
               </div>
             )
@@ -361,7 +377,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
           <div ref={sentinel} className="sentinel" aria-hidden="true" />
           {listing?.hasMore && !error && (
             <button type="button" className="btn more" onClick={loadMore} disabled={loading}>
-              {loading ? "正在加载…" : "加载更多"}
+              {loading ? t("正在加载…") : t("加载更多")}
             </button>
           )}
         </div>
@@ -369,7 +385,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
         <SelectionDock count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
           <button type="button" className="btn danger" onClick={() => setDeleting(pickedPosts)} disabled={busy}>
             <Icon name="trash" size={15} />
-            删除
+            {t("删除")}
           </button>
         </SelectionDock>
         <Toast message={notice} />
@@ -377,33 +393,32 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
       <Inspector
         key={selectedPost ? postKey(selectedPost) : "none"}
         post={selectedPost}
-        emptyText="点一张图查看详情"
         localPath={selectedPost?.path}
-        notice={selectedPost?.missing ? "文件不在记录的位置，可能已被移动或删除。可以重新下载到图片位置。" : undefined}
+        notice={selectedPost?.missing ? t("文件不在记录的位置，可能已被移动或删除。可以重新下载到图片位置。") : undefined}
         primaryAction={
           selectedPost && (
             <>
               {!selectedPost.missing ? (
                 <button type="button" className="btn primary" onClick={() => void reveal(selectedPost)}>
                   <Icon name="folder" size={15} />
-                  {revealLabel}
+                  {revealLabel()}
                 </button>
               ) : requeued.has(postKey(selectedPost)) ? (
                 <button type="button" className="btn" disabled>
                   <Icon name="check" size={15} />
-                  已加入下载队列
+                  {t("已加入下载队列")}
                 </button>
               ) : (
                 <button type="button" className="btn primary" onClick={() => void redownload(selectedPost)}>
                   <Icon name="download" size={15} />
-                  重新下载
+                  {t("重新下载")}
                 </button>
               )}
               <button
                 type="button"
                 className="btn danger icon-only"
-                aria-label="删除这张图"
-                title="删除这张图"
+                aria-label={t("删除这张图")}
+                title={t("删除这张图")}
                 onClick={() => setDeleting([selectedPost])}
                 disabled={busy}
               >
@@ -416,30 +431,37 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
 
       <Dialog
         open={deleting !== null}
-        title={deleting && deleting.length > 1 ? `删除选中的 ${formatCount(deleting.length)} 张图？` : "删除这张图？"}
+        title={
+          deleting && deleting.length > 1
+            ? t("删除选中的 {n} 张图？", { n: formatCount(deleting.length) })
+            : t("删除这张图？")
+        }
         onClose={() => setDeleting(null)}
         initialFocus="last"
         actions={
           <>
             <button type="button" className="btn danger" onClick={() => void confirmDelete(false)}>
               <Icon name="trash" size={15} />
-              移到{trashLabel}
+              {t("移到{trash}", { trash: trashLabel() })}
             </button>
             <button type="button" className="btn" onClick={() => void confirmDelete(true)}>
-              只从图库移除
+              {t("只从图库移除")}
             </button>
             <button type="button" className="btn ghost" onClick={() => setDeleting(null)}>
-              取消
+              {t("取消")}
             </button>
           </>
         }
       >
         <ul className="dialog-options">
           <li>
-            <b>移到{trashLabel}</b>：图片文件移到{trashLabel}，还能从那里找回；图库记录和缩略图一起删除。
+            {tx("{title}：图片文件移到{trash}，还能从那里找回；图库记录和缩略图一起删除。", {
+              title: <b>{t("移到{trash}", { trash: trashLabel() })}</b>,
+              trash: trashLabel(),
+            })}
           </li>
           <li>
-            <b>只从图库移除</b>：文件留在原处，只删除图库记录。
+            {tx("{title}：文件留在原处，只删除图库记录。", { title: <b>{t("只从图库移除")}</b> })}
           </li>
         </ul>
       </Dialog>

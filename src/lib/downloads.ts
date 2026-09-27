@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { t, type Msg } from "./i18n";
 import type { Post, SearchParams, Source } from "./ipc";
 
 export type JobKind = "posts" | "query";
@@ -32,7 +33,7 @@ export interface ItemNote {
   note: string | null;
 }
 
-export const STATUS_LABEL: Record<JobStatus, string> = {
+const STATUS_LABEL: Record<JobStatus, Msg> = {
   queued: "排队中",
   running: "下载中",
   paused: "已暂停",
@@ -40,6 +41,8 @@ export const STATUS_LABEL: Record<JobStatus, string> = {
   failed: "出错",
   canceled: "已取消",
 };
+
+export const statusLabel = (status: JobStatus) => t(STATUS_LABEL[status]);
 
 /** 还在队列里（会继续自动下载）的任务。 */
 export const isActive = (job: Job) => job.status === "queued" || job.status === "running";
