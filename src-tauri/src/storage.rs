@@ -521,7 +521,7 @@ mod tests {
     fn fixture() -> Fixture {
         let root = tempfile::tempdir().unwrap();
         let base = normalize(root.path());
-        let defaults = Defaults { images: base.join("Pictures/ImageBox"), data: base.join("app/data"), cache: base.join("cache/image-cache") };
+        let defaults = Defaults { images: base.join("Pictures/YPuddinImageBox"), data: base.join("app/data"), cache: base.join("cache/image-cache") };
         let storage = Storage::load(base.join("app/storage.json"), defaults);
         storage.ensure_runtime_dirs().unwrap();
         Fixture { _root: root, base, storage }

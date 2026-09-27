@@ -21,13 +21,13 @@ jobs:
         include:
           - name: macOS（通用）
             os: macos-latest
-            artifact: ImageBox-macos-universal
+            artifact: YPuddinImageBox-macos-universal
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
             build-args: --target universal-apple-darwin --bundles app,dmg
             bundle: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           - name: Windows（x64）
             os: windows-latest
-            artifact: ImageBox-windows-x64
+            artifact: YPuddinImageBox-windows-x64
             rust-targets: ""
             build-args: --bundles nsis
             bundle: src-tauri/target/release/bundle/nsis/*.exe

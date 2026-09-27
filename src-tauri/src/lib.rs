@@ -114,7 +114,7 @@ fn setup_logging(app: &tauri::App, data_dir: &std::path::Path) -> tauri::Result<
         default_hook(info);
     }));
     log::info!(
-        "ImageBox {} 启动（{} {}）",
+        "YPuddinImageBox {} 启动（{} {}）",
         app.package_info().version,
         std::env::consts::OS,
         std::env::consts::ARCH
@@ -123,7 +123,7 @@ fn setup_logging(app: &tauri::App, data_dir: &std::path::Path) -> tauri::Result<
 }
 
 fn notify(app: &AppHandle, body: &str) {
-    let _ = app.notification().builder().title("ImageBox").body(body).show();
+    let _ = app.notification().builder().title("YPuddinImageBox").body(body).show();
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -137,13 +137,13 @@ fn show_main_window(app: &AppHandle) {
 /// 菜单栏（Windows 上是托盘）图标：打开窗口、立即检查订阅、退出。
 /// macOS 上点图标弹菜单；Windows 上左键打开窗口、右键弹菜单。
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "打开 ImageBox", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "打开 YPuddinImageBox", true, None::<&str>)?;
     let check = MenuItem::with_id(app, "check", "立即检查订阅", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 ImageBox", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 YPuddinImageBox", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&open, &check, &separator, &quit])?;
     let tray = TrayIconBuilder::with_id("main")
-        .tooltip("ImageBox")
+        .tooltip("YPuddinImageBox")
         .menu(&menu)
         .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -208,7 +208,7 @@ fn emit_event(app: &AppHandle, event: Event) {
 fn load_storage(app: &tauri::App) -> Result<Storage, Box<dyn std::error::Error>> {
     let paths = app.path();
     let defaults = Defaults {
-        images: paths.picture_dir().or_else(|_| paths.home_dir())?.join("ImageBox"),
+        images: paths.picture_dir().or_else(|_| paths.home_dir())?.join("YPuddinImageBox"),
         // 放在子目录里：macOS 上配置目录和数据目录是同一个，storage.json 不能被当成软件数据一起移走。
         data: paths.app_data_dir()?.join("data"),
         // 系统 WebView 也把缓存放在应用缓存目录里，这里用单独的子目录，移动或清空时不碰它。

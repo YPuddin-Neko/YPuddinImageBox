@@ -16,7 +16,7 @@ use tokio::sync::{Mutex, Semaphore};
 use crate::error::AppError;
 use crate::settings::{parse_proxy_url, ProxyMode, ProxySettings};
 
-pub const APP_UA: &str = concat!("ImageBox/", env!("CARGO_PKG_VERSION"));
+pub const APP_UA: &str = concat!("YPuddinImageBox/", env!("CARGO_PKG_VERSION"));
 
 /// 带账号时附上 `(by 用户名)`，站点按账号计速率，Cloudflare 收紧时也不容易被当成匿名流量。
 pub fn user_agent(username: Option<&str>) -> String {
