@@ -3,6 +3,7 @@ name = "imagebox"
 version = "0.1.0"
 description = "Booru 图片下载与管理"
 authors = ["YPuddin"]
+license = "GPL-3.0-only"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

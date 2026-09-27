@@ -6,6 +6,7 @@
 
 一个 Danbooru / Gelbooru 图片下载与本地图库管理工具
 
+[![License](https://img.shields.io/badge/License-GPLv3-007ec6)](LICENSE)
 [![构建](https://github.com/YPuddin-Neko/YPuddinImageBox/actions/workflows/build.yml/badge.svg)](https://github.com/YPuddin-Neko/YPuddinImageBox/actions/workflows/build.yml)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-555)
 ![Version](https://img.shields.io/github/package-json/v/YPuddin-Neko/YPuddinImageBox?label=Version&color=e8743b)
@@ -105,3 +106,7 @@ pnpm tauri icon design/icon/app-icon-macos.png -o /tmp/ibx-icons-mac
 
 - 开发版每次重新编译后，macOS 可能询问是否允许读取钥匙串里的 API Key，选「始终允许」即可。安装包只做了临时签名，装上新版本后也会再问一次。
 - `cd src-tauri && cargo test secrets -- --ignored` 会真实读写一次钥匙串，`cargo test trash -- --ignored` 会往废纸篓里放一个临时文件再清掉；平时的 `cargo test` 两样都不碰。
+
+## 开源协议
+
+本项目以 [GNU General Public License v3.0](LICENSE) 开源。
