@@ -15,7 +15,13 @@ mod thumbs;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri_plugin_notification::NotificationExt;
 
 use downloader::{Downloader, Event, EventSink};
 use error::AppError;
@@ -71,6 +77,68 @@ impl AppState {
     }
 }
 
+const MAIN_WINDOW: &str = "main";
+/// 开机自动启动时带上这个参数：启动后不弹出窗口，直接在后台运行。
+const BACKGROUND_ARG: &str = "--background";
+
+fn notify(app: &AppHandle, body: &str) {
+    let _ = app.notification().builder().title("ImageBox").body(body).show();
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// 菜单栏（Windows 上是托盘）图标：打开窗口、立即检查订阅、退出。
+/// macOS 上点图标弹菜单；Windows 上左键打开窗口、右键弹菜单。
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "打开 ImageBox", true, None::<&str>)?;
+    let check = MenuItem::with_id(app, "check", "立即检查订阅", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 ImageBox", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&open, &check, &separator, &quit])?;
+    let tray = TrayIconBuilder::with_id("main")
+        .tooltip("ImageBox")
+        .menu(&menu)
+        .show_menu_on_left_click(cfg!(target_os = "macos"))
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => show_main_window(app),
+            "check" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let started = app.state::<AppState>().downloader.check_all_subscriptions().await;
+                    if let Ok(0) = started {
+                        notify(&app, "订阅都在检查中，或者还没有启用的订阅");
+                    }
+                });
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                if !cfg!(target_os = "macos") {
+                    show_main_window(tray.app_handle());
+                }
+            }
+        });
+    let tray = if cfg!(target_os = "macos") {
+        // 单色模板图，系统按菜单栏的深浅色自动着色。
+        tray.icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?).icon_as_template(true)
+    } else {
+        match app.default_window_icon() {
+            Some(icon) => tray.icon(icon.clone()),
+            None => tray,
+        }
+    };
+    tray.build(app)?;
+    Ok(())
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SavedPayload {
@@ -78,12 +146,18 @@ struct SavedPayload {
     post_id: u64,
 }
 
-/// 下载队列的变化推给界面：job-updated / job-removed / library-changed。
+/// 下载队列的变化推给界面：job-updated / job-removed / library-changed / subscription-updated；
+/// 订阅下载到新图时发系统通知。
 fn emit_event(app: &AppHandle, event: Event) {
     let result = match event {
         Event::Job(job) => app.emit("job-updated", job),
         Event::JobRemoved(id) => app.emit("job-removed", id),
         Event::Saved { source, post_id } => app.emit("library-changed", SavedPayload { source, post_id }),
+        Event::Subscription(sub) => app.emit("subscription-updated", sub),
+        Event::NewPosts { title, saved } => {
+            notify(app, &format!("订阅「{title}」下载了 {saved} 张新图"));
+            Ok(())
+        }
     };
     #[cfg(debug_assertions)]
     if let Err(err) = result {
@@ -110,9 +184,11 @@ fn load_storage(app: &tauri::App) -> Result<Storage, Box<dyn std::error::Error>>
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::Builder::new().args([BACKGROUND_ARG]).build())
         .setup(|app| {
             let storage = load_storage(app)?;
             let (db_dir, data_dir) = (storage.path(StorageKind::Database), storage.path(StorageKind::Data));
@@ -140,6 +216,7 @@ pub fn run() {
                 events,
             );
             tauri::async_runtime::spawn(Arc::clone(&downloader).run());
+            tauri::async_runtime::spawn(Arc::clone(&downloader).run_schedule());
             app.manage(AppState {
                 net,
                 accounts,
@@ -150,7 +227,22 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 accounts_error: Mutex::new(accounts_error),
             });
+            setup_tray(app)?;
+            // 窗口在配置里默认隐藏，开机自动启动时保持隐藏，其余情况显示出来，避免先闪一下再藏起来。
+            if !std::env::args().any(|arg| arg == BACKGROUND_ARG) {
+                show_main_window(app.handle());
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 设置里选了「后台继续运行」时，关窗口只是藏起来，订阅和下载照常进行。
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let keep_running = window.app_handle().state::<AppState>().settings().close_to_tray;
+                if keep_running && window.label() == MAIN_WINDOW {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .register_asynchronous_uri_scheme_protocol("ibx", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
@@ -173,6 +265,14 @@ pub fn run() {
             commands::account_save,
             commands::account_remove,
             commands::account_key_storage,
+            commands::subscriptions_list,
+            commands::subscription_create,
+            commands::subscription_update,
+            commands::subscription_delete,
+            commands::subscription_check,
+            commands::subscriptions_check_all,
+            commands::general_info,
+            commands::general_save,
             commands::proxy_info,
             commands::proxy_save,
             commands::proxy_test,
@@ -184,6 +284,15 @@ pub fn run() {
             commands::storage_prepare,
             commands::restart_app,
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+    app.run(|app, event| {
+        // macOS：窗口藏起来后点程序坞图标，重新显示窗口。这个事件只有 macOS 有。
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen { .. } = event {
+            show_main_window(app);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
+    });
 }

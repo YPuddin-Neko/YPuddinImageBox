@@ -1,15 +1,16 @@
-//! 用真实网络跑一遍下载队列：选中下载 3 张、按条件下载 5 张，存到临时目录后检查文件、
-//! 缩略图和图库记录，最后删除临时目录。
+//! 用真实网络跑一遍下载队列：选中下载 3 张、按条件下载 5 张、订阅检查一次（起点设在
+//! 第 3 新的帖子，应该正好找到比它新的几张），存到临时目录后检查文件、缩略图和图库记录，
+//! 最后删除临时目录。
 //! 运行：cargo run --example download_probe
 
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use imagebox_lib::downloader::{Downloader, Event, EventSink};
-use imagebox_lib::library::{JobStatus, Library, LibraryQuery};
+use imagebox_lib::library::{JobStatus, Library, LibraryQuery, NewSubscription};
 use imagebox_lib::net::Net;
 use imagebox_lib::settings::ProxySettings;
-use imagebox_lib::sources::{self, AccountStore, Page, Source};
+use imagebox_lib::sources::{self, AccountStore, Page, Rating, Source};
 use imagebox_lib::storage::{Defaults, Storage};
 
 // 小图，免得探测时下载太多流量。
@@ -49,10 +50,26 @@ async fn main() {
         .await
         .expect("搜索");
     println!("选中下载 {} 张", posts.len());
-    let first = downloader.enqueue_posts(posts).await.expect("加入队列");
+    let first = downloader.enqueue_posts(posts.clone()).await.expect("加入队列");
     let second = downloader.enqueue_query(Source::Danbooru, "按条件", QUERY, Some(5)).await.expect("加入队列");
 
-    for job in [first.id, second.id] {
+    // 订阅：起点设在第 3 新的帖子，检查时应该找到比它新的那几张。
+    let start = posts.iter().map(|post| post.id).min().expect("至少一张") as i64;
+    let sub = library
+        .create_subscription(NewSubscription {
+            source: Source::Danbooru,
+            tags: "scenery filesize:..300kb",
+            ratings: &[Rating::General],
+            query: QUERY,
+            interval_minutes: 60,
+            last_seen_id: start,
+        })
+        .await
+        .expect("建订阅");
+    let third = downloader.check_subscription(sub.id).await.expect("检查订阅").expect("应该新建检查任务");
+    assert!(downloader.check_subscription(sub.id).await.unwrap().is_none(), "检查中不应重复建任务");
+
+    for job in [first.id, second.id, third.id] {
         let start = Instant::now();
         loop {
             let info = library.job(job).await.unwrap().unwrap();
@@ -67,6 +84,13 @@ async fn main() {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
+
+    let sub = library.subscription(sub.id).await.unwrap().unwrap();
+    println!(
+        "订阅：起点 #{start}，检查后处理到 #{}，找到 {} 张新图，出错：{:?}",
+        sub.last_seen_id, sub.last_new, sub.last_error
+    );
+    assert!(sub.last_seen_id > start && sub.last_new >= 2, "订阅应该找到比起点新的图");
 
     let page = library.list(&LibraryQuery::default()).await.unwrap();
     println!("图库共 {} 张", page.total);

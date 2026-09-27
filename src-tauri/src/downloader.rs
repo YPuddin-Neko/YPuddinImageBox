@@ -18,7 +18,7 @@ use tokio::task::JoinSet;
 use url::Url;
 
 use crate::error::AppError;
-use crate::library::{now_ms, ItemStatus, JobInfo, JobItem, JobKind, JobStatus, Library};
+use crate::library::{now_ms, ItemStatus, JobInfo, JobItem, JobKind, JobStatus, Library, Subscription};
 use crate::net::Net;
 use crate::protocol::sniff;
 use crate::sources::{self, AccountStore, Page, Post, Source};
@@ -43,6 +43,9 @@ pub enum Event {
     Job(JobInfo),
     JobRemoved(i64),
     Saved { source: Source, post_id: u64 },
+    Subscription(Subscription),
+    /// 订阅检查下载到了新图，用系统通知告诉用户。
+    NewPosts { title: String, saved: i64 },
 }
 
 pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
@@ -93,6 +96,8 @@ pub struct Downloader {
     images_gate: Arc<tokio::sync::RwLock<()>>,
     events: EventSink,
     wake: Notify,
+    /// 订阅有变化（新建、改间隔、启用）时叫醒调度，不必等满一分钟。
+    schedule_wake: Notify,
     active: Mutex<Option<Active>>,
 }
 
@@ -117,6 +122,7 @@ impl Downloader {
             images_gate,
             events,
             wake: Notify::new(),
+            schedule_wake: Notify::new(),
             active: Mutex::new(None),
         })
     }
@@ -228,6 +234,71 @@ impl Downloader {
         Ok(())
     }
 
+    // ---------- 订阅 ----------
+
+    /// 立即检查一个订阅：建一个从上次处理到的 id 往新的方向翻页的下载任务。
+    /// 这个订阅已经有检查任务在排队、下载或暂停时不重复建，返回 `None`。
+    pub async fn check_subscription(&self, id: i64) -> Result<Option<JobInfo>, AppError> {
+        let sub = self.library.subscription(id).await?.ok_or_else(|| AppError::Internal("订阅不存在".into()))?;
+        if sub.active_job.is_some() {
+            return Ok(None);
+        }
+        let job = self.library.start_subscription_check(&sub).await?;
+        self.emit(Event::Job(job.clone()));
+        if let Some(sub) = self.library.subscription(id).await? {
+            self.emit(Event::Subscription(sub));
+        }
+        self.wake.notify_one();
+        Ok(Some(job))
+    }
+
+    /// 立即检查全部启用的订阅，返回新建了几个检查任务。
+    pub async fn check_all_subscriptions(&self) -> Result<usize, AppError> {
+        let mut started = 0;
+        for sub in self.library.subscriptions().await?.into_iter().filter(|sub| sub.enabled) {
+            if self.check_subscription(sub.id).await?.is_some() {
+                started += 1;
+            }
+        }
+        Ok(started)
+    }
+
+    /// 订阅有变化时调用，让调度马上重新看一遍。
+    pub fn reschedule(&self) {
+        self.schedule_wake.notify_one();
+    }
+
+    /// 订阅调度，常驻后台：每分钟看一次哪些订阅到了检查时间。
+    pub async fn run_schedule(self: Arc<Self>) {
+        loop {
+            if let Ok(due) = self.library.due_subscriptions(now_ms()).await {
+                for sub in due.into_iter().filter(|sub| sub.active_job.is_none()) {
+                    let _ = self.check_subscription(sub.id).await;
+                }
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+                _ = self.schedule_wake.notified() => {}
+            }
+        }
+    }
+
+    /// 订阅检查任务结束：记下结果；没找到新图的任务直接删掉，免得下载列表里堆满空任务。
+    async fn finish_subscription_job(&self, sub_id: i64, job: &JobInfo) {
+        let error = (job.status == JobStatus::Failed).then(|| job.error.clone()).flatten();
+        if let Ok(Some(sub)) = self.library.finish_subscription_check(sub_id, error.as_deref()).await {
+            if job.status == JobStatus::Done && job.saved > 0 {
+                self.emit(Event::NewPosts { title: sub.title(), saved: job.saved });
+            }
+            self.emit(Event::Subscription(sub));
+        }
+        if job.status == JobStatus::Done && job.total == Some(0) {
+            if let Ok(true) = self.library.delete_job(job.id).await {
+                self.emit(Event::JobRemoved(job.id));
+            }
+        }
+    }
+
     // ---------- 队列 ----------
 
     /// 队列主循环，常驻后台。
@@ -287,7 +358,12 @@ impl Downloader {
             }
         };
         if let Ok(Some(job)) = finished {
-            self.emit(Event::Job(job));
+            self.emit(Event::Job(job.clone()));
+            if let Some(sub_id) = job.subscription_id {
+                if matches!(job.status, JobStatus::Done | JobStatus::Failed) {
+                    self.finish_subscription_job(sub_id, &job).await;
+                }
+            }
         }
     }
 
@@ -377,9 +453,10 @@ impl Downloader {
         let limit = job.source.max_page_size();
         let accounts = self.accounts.get();
         let (mut posts, fetched) = sources::fetch(&self.net, &accounts, job.source, query, &page, limit).await?;
-        let min_id = posts.iter().map(|post| post.id).min();
+        let ids = posts.iter().map(|post| post.id);
+        let bounds = ids.clone().min().zip(ids.max());
         // 未登录时站点会从结果里隐去部分帖子，一页不满不代表翻完了，取到空页才算。
-        let mut exhausted = fetched == 0 || min_id.is_none();
+        let mut exhausted = fetched == 0 || bounds.is_none();
         if let Some(max) = job.max_posts {
             let room = (max - self.library.item_count(job.id).await?).max(0) as usize;
             if posts.len() >= room {
@@ -387,7 +464,7 @@ impl Downloader {
                 exhausted = true;
             }
         }
-        let next = (!exhausted).then(|| page.next(job.source, query, min_id).to_param());
+        let next = (!exhausted).then(|| page.next(job.source, query, bounds).to_param());
         Ok(self.library.append_items(job.id, &posts, next).await?)
     }
 
@@ -681,6 +758,8 @@ mod tests {
                 Event::Job(job) => format!("job:{}:{:?}", job.id, job.status),
                 Event::JobRemoved(id) => format!("removed:{id}"),
                 Event::Saved { post_id, .. } => format!("saved:{post_id}"),
+                Event::Subscription(sub) => format!("subscription:{}", sub.id),
+                Event::NewPosts { title, saved } => format!("new:{title}:{saved}"),
             };
             log.lock().unwrap().push(line);
         });

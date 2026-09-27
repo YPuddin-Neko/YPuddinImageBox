@@ -217,10 +217,12 @@ pub struct SearchPage {
 
 /// 翻页参数。Danbooru 按默认顺序（新到旧）时用「id 小于某值」翻页：
 /// 翻页期间有新图上传也不会重复或漏掉，也不受 1000 页的上限限制。
+/// 订阅找新图时反过来用「id 大于某值」，从上次处理到的地方往新的方向走。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Page {
     Number(u32),
     Before(u64),
+    After(u64),
 }
 
 impl Page {
@@ -228,33 +230,38 @@ impl Page {
         match self {
             Page::Number(n) => n.to_string(),
             Page::Before(id) => format!("b{id}"),
+            Page::After(id) => format!("a{id}"),
         }
     }
 
     pub fn parse(value: &str) -> Option<Page> {
-        match value.strip_prefix('b') {
-            Some(id) => id.parse().ok().map(Page::Before),
-            None => value.parse().ok().filter(|n| *n >= 1).map(Page::Number),
+        if let Some(id) = value.strip_prefix('b') {
+            return id.parse().ok().map(Page::Before);
         }
+        if let Some(id) = value.strip_prefix('a') {
+            return id.parse().ok().map(Page::After);
+        }
+        value.parse().ok().filter(|n| *n >= 1).map(Page::Number)
     }
 
-    /// 取完这一页后的下一页。`min_id` 是这一页里最小的帖子 id。
-    pub fn next(&self, source: Source, query: &str, min_id: Option<u64>) -> Page {
+    /// 取完这一页后的下一页。`bounds` 是这一页里帖子 id 的（最小值，最大值）。
+    pub fn next(&self, source: Source, query: &str, bounds: Option<(u64, u64)>) -> Page {
         let by_id = source == Source::Danbooru && !has_custom_order(query);
-        match (self, min_id) {
-            (_, Some(id)) if by_id => Page::Before(id),
+        match (self, bounds) {
+            (Page::After(_), Some((_, max))) => Page::After(max),
+            (Page::Number(_) | Page::Before(_), Some((min, _))) if by_id => Page::Before(min),
             (Page::Number(n), _) => Page::Number(n + 1),
-            // 按 id 翻页却没拿到帖子：调用方此时已判定翻完，原样返回。
-            (page @ Page::Before(_), _) => page.clone(),
+            // 没拿到帖子：调用方此时已判定翻完，原样返回。
+            (page, _) => page.clone(),
         }
     }
 }
 
-/// 查询里指定了排序（order:score、随机等）时不能按 id 翻页。
-fn has_custom_order(query: &str) -> bool {
+/// 查询里指定了排序（order:score、随机、Gelbooru 的 sort: 等）时不能按 id 翻页，也不能订阅。
+pub fn has_custom_order(query: &str) -> bool {
     query.split_whitespace().any(|tag| {
         let tag = tag.to_ascii_lowercase();
-        ["order:", "ordfav:", "ordpool:", "random:"].iter().any(|prefix| tag.starts_with(prefix))
+        ["order:", "ordfav:", "ordpool:", "random:", "sort:"].iter().any(|prefix| tag.starts_with(prefix))
     })
 }
 
@@ -321,11 +328,16 @@ pub async fn fetch(
     match source {
         Source::Danbooru => danbooru::search(net, query, page, limit, accounts.danbooru.as_ref()).await,
         Source::Gelbooru => {
-            let number = match page {
-                Page::Number(n) => *n,
-                Page::Before(_) => 1,
-            };
-            gelbooru::search(net, query, number, limit, accounts.gelbooru()?).await
+            let creds = accounts.gelbooru()?;
+            match page {
+                Page::Number(n) => gelbooru::search(net, query, *n, limit, creds).await,
+                // Gelbooru 没有按 id 翻页的参数，用 id:> 和按 id 升序排序做到同样的效果。
+                Page::After(id) => {
+                    let query = format!("{query} id:>{id} sort:id:asc");
+                    gelbooru::search(net, query.trim(), 1, limit, creds).await
+                }
+                Page::Before(_) => gelbooru::search(net, query, 1, limit, creds).await,
+            }
         }
     }
 }
@@ -403,10 +415,19 @@ mod tests {
         assert_eq!(Page::parse("bx"), None);
         assert_eq!(Page::Before(9).to_param(), "b9");
 
+        assert_eq!(Page::parse("a77"), Some(Page::After(77)));
+        assert_eq!(Page::After(77).to_param(), "a77");
+
         let first = Page::Number(1);
-        assert_eq!(first.next(Source::Danbooru, "scenery rating:g", Some(500)), Page::Before(500));
-        assert_eq!(first.next(Source::Danbooru, "scenery order:score", Some(500)), Page::Number(2));
-        assert_eq!(first.next(Source::Gelbooru, "scenery", Some(500)), Page::Number(2));
+        assert_eq!(first.next(Source::Danbooru, "scenery rating:g", Some((500, 900))), Page::Before(500));
+        assert_eq!(first.next(Source::Danbooru, "scenery order:score", Some((500, 900))), Page::Number(2));
+        assert_eq!(first.next(Source::Gelbooru, "scenery", Some((500, 900))), Page::Number(2));
+        // 订阅往新的方向走：下一页从这一页最大的 id 之后开始。
+        assert_eq!(Page::After(100).next(Source::Danbooru, "scenery", Some((101, 180))), Page::After(180));
+        assert_eq!(Page::After(100).next(Source::Gelbooru, "scenery", Some((101, 180))), Page::After(180));
+        assert_eq!(Page::After(100).next(Source::Danbooru, "scenery", None), Page::After(100));
+        assert!(has_custom_order("sky sort:score"));
+        assert!(!has_custom_order("sky rating:g"));
     }
 
     #[test]

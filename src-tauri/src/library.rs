@@ -140,6 +140,53 @@ pub struct JobInfo {
     /// 按条件下载时还有没有下一页。
     #[serde(skip)]
     pub cursor: Option<String>,
+    /// 由订阅检查生成时，对应的订阅。
+    pub subscription_id: Option<i64>,
+}
+
+/// 订阅：按设定的间隔检查条件下有没有新图，有就自动下载。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Subscription {
+    pub id: i64,
+    pub source: Source,
+    /// 用户填写的 tag（不含分级）。
+    pub tags: String,
+    pub ratings: Vec<Rating>,
+    /// 发给站点的查询串。
+    pub query: String,
+    pub enabled: bool,
+    pub interval_minutes: i64,
+    /// 已经处理到的最大帖子 id，比它新的才算新图。
+    pub last_seen_id: i64,
+    pub last_checked_at: Option<i64>,
+    /// 最近一次检查找到的新图张数。
+    pub last_new: i64,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// 还在排队、下载或暂停中的检查任务。
+    pub active_job: Option<i64>,
+}
+
+impl Subscription {
+    /// 界面和任务列表里显示的名字。
+    pub fn title(&self) -> String {
+        if self.tags.trim().is_empty() {
+            "全部帖子".into()
+        } else {
+            self.tags.clone()
+        }
+    }
+}
+
+pub struct NewSubscription<'a> {
+    pub source: Source,
+    pub tags: &'a str,
+    pub ratings: &'a [Rating],
+    pub query: &'a str,
+    pub interval_minutes: i64,
+    pub last_seen_id: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +228,28 @@ fn job_from_row(row: &SqliteRow) -> Result<JobInfo, sqlx::Error> {
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
         cursor: row.try_get("cursor")?,
+        subscription_id: row.try_get("subscription_id")?,
+    })
+}
+
+fn subscription_from_row(row: &SqliteRow) -> Result<Subscription, sqlx::Error> {
+    let source: String = row.try_get("source")?;
+    let ratings: String = row.try_get("ratings")?;
+    Ok(Subscription {
+        id: row.try_get("id")?,
+        source: Source::parse(&source).ok_or_else(|| db_err(format!("未知的来源 {source}")))?,
+        tags: row.try_get("tags")?,
+        ratings: ratings.split(',').filter_map(Rating::parse).collect(),
+        query: row.try_get("query")?,
+        enabled: row.try_get("enabled")?,
+        interval_minutes: row.try_get("interval_minutes")?,
+        last_seen_id: row.try_get("last_seen_id")?,
+        last_checked_at: row.try_get("last_checked_at")?,
+        last_new: row.try_get("last_new")?,
+        last_error: row.try_get("last_error")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+        active_job: row.try_get("active_job")?,
     })
 }
 
@@ -217,7 +286,12 @@ fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
 }
 
 const JOB_COLUMNS: &str = "id, kind, source, title, query, max_posts, status, total, saved, skipped, failed, \
-                           cursor, error, created_at, updated_at";
+                           cursor, error, created_at, updated_at, subscription_id";
+
+const SUBSCRIPTION_COLUMNS: &str = "s.id, s.source, s.tags, s.ratings, s.query, s.enabled, s.interval_minutes, \
+     s.last_seen_id, s.last_checked_at, s.last_new, s.last_error, s.created_at, s.updated_at, \
+     (SELECT j.id FROM jobs j WHERE j.subscription_id = s.id AND j.status IN ('queued', 'running', 'paused') \
+      ORDER BY j.id DESC LIMIT 1) AS active_job";
 
 impl Library {
     pub async fn open(dir: &Path) -> Result<Self, sqlx::Error> {
@@ -424,6 +498,118 @@ impl Library {
         Ok(changed)
     }
 
+    // ---------- 订阅 ----------
+
+    pub async fn create_subscription(&self, new: NewSubscription<'_>) -> Result<Subscription, sqlx::Error> {
+        let now = now_ms();
+        let ratings: Vec<&str> = new.ratings.iter().map(|r| r.as_str()).collect();
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO subscriptions (source, tags, ratings, query, interval_minutes, last_seen_id, last_checked_at,
+                                        created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(new.source.as_str())
+        .bind(new.tags.trim())
+        .bind(ratings.join(","))
+        .bind(new.query)
+        .bind(new.interval_minutes)
+        .bind(new.last_seen_id)
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .fetch_one(&self.pool)
+        .await?;
+        self.subscription(id).await?.ok_or_else(|| db_err("订阅写入后读取失败"))
+    }
+
+    pub async fn subscription(&self, id: i64) -> Result<Option<Subscription>, sqlx::Error> {
+        let sql = format!("SELECT {SUBSCRIPTION_COLUMNS} FROM subscriptions s WHERE s.id = ?");
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id).fetch_optional(&self.pool).await?;
+        row.as_ref().map(subscription_from_row).transpose()
+    }
+
+    /// 全部订阅，新的在前。
+    pub async fn subscriptions(&self) -> Result<Vec<Subscription>, sqlx::Error> {
+        let sql = format!("SELECT {SUBSCRIPTION_COLUMNS} FROM subscriptions s ORDER BY s.id DESC");
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_all(&self.pool).await?;
+        rows.iter().map(subscription_from_row).collect()
+    }
+
+    /// 到了检查时间的订阅。
+    pub async fn due_subscriptions(&self, now: i64) -> Result<Vec<Subscription>, sqlx::Error> {
+        let sql = format!(
+            "SELECT {SUBSCRIPTION_COLUMNS} FROM subscriptions s
+             WHERE s.enabled = 1 AND (s.last_checked_at IS NULL OR s.last_checked_at + s.interval_minutes * 60000 <= ?)
+             ORDER BY s.last_checked_at"
+        );
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(now).fetch_all(&self.pool).await?;
+        rows.iter().map(subscription_from_row).collect()
+    }
+
+    pub async fn update_subscription(
+        &self,
+        id: i64,
+        enabled: Option<bool>,
+        interval_minutes: Option<i64>,
+    ) -> Result<Option<Subscription>, sqlx::Error> {
+        sqlx::query(
+            "UPDATE subscriptions SET enabled = COALESCE(?, enabled), interval_minutes = COALESCE(?, interval_minutes),
+                updated_at = ? WHERE id = ?",
+        )
+        .bind(enabled)
+        .bind(interval_minutes)
+        .bind(now_ms())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        self.subscription(id).await
+    }
+
+    pub async fn delete_subscription(&self, id: i64) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM subscriptions WHERE id = ?").bind(id).execute(&self.pool).await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 开始一次检查：建一个从「已处理到的 id」往新的方向翻页的下载任务，并清零上次的结果。
+    pub async fn start_subscription_check(&self, sub: &Subscription) -> Result<JobInfo, sqlx::Error> {
+        let now = now_ms();
+        let mut tx = self.pool.begin().await?;
+        let job_id: i64 = sqlx::query_scalar(
+            "INSERT INTO jobs (kind, source, title, query, status, cursor, subscription_id, created_at, updated_at)
+             VALUES ('query', ?, ?, ?, 'queued', ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(sub.source.as_str())
+        .bind(format!("订阅：{}", sub.title()))
+        .bind(&sub.query)
+        .bind(format!("a{}", sub.last_seen_id))
+        .bind(sub.id)
+        .bind(now)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE subscriptions SET last_checked_at = ?, last_new = 0, last_error = NULL, updated_at = ? WHERE id = ?",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(sub.id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        self.job(job_id).await?.ok_or_else(|| db_err("任务写入后读取失败"))
+    }
+
+    /// 检查任务结束后记下出错原因（成功时清空）。
+    pub async fn finish_subscription_check(&self, id: i64, error: Option<&str>) -> Result<Option<Subscription>, sqlx::Error> {
+        sqlx::query("UPDATE subscriptions SET last_error = ?, updated_at = ? WHERE id = ?")
+            .bind(error)
+            .bind(now_ms())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.subscription(id).await
+    }
+
     // ---------- 下载任务 ----------
 
     pub async fn create_posts_job(&self, source: Source, title: &str, posts: &[Post]) -> Result<JobInfo, sqlx::Error> {
@@ -541,6 +727,19 @@ impl Library {
             .fetch_one(&mut *tx)
             .await?;
         insert_items(&mut tx, job_id, next_seq, posts).await?;
+        // 订阅检查：记下处理到哪里、找到了几张新图。任务内容和进度在同一个事务里，中断后从这里继续。
+        if let Some(max_id) = posts.iter().map(|post| post.id as i64).max() {
+            sqlx::query(
+                "UPDATE subscriptions SET last_seen_id = MAX(last_seen_id, ?), last_new = last_new + ?, updated_at = ?
+                 WHERE id = (SELECT subscription_id FROM jobs WHERE id = ?)",
+            )
+            .bind(max_id)
+            .bind(posts.len() as i64)
+            .bind(now_ms())
+            .bind(job_id)
+            .execute(&mut *tx)
+            .await?;
+        }
         let exhausted = cursor.is_none();
         sqlx::query(
             "UPDATE jobs SET cursor = ?, updated_at = ?,
@@ -832,6 +1031,41 @@ mod tests {
         let job = lib.retry_failed(job.id).await.unwrap().unwrap();
         assert_eq!((job.status, job.failed), (JobStatus::Queued, 0));
         assert_eq!(lib.pending_count(job.id).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn subscription_checks_advance_last_seen_id() {
+        let lib = Library::in_memory().await;
+        let sub = lib
+            .create_subscription(NewSubscription {
+                source: Source::Danbooru,
+                tags: "sky ",
+                ratings: &[Rating::General, Rating::Sensitive],
+                query: "sky rating:g,s",
+                interval_minutes: 60,
+                last_seen_id: 100,
+            })
+            .await
+            .unwrap();
+        assert_eq!((sub.tags.as_str(), sub.ratings.len(), sub.title()), ("sky", 2, "sky".to_string()));
+        // 刚建好时已经算检查过一次，要等到下一个间隔。
+        assert!(lib.due_subscriptions(now_ms()).await.unwrap().is_empty());
+        assert_eq!(lib.due_subscriptions(now_ms() + 61 * 60_000).await.unwrap().len(), 1);
+
+        let job = lib.start_subscription_check(&sub).await.unwrap();
+        assert_eq!((job.cursor.as_deref(), job.subscription_id), (Some("a100"), Some(sub.id)));
+        assert_eq!(lib.subscription(sub.id).await.unwrap().unwrap().active_job, Some(job.id));
+
+        let page: Vec<Post> = [105, 101, 103].iter().map(|id| post(Source::Danbooru, *id, PostTags::default())).collect();
+        lib.append_items(job.id, &page, Some("a105".into())).await.unwrap();
+        let sub = lib.subscription(sub.id).await.unwrap().unwrap();
+        assert_eq!((sub.last_seen_id, sub.last_new), (105, 3));
+
+        lib.transition(job.id, &[JobStatus::Queued], JobStatus::Done, None).await.unwrap();
+        assert_eq!(lib.subscription(sub.id).await.unwrap().unwrap().active_job, None);
+        // 删掉订阅后任务留着，只断开关联。
+        assert!(lib.delete_subscription(sub.id).await.unwrap());
+        assert_eq!(lib.job(job.id).await.unwrap().unwrap().subscription_id, None);
     }
 
     #[tokio::test]

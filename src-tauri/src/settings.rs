@@ -16,7 +16,7 @@ use crate::sources::Source;
 
 pub const FILE_NAME: &str = "settings.json";
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     #[serde(default)]
@@ -29,6 +29,25 @@ pub struct Settings {
     /// 加密保存 API Key 用的随机盐，第一次需要时生成。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_salt: Option<String>,
+    /// 关闭窗口后在后台继续运行（订阅检查和下载不中断），从菜单栏 / 托盘图标重新打开。
+    #[serde(default = "default_true")]
+    pub close_to_tray: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            proxy: ProxySettings::default(),
+            accounts: AccountNames::default(),
+            key_storage: KeyStorage::default(),
+            key_salt: None,
+            close_to_tray: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,7 +192,9 @@ mod tests {
         assert_eq!(Settings::load(dir.path()), Settings::default());
         // 旧版本写出的文件缺字段时补默认值。
         fs::write(dir.path().join(FILE_NAME), br#"{"proxy":{"mode":"none"}}"#).unwrap();
-        assert_eq!(Settings::load(dir.path()).proxy.mode, ProxyMode::None);
+        let loaded = Settings::load(dir.path());
+        assert_eq!(loaded.proxy.mode, ProxyMode::None);
+        assert!(loaded.close_to_tray);
     }
 
     #[test]
@@ -187,6 +208,7 @@ mod tests {
             },
             key_storage: KeyStorage::File,
             key_salt: Some("salt".into()),
+            close_to_tray: false,
         };
         settings.save(&dir.path().join("nested")).unwrap();
         assert_eq!(Settings::load(&dir.path().join("nested")), settings);

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
-use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery};
+use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery, NewSubscription, Subscription};
 use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
 use crate::sources::{self, danbooru, gelbooru, Page, Post, SearchPage, SearchParams, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
@@ -160,6 +160,131 @@ pub async fn library_delete(
 
 fn join_error(err: tauri::Error) -> AppError {
     AppError::Internal(err.to_string())
+}
+
+// ---------- 订阅 ----------
+
+/// 检查间隔的下限：太频繁对站点不友好，新图也不会那么快出现。
+const MIN_INTERVAL_MINUTES: u32 = 30;
+
+#[tauri::command]
+pub async fn subscriptions_list(state: State<'_, AppState>) -> Result<Vec<Subscription>, AppError> {
+    Ok(state.library.subscriptions().await?)
+}
+
+/// 订阅搜索条件。以现在最新的一张为起点，以后比它新的才下载；
+/// `download_existing` 为 true 时顺便把现有的结果按「下载全部结果」加入队列（`max_posts` 限制张数）。
+#[tauri::command]
+pub async fn subscription_create(
+    state: State<'_, AppState>,
+    params: SearchParams,
+    interval_minutes: u32,
+    download_existing: bool,
+    max_posts: Option<u32>,
+) -> Result<Subscription, AppError> {
+    let query = sources::build_query(params.source, &params.tags, &params.ratings);
+    if sources::has_custom_order(&query) {
+        return Err(AppError::InvalidInput("订阅按上传先后找新图，条件里不能带 order: 或 sort: 这类排序".into()));
+    }
+    if interval_minutes < MIN_INTERVAL_MINUTES {
+        return Err(AppError::InvalidInput(format!("检查间隔至少 {MIN_INTERVAL_MINUTES} 分钟")));
+    }
+    // 顺便验证条件能搜（tag 数量、账号），出错直接提示，不建订阅。
+    let accounts = state.accounts.get();
+    let (posts, _) = sources::fetch(&state.net, &accounts, params.source, &query, &Page::Number(1), 1).await?;
+    let newest = posts.iter().map(|post| post.id as i64).max().unwrap_or(0);
+    let sub = state
+        .library
+        .create_subscription(NewSubscription {
+            source: params.source,
+            tags: &params.tags.split_whitespace().collect::<Vec<_>>().join(" "),
+            ratings: &params.ratings,
+            query: &query,
+            interval_minutes: i64::from(interval_minutes),
+            last_seen_id: newest,
+        })
+        .await?;
+    if download_existing {
+        state.downloader.enqueue_query(params.source, &sub.title(), &query, max_posts.map(i64::from)).await?;
+    }
+    state.downloader.reschedule();
+    Ok(sub)
+}
+
+#[tauri::command]
+pub async fn subscription_update(
+    state: State<'_, AppState>,
+    id: i64,
+    enabled: Option<bool>,
+    interval_minutes: Option<u32>,
+) -> Result<Subscription, AppError> {
+    if interval_minutes.is_some_and(|m| m < MIN_INTERVAL_MINUTES) {
+        return Err(AppError::InvalidInput(format!("检查间隔至少 {MIN_INTERVAL_MINUTES} 分钟")));
+    }
+    let sub = state
+        .library
+        .update_subscription(id, enabled, interval_minutes.map(i64::from))
+        .await?
+        .ok_or_else(|| AppError::Internal("订阅不存在".into()))?;
+    state.downloader.reschedule();
+    Ok(sub)
+}
+
+/// 删除订阅；已经下载的图和进行中的检查任务都保留。
+#[tauri::command]
+pub async fn subscription_delete(state: State<'_, AppState>, id: i64) -> Result<(), AppError> {
+    state.library.delete_subscription(id).await?;
+    Ok(())
+}
+
+/// 立即检查。已有检查任务在队列里时不重复建，返回 `None`。
+#[tauri::command]
+pub async fn subscription_check(state: State<'_, AppState>, id: i64) -> Result<Option<JobInfo>, AppError> {
+    state.downloader.check_subscription(id).await
+}
+
+#[tauri::command]
+pub async fn subscriptions_check_all(state: State<'_, AppState>) -> Result<usize, AppError> {
+    state.downloader.check_all_subscriptions().await
+}
+
+// ---------- 通用 ----------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneralInfo {
+    close_to_tray: bool,
+    launch_at_login: bool,
+}
+
+fn general_info_of(app: &AppHandle, state: &AppState) -> GeneralInfo {
+    use tauri_plugin_autostart::ManagerExt;
+    GeneralInfo {
+        close_to_tray: state.settings().close_to_tray,
+        launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
+    }
+}
+
+#[tauri::command]
+pub fn general_info(app: AppHandle, state: State<'_, AppState>) -> GeneralInfo {
+    general_info_of(&app, &state)
+}
+
+#[tauri::command]
+pub fn general_save(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    close_to_tray: bool,
+    launch_at_login: bool,
+) -> Result<GeneralInfo, AppError> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autostart = app.autolaunch();
+    if autostart.is_enabled().unwrap_or(false) != launch_at_login {
+        let result = if launch_at_login { autostart.enable() } else { autostart.disable() };
+        result.map_err(|e| AppError::Internal(format!("设置开机启动失败：{e}")))?;
+    }
+    state.update_settings(|settings| settings.close_to_tray = close_to_tray)?;
+    Ok(general_info_of(&app, &state))
 }
 
 // ---------- 账号 ----------
