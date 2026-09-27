@@ -1450,6 +1450,49 @@ code {
   gap: 8px;
 }
 
+/* 快捷键列表：按键一列、说明一列，行高和设置里的选项一致。 */
+.shortcuts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 18px;
+  margin: 12px 0 0;
+}
+
+.shortcut {
+  display: contents;
+}
+
+.shortcut dt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shortcut dd {
+  margin: 0;
+  align-self: center;
+  color: var(--fg-2);
+  font-size: 12.5px;
+}
+
+kbd {
+  min-width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 7px;
+  border: 1px solid var(--line-2);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--raised-2);
+  color: var(--fg-1);
+  /* 用界面字体：等宽字体里的 ⌘、⌫ 显示得很小。 */
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .badge.ok {
   color: var(--ok);
 }

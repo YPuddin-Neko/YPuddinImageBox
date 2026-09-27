@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { MotionConfig, motion } from "motion/react";
 
 import { Rail, type View } from "./components/Rail";
@@ -9,6 +9,7 @@ import { DownloadsProvider } from "./features/downloads/DownloadsProvider";
 import { Library } from "./features/library/Library";
 import { Settings, type SettingsSection } from "./features/settings/Settings";
 import { Subscriptions } from "./features/subscriptions/Subscriptions";
+import { dialogOpen, hasMod } from "./lib/hotkeys";
 import { VIEW_VARIANTS } from "./lib/motion";
 import type { Navigate } from "./lib/nav";
 import { ThemeProvider } from "./theme/ThemeProvider";
@@ -36,6 +37,36 @@ function Shell() {
   const navigate = useCallback<Navigate>((next, target) => {
     if (target) setSection(target);
     setView(next);
+  }, []);
+
+  // 全局快捷键：⌘/Ctrl + 1～4 切换页面，⌘/Ctrl + , 打开设置，⌘/Ctrl + F 跳到搜索框。输入框里也能用。
+  useEffect(() => {
+    const searchInput = () => document.querySelector<HTMLInputElement>('.view[aria-hidden="false"] .search-input');
+    const onKey = (event: KeyboardEvent) => {
+      if (!hasMod(event) || event.shiftKey || event.isComposing || dialogOpen()) return;
+      const pages: Record<string, View> = { "1": "discover", "2": "library", "3": "subscriptions", "4": "downloads", ",": "settings" };
+      const page = pages[event.key];
+      if (page) {
+        event.preventDefault();
+        setView(page);
+      } else if (event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        const input = searchInput();
+        if (input) {
+          input.focus();
+          input.select();
+        } else {
+          // 当前页没有搜索框（订阅、下载、设置）：先回到发现页，等它显示出来再聚焦。
+          setView("discover");
+          window.setTimeout(() => {
+            searchInput()?.focus();
+            searchInput()?.select();
+          }, 60);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
   return (
     <div className="app">

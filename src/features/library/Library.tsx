@@ -11,6 +11,7 @@ import { usePicker } from "../../components/usePicker";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
+import { hasMod, spaceForButton, useHotkeys } from "../../lib/hotkeys";
 import { errorMessage, postKey, RATING_OPTIONS, RATINGS, SOURCE_OPTIONS, type Rating, type Source } from "../../lib/ipc";
 import {
   LIBRARY_SORTS,
@@ -232,6 +233,34 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
 
   const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
   const filtered = isFiltered(committed.current);
+
+  // 列表快捷键：←/→ 上一张、下一张，空格勾选，⌘/Ctrl + A 全选，Esc 取消勾选，Delete 删除。
+  useHotkeys(active, (event) => {
+    if ((event.key === "ArrowRight" || event.key === "ArrowLeft") && !hasMod(event)) {
+      const index = posts.findIndex((post) => postKey(post) === selected);
+      const next = posts[Math.min(posts.length - 1, Math.max(0, index + (event.key === "ArrowRight" ? 1 : -1)))];
+      if (next) setSelected(postKey(next));
+      return true;
+    }
+    if (event.key === " " && !spaceForButton(event) && selectedPost) {
+      togglePick(selectedPost, event);
+      return true;
+    }
+    if (hasMod(event) && event.key.toLowerCase() === "a") {
+      pickAll();
+      return true;
+    }
+    if (event.key === "Escape" && picked.size > 0) {
+      clearPicks();
+      return true;
+    }
+    if ((event.key === "Delete" || event.key === "Backspace") && !busy) {
+      const list = picked.size > 0 ? pickedPosts : selectedPost ? [selectedPost] : [];
+      if (list.length > 0) setDeleting(list);
+      return true;
+    }
+    return false;
+  });
   const missing = new Set(posts.filter((post) => post.missing).map(postKey));
 
   return (

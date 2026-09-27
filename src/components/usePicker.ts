@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { postKey, type Post } from "../lib/ipc";
 
@@ -10,7 +10,8 @@ export function usePicker<T extends Post>(posts: T[]) {
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const anchor = useRef<string | null>(null);
 
-  const toggle = (post: T, event: MouseEvent) => {
+  /** 键盘勾选时传 `{ shiftKey: false }`。 */
+  const toggle = (post: T, event: { shiftKey: boolean }) => {
     const key = postKey(post);
     const from = anchor.current;
     setPicked((prev) => {

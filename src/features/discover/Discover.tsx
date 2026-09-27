@@ -11,6 +11,7 @@ import { usePicker } from "../../components/usePicker";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
+import { hasMod, spaceForButton, useHotkeys } from "../../lib/hotkeys";
 import {
   countRemote,
   errorCode,
@@ -315,6 +316,39 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   };
 
   const selectedKey = selectedPost ? postKey(selectedPost) : null;
+
+  // 列表快捷键：←/→ 上一张、下一张，空格勾选，⌘/Ctrl + A 全选，Esc 取消勾选，⌘/Ctrl + D 下载。
+  useHotkeys(active, (event) => {
+    const key = event.key.toLowerCase();
+    if ((event.key === "ArrowRight" || event.key === "ArrowLeft") && !hasMod(event)) {
+      const index = posts.findIndex((post) => postKey(post) === selectedKey);
+      const next = posts[Math.min(posts.length - 1, Math.max(0, index + (event.key === "ArrowRight" ? 1 : -1)))];
+      if (next) setSelected(postKey(next));
+      return true;
+    }
+    if (event.key === " " && !spaceForButton(event) && selectedPost) {
+      togglePick(selectedPost, event);
+      return true;
+    }
+    if (hasMod(event) && key === "a") {
+      pickAll();
+      return true;
+    }
+    if (event.key === "Escape" && picked.size > 0) {
+      clearPicks();
+      return true;
+    }
+    if (hasMod(event) && key === "d") {
+      if (picked.size > 0) {
+        if (!busy) void downloadPicked();
+      } else if (selectedPost?.fileUrl && selectedKey && !owned.has(selectedKey) && !queued.has(selectedKey) && !busy) {
+        void enqueue([selectedPost], `已加入下载队列：#${selectedPost.id}`);
+      }
+      return true;
+    }
+    return false;
+  });
+
   const primaryAction = selectedPost ? (
     owned.has(postKey(selectedPost)) ? (
       <button type="button" className="btn" disabled>
