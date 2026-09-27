@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { error as logError } from "@tauri-apps/plugin-log";
 
 interface State {
   error: Error | null;
@@ -17,6 +18,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("界面出错", error, info.componentStack);
+    logError(`界面出错：${error.message}${info.componentStack ?? ""}`).catch(() => {});
   }
 
   render() {

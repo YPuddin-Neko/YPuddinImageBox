@@ -345,6 +345,7 @@ pub async fn subscriptions_check_all(state: State<'_, AppState>) -> Result<usize
 pub struct GeneralInfo {
     close_to_tray: bool,
     launch_at_login: bool,
+    log_file: PathBuf,
 }
 
 fn general_info_of(app: &AppHandle, state: &AppState) -> GeneralInfo {
@@ -352,6 +353,7 @@ fn general_info_of(app: &AppHandle, state: &AppState) -> GeneralInfo {
     GeneralInfo {
         close_to_tray: state.settings().close_to_tray,
         launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
+        log_file: crate::log_file(&state.storage().path(StorageKind::Data)),
     }
 }
 

@@ -47,5 +47,11 @@ export interface GeneralSettings {
   launchAtLogin: boolean;
 }
 
-export const generalInfo = () => invoke<GeneralSettings>("general_info");
-export const generalSave = (settings: GeneralSettings) => invoke<GeneralSettings>("general_save", { ...settings });
+export interface GeneralInfo extends GeneralSettings {
+  /** 日志文件的完整路径。 */
+  logFile: string;
+}
+
+export const generalInfo = () => invoke<GeneralInfo>("general_info");
+export const generalSave = ({ closeToTray, launchAtLogin }: GeneralSettings) =>
+  invoke<GeneralInfo>("general_save", { closeToTray, launchAtLogin });

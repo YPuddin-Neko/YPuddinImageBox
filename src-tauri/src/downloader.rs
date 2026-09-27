@@ -313,9 +313,7 @@ impl Downloader {
                 Ok(Some(job)) => self.run_job(job).await,
                 Ok(None) => self.wake.notified().await,
                 Err(err) => {
-                    #[cfg(debug_assertions)]
-                    eprintln!("[download] 读取任务失败：{err}");
-                    let _ = err;
+                    log::error!("读取下载任务失败：{err}");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             }
@@ -331,6 +329,7 @@ impl Downloader {
             self.library.transition(id, &[JobStatus::Queued, JobStatus::Running], JobStatus::Running, None).await;
         let result = match claimed {
             Ok(Some(job)) => {
+                log::info!("开始下载任务 #{id}「{}」", job.title);
                 self.emit(Event::Job(job.clone()));
                 self.process(job, stop_rx).await
             }
@@ -363,6 +362,14 @@ impl Downloader {
             }
         };
         if let Ok(Some(job)) = finished {
+            log::info!(
+                "下载任务 #{id} {}：保存 {}，跳过 {}，失败 {}{}",
+                job.status.as_str(),
+                job.saved,
+                job.skipped,
+                job.failed,
+                job.error.as_deref().map(|e| format!("，原因：{e}")).unwrap_or_default()
+            );
             self.emit(Event::Job(job.clone()));
             if let Some(sub_id) = job.subscription_id {
                 if matches!(job.status, JobStatus::Done | JobStatus::Failed) {

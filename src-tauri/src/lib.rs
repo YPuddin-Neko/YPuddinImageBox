@@ -21,7 +21,9 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 #[cfg(target_os = "macos")]
 use tauri::RunEvent;
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use downloader::{Downloader, Event, EventSink};
 use error::AppError;
@@ -80,6 +82,45 @@ impl AppState {
 const MAIN_WINDOW: &str = "main";
 /// 开机自动启动时带上这个参数：启动后不弹出窗口，直接在后台运行。
 const BACKGROUND_ARG: &str = "--background";
+/// 下次打开时恢复窗口的大小、位置和是否最大化。显示与否由启动方式决定，不恢复。
+const WINDOW_STATE: StateFlags = StateFlags::SIZE.union(StateFlags::POSITION).union(StateFlags::MAXIMIZED);
+/// 日志文件放在「软件数据」位置的 logs 目录，超过 2 MB 换新文件，保留上一份。
+const LOG_FILE: &str = "imagebox";
+const LOG_MAX_BYTES: u128 = 2 * 1024 * 1024;
+
+/// 日志文件的完整路径，设置页里用来在访达 / 资源管理器中显示。
+pub fn log_file(data_dir: &std::path::Path) -> std::path::PathBuf {
+    data_dir.join("logs").join(format!("{LOG_FILE}.log"))
+}
+
+/// 写日志到文件和终端，并把崩溃信息也记进日志。
+fn setup_logging(app: &tauri::App, data_dir: &std::path::Path) -> tauri::Result<()> {
+    let folder = TargetKind::Folder { path: data_dir.join("logs"), file_name: Some(LOG_FILE.into()) };
+    app.handle().plugin(
+        tauri_plugin_log::Builder::new()
+            .clear_targets()
+            .targets([Target::new(TargetKind::Stdout), Target::new(folder)])
+            .level(log::LevelFilter::Info)
+            // 数据库每条语句都会记一行，只留警告。
+            .level_for("sqlx", log::LevelFilter::Warn)
+            .max_file_size(LOG_MAX_BYTES)
+            .rotation_strategy(RotationStrategy::KeepOne)
+            .timezone_strategy(TimezoneStrategy::UseLocal)
+            .build(),
+    )?;
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("程序崩溃：{info}");
+        default_hook(info);
+    }));
+    log::info!(
+        "ImageBox {} 启动（{} {}）",
+        app.package_info().version,
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    Ok(())
+}
 
 fn notify(app: &AppHandle, body: &str) {
     let _ = app.notification().builder().title("ImageBox").body(body).show();
@@ -159,12 +200,9 @@ fn emit_event(app: &AppHandle, event: Event) {
             Ok(())
         }
     };
-    #[cfg(debug_assertions)]
     if let Err(err) = result {
-        eprintln!("[event] 发送失败：{err}");
+        log::warn!("发送界面事件失败：{err}");
     }
-    #[cfg(not(debug_assertions))]
-    let _ = result;
 }
 
 fn load_storage(app: &tauri::App) -> Result<Storage, Box<dyn std::error::Error>> {
@@ -185,6 +223,9 @@ fn load_storage(app: &tauri::App) -> Result<Storage, Box<dyn std::error::Error>>
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        // 软件已经在运行（例如开机启动后又手动打开）时，只把已有的窗口叫出来，不再开第二份。必须最先注册。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)))
+        .plugin(tauri_plugin_window_state::Builder::new().with_state_flags(WINDOW_STATE).build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -192,6 +233,7 @@ pub fn run() {
         .setup(|app| {
             let storage = load_storage(app)?;
             let (db_dir, data_dir) = (storage.path(StorageKind::Database), storage.path(StorageKind::Data));
+            setup_logging(app, &data_dir)?;
             let storage = Arc::new(RwLock::new(storage));
             let settings = Settings::load(&data_dir);
             // 存下来的代理地址失效时先用系统代理启动，设置页里还能看到原来填的地址。
@@ -240,6 +282,8 @@ pub fn run() {
                 let keep_running = window.app_handle().state::<AppState>().settings().close_to_tray;
                 if keep_running && window.label() == MAIN_WINDOW {
                     api.prevent_close();
+                    // 藏起来之后软件可能很久不退出，窗口位置现在就存下来。
+                    let _ = window.app_handle().save_window_state(WINDOW_STATE);
                     let _ = window.hide();
                 }
             }

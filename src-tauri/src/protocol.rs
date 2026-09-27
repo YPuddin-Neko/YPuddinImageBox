@@ -36,8 +36,11 @@ pub async fn serve<R: Runtime>(app: &AppHandle<R>, request: &Request<Vec<u8>>) -
             .header(header::CACHE_CONTROL, "private, max-age=604800")
             .body(bytes),
         Err((status, message)) => {
-            #[cfg(debug_assertions)]
-            eprintln!("[ibx] {} {}", status.as_u16(), message);
+            if status.is_server_error() {
+                log::warn!("图片加载失败 {}：{message}", status.as_u16());
+            } else {
+                log::debug!("图片加载失败 {}：{message}", status.as_u16());
+            }
             builder
                 .status(status)
                 .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")

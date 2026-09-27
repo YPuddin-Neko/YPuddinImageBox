@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
+import { Icon } from "../../components/Icon";
 import { Toast, useToast } from "../../components/Toast";
 import { errorMessage } from "../../lib/ipc";
-import { isMac } from "../../lib/platform";
-import { generalInfo, generalSave, type GeneralSettings as General } from "../../lib/settings";
+import { isMac, revealLabel } from "../../lib/platform";
+import { generalInfo, generalSave, type GeneralInfo, type GeneralSettings as General } from "../../lib/settings";
 
 const TRAY = isMac ? "菜单栏" : "任务栏托盘";
 
@@ -21,7 +23,7 @@ const CLOSE_OPTIONS: { value: boolean; title: string; description: string }[] = 
 ];
 
 export function GeneralSettings() {
-  const [settings, setSettings] = useState<General | null>(null);
+  const [settings, setSettings] = useState<GeneralInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useToast();
@@ -29,6 +31,15 @@ export function GeneralSettings() {
   useEffect(() => {
     generalInfo().then(setSettings, (err) => setError(errorMessage(err)));
   }, []);
+
+  const revealLog = async (path: string) => {
+    setError(null);
+    try {
+      await revealItemInDir(path);
+    } catch (err) {
+      setError(`${revealLabel}失败：${errorMessage(err)}`);
+    }
+  };
 
   const save = async (next: General, message: string) => {
     setBusy(true);
@@ -102,6 +113,24 @@ export function GeneralSettings() {
               </button>
             </div>
             <p className="set-desc">登录系统后自动在后台启动，不弹出窗口，订阅照常按时检查。</p>
+          </section>
+
+          <section className="set-card" aria-labelledby="log-title">
+            <div className="set-title">
+              <h2 id="log-title">日志</h2>
+            </div>
+            <p className="set-desc">记录下载任务、订阅检查和出错的情况，文件超过 2 MB 会换新的。</p>
+            <div className="set-line">
+              <code className="storage-path" title={settings.logFile}>
+                <span>{settings.logFile}</span>
+              </code>
+              <div className="set-actions">
+                <button type="button" className="btn ghost" onClick={() => void revealLog(settings.logFile)}>
+                  <Icon name="folder" size={15} />
+                  {revealLabel}
+                </button>
+              </div>
+            </div>
           </section>
         </div>
       )}

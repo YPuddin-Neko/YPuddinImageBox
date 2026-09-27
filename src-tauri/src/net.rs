@@ -94,8 +94,7 @@ impl Lane {
         if status == StatusCode::TOO_MANY_REQUESTS && !self.halved.swap(true, Ordering::SeqCst) {
             self.limiter.halve().await;
         }
-        #[cfg(debug_assertions)]
-        eprintln!("[net] {} 通道收到 {}，退避 {:?}", self.name, status.as_u16(), backoff);
+        log::warn!("{} 通道收到 {}，暂停 {:?} 后再请求", self.name, status.as_u16(), backoff);
     }
 
     /// 按通道的并发、速率和退避状态发送请求。
