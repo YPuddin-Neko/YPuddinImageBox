@@ -8,6 +8,8 @@ export interface SelectOption<T extends string | number> {
   label: string;
   /** 显示在选项右侧的简短说明。 */
   hint?: string;
+  /** 这一项下面画分隔线。 */
+  divider?: boolean;
 }
 
 interface CommonProps {
@@ -19,6 +21,8 @@ interface CommonProps {
   /** 按钮里值前面的小标题。 */
   label?: string;
   disabled?: boolean;
+  /** 悬停提示，例如说明为什么不能选。 */
+  title?: string;
 }
 
 export interface MenuItem {
@@ -40,7 +44,6 @@ interface DropdownProps extends CommonProps {
   onPick: (key: string) => void;
   /** 换掉按钮里的文字，例如只放一个图标。 */
   trigger?: ReactNode;
-  title?: string;
   /** 菜单和按钮左边对齐（默认）还是右边对齐；靠右的按钮用右边对齐。 */
   align?: "start" | "end";
   /** 按钮上额外的状态标记，样式里用。 */
@@ -264,7 +267,7 @@ export function MenuButton({
   title,
   state,
   ...common
-}: CommonProps & { items: MenuItem[]; onPick: (key: string) => void; children: ReactNode; title?: string; state?: string }) {
+}: CommonProps & { items: MenuItem[]; onPick: (key: string) => void; children: ReactNode; state?: string }) {
   return (
     <Dropdown {...common} text="" items={items} onPick={onPick} trigger={children} title={title} align="end" state={state} />
   );
@@ -288,6 +291,7 @@ export function Select<T extends string | number>({
         label: option.label,
         hint: option.hint,
         selected: option.value === current?.value,
+        divider: option.divider,
       }))}
       onPick={(key) => {
         const next = options.find((option) => String(option.value) === key);

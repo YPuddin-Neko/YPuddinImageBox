@@ -379,6 +379,7 @@ export function LibraryGrid({
             missing={missing}
             picked={picked}
             onPick={togglePick}
+            showSource={scope.source === null}
           />
           <div ref={sentinel} className="sentinel" aria-hidden="true" />
           {listing?.hasMore && !error && (

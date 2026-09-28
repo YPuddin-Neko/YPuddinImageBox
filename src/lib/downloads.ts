@@ -49,7 +49,8 @@ export const isActive = (job: Job) => job.status === "queued" || job.status === 
 
 export const processed = (job: Job) => job.saved + job.skipped + job.failed;
 
-export const downloadPosts = (posts: Post[]) => invoke<Job>("download_posts", { posts });
+/** 下载选中的图；来自几个站点时每个站点各建一个任务。 */
+export const downloadPosts = (posts: Post[]) => invoke<Job[]>("download_posts", { posts });
 export const downloadQuery = (params: SearchParams, maxPosts: number | null) =>
   invoke<Job>("download_query", { params, maxPosts });
 export const listJobs = () => invoke<Job[]>("list_jobs");

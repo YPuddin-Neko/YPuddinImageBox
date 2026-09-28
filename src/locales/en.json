@@ -372,5 +372,13 @@
   "一般 tag": "General tags",
   "{n} 个 tag": "{n} {n|tag|tags}",
   "图片最多": "Most images",
-  "名称": "Name"
+  "名称": "Name",
+  "全部平台": "All sites",
+  "聚合搜索": "Combined search",
+  "平台": "Site",
+  "选择「全部平台」聚合搜索时才能按平台筛选": "Choose All sites to filter by site",
+  "{site}：{message}": "{site}: {message}",
+  "每个平台各建一个下载任务，上限对每个平台分别计算。": "Each site gets its own download job, and the limit applies to each one.",
+  "每个平台各建一个订阅。": "Each site gets its own subscription.",
+  "{sites} 已订阅。": "Subscribed on {sites}."
 }

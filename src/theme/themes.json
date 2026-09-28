@@ -24,12 +24,16 @@
     "dark": {
       "shimmer": "rgba(255,255,255,.07)",
       "photo": "#efebe3",
-      "photo-shadow": "0 8px 20px -6px rgba(0,0,0,.6)"
+      "photo-shadow": "0 8px 20px -6px rgba(0,0,0,.6)",
+      "site-danbooru": "#6aaeff",
+      "site-gelbooru": "#5fd6ae"
     },
     "light": {
       "shimmer": "rgba(255,255,255,.72)",
       "photo": "#ffffff",
-      "photo-shadow": "0 8px 18px -8px rgba(30,30,50,.28)"
+      "photo-shadow": "0 8px 18px -8px rgba(30,30,50,.28)",
+      "site-danbooru": "#6aaeff",
+      "site-gelbooru": "#5fd6ae"
     }
   },
   "themes": [

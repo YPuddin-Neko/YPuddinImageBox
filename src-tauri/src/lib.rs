@@ -413,6 +413,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::search_remote,
+            commands::search_sites,
             commands::count_remote,
             commands::download_posts,
             commands::download_query,

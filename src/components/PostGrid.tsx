@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent 
 import { motion } from "motion/react";
 
 import { t } from "../lib/i18n";
-import { imageSrc, postKey, type Post } from "../lib/ipc";
+import { imageSrc, postKey, SOURCE_LABEL, type Post } from "../lib/ipc";
 import { cardEnter } from "../lib/motion";
 import { Icon } from "./Icon";
 import { ShimmerImage } from "./ShimmerImage";
@@ -60,10 +60,12 @@ interface PostGridProps<T extends Post> {
   /** 多选时已勾选的帖子；不传 `onPick` 就不显示勾选框。 */
   picked?: ReadonlySet<string>;
   onPick?: (post: T, event: MouseEvent) => void;
+  /** 结果来自好几个站点时（聚合搜索、图库的全部图片），右上角标出每张图来自哪个站点。 */
+  showSource?: boolean;
 }
 
 /**
- * 瀑布流：点卡片看详情，左上角勾选框多选，右上角角标表示已下载。
+ * 瀑布流：点卡片看详情，左上角勾选框多选，右上角角标表示已下载和来自哪个站点。
  * 只渲染滚动区域里看得见（加上下各一段余量）的卡片，几千张也不卡。
  */
 export function PostGrid<T extends Post>({
@@ -75,6 +77,7 @@ export function PostGrid<T extends Post>({
   missing,
   picked,
   onPick,
+  showSource = false,
 }: PostGridProps<T>) {
   const grid = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -172,6 +175,16 @@ export function PostGrid<T extends Post>({
         const key = postKey(post);
         const isPicked = picked?.has(key) ?? false;
         const animate = !entered.current.has(key);
+        const state = missing?.has(key) ? (
+          <span className="card-owned is-missing">{t("文件缺失")}</span>
+        ) : (
+          owned?.has(key) && (
+            <span className="card-owned">
+              <Icon name="check" size={11} />
+              {t("已下载")}
+            </span>
+          )
+        );
         return (
           <motion.div
             key={key}
@@ -205,15 +218,15 @@ export function PostGrid<T extends Post>({
                 <Icon name="check" size={13} />
               </button>
             )}
-            {missing?.has(key) ? (
-              <span className="card-owned is-missing">{t("文件缺失")}</span>
-            ) : (
-              owned?.has(key) && (
-                <span className="card-owned">
-                  <Icon name="check" size={11} />
-                  {t("已下载")}
-                </span>
-              )
+            {(state || showSource) && (
+              <span className="card-badges">
+                {state}
+                {showSource && (
+                  <span className="card-source" data-source={post.source}>
+                    {SOURCE_LABEL[post.source]}
+                  </span>
+                )}
+              </span>
             )}
           </motion.div>
         );

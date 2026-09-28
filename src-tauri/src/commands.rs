@@ -10,7 +10,7 @@ use crate::library::{
 };
 use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
-use crate::sources::{self, danbooru, gelbooru, Page, Post, SearchPage, SearchParams, Source};
+use crate::sources::{self, combined, danbooru, gelbooru, Page, Post, Rating, Scope, SearchPage, SearchParams, Sort, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
 use crate::{keys, net, secrets, thumbs, AppState};
 
@@ -32,20 +32,37 @@ fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
 /// 超出 tag 上限时一次最多往下翻几页找够一页结果，免得条件太严时一直翻。
 const MAX_FILTERED_PAGES: usize = 5;
 
-async fn search_with_plan(state: &AppState, params: &SearchParams, plan: &QueryPlan) -> Result<SearchPage, AppError> {
+/// 搜一个站点一页的结果。
+struct SiteResults {
+    posts: Vec<Post>,
+    next: Option<String>,
+    query: String,
+    local_filter: String,
+    /// 这一页翻过的图（本地筛选时连筛掉的也算）里按所选排序最靠后的位置，聚合搜索时用。
+    reached: Option<combined::Rank>,
+}
+
+async fn search_with_plan(
+    state: &AppState,
+    params: &SearchParams,
+    plan: &QueryPlan,
+    page_size: u32,
+) -> Result<SiteResults, AppError> {
     let accounts = state.accounts.get();
     let query = &plan.server_query;
-    let (posts, next) = if plan.local.is_empty() {
+    let (posts, next, reached) = if plan.local.is_empty() {
         let page = params.cursor.as_deref().and_then(|c| c.parse().ok()).unwrap_or(1u32).max(1);
         let (posts, fetched) =
-            sources::fetch(&state.net, &accounts, params.source, query, &Page::Number(page), PAGE_SIZE).await?;
-        (posts, (fetched >= PAGE_SIZE as usize).then(|| (page + 1).to_string()))
+            sources::fetch(&state.net, &accounts, params.source, query, &Page::Number(page), page_size).await?;
+        let reached = combined::lowest(&posts, params.sort);
+        (posts, (fetched >= page_size as usize).then(|| (page + 1).to_string()), reached)
     } else {
         // 按站点每页最多的条数往下翻，本地筛到够一页或翻满几页就先返回，剩下的下次接着翻。
         let mut page = params.cursor.as_deref().and_then(Page::parse).unwrap_or(Page::Number(1));
         let limit = params.source.max_page_size();
         let mut matched = Vec::new();
         let mut next = None;
+        let mut reached = None;
         for _ in 0..MAX_FILTERED_PAGES {
             let (posts, fetched) = sources::fetch(&state.net, &accounts, params.source, query, &page, limit).await?;
             let ids = posts.iter().map(|post| post.id);
@@ -53,28 +70,27 @@ async fn search_with_plan(state: &AppState, params: &SearchParams, plan: &QueryP
                 next = None;
                 break;
             };
+            reached = reached.into_iter().chain(combined::lowest(&posts, params.sort)).min();
             matched.extend(posts.into_iter().filter(|post| plan.local.matches(post)));
             page = page.next(params.source, query, Some(bounds));
             next = Some(page.to_param());
-            if matched.len() >= PAGE_SIZE as usize {
+            if matched.len() >= page_size as usize {
                 break;
             }
         }
-        (matched, next)
+        (matched, next, reached)
     };
-    let ids: Vec<u64> = posts.iter().map(|post| post.id).collect();
-    let owned = state.library.owned(params.source, &ids).await?.into_iter().collect();
-    Ok(SearchPage { posts, next, query: query.clone(), local_filter: plan.local.to_query(), owned })
+    Ok(SiteResults { posts, next, query: query.clone(), local_filter: plan.local.to_query(), reached })
 }
 
-#[tauri::command]
-pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> Result<SearchPage, AppError> {
+/// 搜一个站点的一页，每页 `page_size` 张。
+async fn search_site(state: &AppState, params: &SearchParams, page_size: u32) -> Result<SiteResults, AppError> {
     let tags = params.tags_with_sort()?;
-    let mut limit = tag_limit(&state, params.source);
+    let mut limit = tag_limit(state, params.source);
     // 站点实际的上限比按账号等级算的小时（例如等级刚变），按站点给的数字重新拆一次。
     for retry in [false, true] {
         let plan = filter::plan_query(params.source, &tags, &params.ratings, limit)?;
-        match search_with_plan(&state, &params, &plan).await {
+        match search_with_plan(state, params, &plan, page_size).await {
             Err(AppError::TagLimit { limit: actual, .. })
                 if !retry && limit.is_some_and(|l| l > actual as usize) =>
             {
@@ -86,6 +102,158 @@ pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> 
     unreachable!("第二次一定会返回")
 }
 
+#[tauri::command]
+pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> Result<SearchPage, AppError> {
+    let found = search_site(&state, &params, PAGE_SIZE).await?;
+    let owned = state.library.owned(&found.posts).await?.into_iter().map(|(_, post_id)| post_id).collect();
+    Ok(SearchPage { posts: found.posts, next: found.next, query: found.query, local_filter: found.local_filter, owned })
+}
+
+/// 聚合搜索：同样的 tag、分级和排序，同时搜几个站点。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SitesSearchParams {
+    pub sources: Vec<Source>,
+    #[serde(default)]
+    pub tags: String,
+    #[serde(default)]
+    pub ratings: Vec<Rating>,
+    #[serde(default)]
+    pub sort: Sort,
+    /// 上一次返回的 `next`；为空表示第一页。
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+/// 聚合搜索里一个站点这一页的情况。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteStatus {
+    pub source: Source,
+    pub query: String,
+    pub local_filter: String,
+    pub error: Option<AppError>,
+    /// 出错的站点下一页还会再试（网络问题）；账号、条件不对时这个站点不再往下翻。
+    pub retry: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SitesPage {
+    pub posts: Vec<Post>,
+    pub next: Option<String>,
+    /// 这一页搜了的站点；有图在等着显示的站点这一页不用搜，不在里面。
+    pub sites: Vec<SiteStatus>,
+    pub owned: Vec<PostRef>,
+}
+
+/// 出错的站点也显示它的查询：按同样的规则拆一次，拆不出来就留空。
+fn site_plan(state: &AppState, params: &SearchParams) -> (String, String) {
+    params
+        .tags_with_sort()
+        .and_then(|tags| filter::plan_query(params.source, &tags, &params.ratings, tag_limit(state, params.source)))
+        .map(|plan| (plan.server_query, plan.local.to_query()))
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn search_sites(state: State<'_, AppState>, params: SitesSearchParams) -> Result<SitesPage, AppError> {
+    combined_search(&state, params).await
+}
+
+/// 每个站点各取一批（合起来和单个站点一页差不多），按所选排序合成一列，规则见 [`combined`]。
+/// 一个站点出错不影响其他站点；第一页所有站点都出错时才整个报错。
+async fn combined_search(state: &AppState, params: SitesSearchParams) -> Result<SitesPage, AppError> {
+    let sources: Vec<Source> = Source::ALL.into_iter().filter(|source| params.sources.contains(source)).collect();
+    if sources.is_empty() {
+        return Err(AppError::InvalidInput(tr!("至少选一个平台", "Choose at least one site")));
+    }
+    if !combined::can_merge(params.sort) {
+        return Err(AppError::InvalidInput(tr!(
+            "聚合搜索只能按上传先后或分数排序",
+            "Combined search can only sort by upload date or score"
+        )));
+    }
+    for source in &sources {
+        params.sort.term(*source)?;
+    }
+    let mut cursor = match params.cursor.as_deref() {
+        None => combined::Cursor::start(&sources),
+        Some(text) => serde_json::from_str::<combined::Cursor>(text).map_err(|_| {
+            AppError::InvalidInput(tr!("翻页位置无效，请重新搜索", "Invalid page position. Search again."))
+        })?,
+    };
+    cursor.sites.retain(|site| sources.contains(&site.source));
+
+    let page_size = PAGE_SIZE.div_ceil(sources.len() as u32);
+    let searches: Vec<SearchParams> = cursor
+        .due()
+        .into_iter()
+        .map(|site| SearchParams {
+            source: site.source,
+            tags: params.tags.clone(),
+            ratings: params.ratings.clone(),
+            sort: params.sort,
+            cursor: site.page.clone(),
+        })
+        .collect();
+    let results = futures_util::future::join_all(searches.into_iter().map(|search| async move {
+        let result = search_site(state, &search, page_size).await;
+        (search, result)
+    }))
+    .await;
+
+    // 等着显示的图在前，这一页取到的接在各自站点后面。
+    let mut pool = std::mem::take(&mut cursor.held);
+    let mut sites = Vec::new();
+    for (search, result) in results {
+        let source = search.source;
+        match result {
+            Ok(found) => {
+                cursor.advance(source, found.next, found.reached);
+                pool.extend(found.posts);
+                sites.push(SiteStatus {
+                    source,
+                    query: found.query,
+                    local_filter: found.local_filter,
+                    error: None,
+                    retry: false,
+                });
+            }
+            Err(err) => {
+                // 网络问题时下一页再试同一页；账号、条件不对时这个站点不再往下翻。
+                let retry = err.is_transient();
+                if !retry {
+                    cursor.stop(source);
+                }
+                let (query, local_filter) = site_plan(state, &search);
+                sites.push(SiteStatus { source, query, local_filter, error: Some(err), retry });
+            }
+        }
+    }
+    if params.cursor.is_none() && sites.iter().all(|site| site.error.is_some()) {
+        if let Some(err) = sites.iter_mut().find_map(|site| site.error.take()) {
+            return Err(err);
+        }
+    }
+
+    let mut queues = combined::by_site(&sources, pool);
+    let posts = combined::take_ready(&mut queues, cursor.bar(), params.sort);
+    cursor.held = queues.into_iter().flatten().collect();
+    let owned = state.library.owned(&posts).await?;
+    let next = if cursor.is_done() {
+        None
+    } else {
+        Some(serde_json::to_string(&cursor).map_err(|err| AppError::Internal(err.to_string()))?)
+    };
+    Ok(SitesPage {
+        posts,
+        next,
+        sites,
+        owned: owned.into_iter().map(|(source, post_id)| PostRef { source, post_id }).collect(),
+    })
+}
+
 /// 查询条件一共能搜到多少张，下载全部结果前给用户确认。
 /// Danbooru 的计数接口不限 tag 数量，所以用完整条件，超出上限时也准确。
 #[tauri::command]
@@ -94,9 +262,19 @@ pub async fn count_remote(state: State<'_, AppState>, params: SearchParams) -> R
     sources::count(&state.net, &state.accounts.get(), params.source, &query).await
 }
 
+/// 下载选中的图。来自几个站点时（聚合搜索）每个站点各建一个任务。
 #[tauri::command]
-pub async fn download_posts(state: State<'_, AppState>, posts: Vec<Post>) -> Result<JobInfo, AppError> {
-    state.downloader.enqueue_posts(posts).await
+pub async fn download_posts(state: State<'_, AppState>, posts: Vec<Post>) -> Result<Vec<JobInfo>, AppError> {
+    let mut jobs = Vec::new();
+    let mut rest = posts;
+    for source in Source::ALL {
+        let (group, others): (Vec<Post>, Vec<Post>) = rest.into_iter().partition(|post| post.source == source);
+        rest = others;
+        if !group.is_empty() {
+            jobs.push(state.downloader.enqueue_posts(group).await?);
+        }
+    }
+    Ok(jobs)
 }
 
 /// 按条件下载全部结果；`max_posts` 限制最多下载前多少张。
@@ -267,10 +445,28 @@ pub async fn saved_searches_list(state: State<'_, AppState>) -> Result<Vec<Saved
     Ok(state.library.saved_searches().await?)
 }
 
+/// 收藏的条件：和搜索一样，来源还可以是 `all`（聚合搜索）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSearchParams {
+    pub source: Scope,
+    #[serde(default)]
+    pub tags: String,
+    #[serde(default)]
+    pub ratings: Vec<Rating>,
+    #[serde(default)]
+    pub sort: Sort,
+}
+
 /// 收藏当前的搜索条件，返回收藏后的列表。
 #[tauri::command]
-pub async fn saved_search_add(state: State<'_, AppState>, params: SearchParams) -> Result<Vec<SavedSearch>, AppError> {
-    params.sort.term(params.source)?;
+pub async fn saved_search_add(
+    state: State<'_, AppState>,
+    params: SavedSearchParams,
+) -> Result<Vec<SavedSearch>, AppError> {
+    for source in params.source.sources() {
+        params.sort.term(source)?;
+    }
     state.library.add_saved_search(params.source, &params.tags, &params.ratings, params.sort).await?;
     Ok(state.library.saved_searches().await?)
 }
@@ -694,4 +890,78 @@ pub fn storage_prepare(state: State<'_, AppState>, kind: StorageKind) -> Result<
 #[tauri::command]
 pub fn restart_app(app: AppHandle) {
     app.restart();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex, RwLock};
+
+    use super::*;
+    use crate::downloader::{Downloader, EventSink};
+    use crate::library::Library;
+    use crate::net::Net;
+    use crate::settings::Settings;
+    use crate::sources::AccountStore;
+    use crate::storage::{Defaults, Storage};
+
+    async fn state(dir: &std::path::Path) -> AppState {
+        let net = Arc::new(Net::new(&ProxySettings::default()).unwrap());
+        let accounts = Arc::new(AccountStore::default());
+        let library = Library::in_memory().await;
+        let defaults = Defaults { images: dir.join("images"), data: dir.join("data"), cache: dir.join("cache") };
+        let storage = Arc::new(RwLock::new(Storage::load(dir.join("storage.json"), defaults)));
+        let images_gate = Arc::new(tokio::sync::RwLock::new(()));
+        let events: EventSink = Arc::new(|_| {});
+        let downloader = Downloader::new(
+            library.clone(),
+            Arc::clone(&net),
+            Arc::clone(&accounts),
+            Arc::clone(&storage),
+            Arc::clone(&images_gate),
+            events,
+        );
+        AppState {
+            net,
+            accounts,
+            library,
+            downloader,
+            images_gate,
+            storage,
+            settings: Mutex::new(Settings::default()),
+            accounts_error: Mutex::new(None),
+        }
+    }
+
+    /// 未登录时搜两个站点：Gelbooru 报缺账号、之后不再搜它，Danbooru 照常往下翻，几页接起来从新到旧。
+    #[tokio::test]
+    #[ignore = "需要网络，手动运行"]
+    async fn combined_search_on_real_sites() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path()).await;
+        let params = |cursor| SitesSearchParams {
+            sources: Source::ALL.to_vec(),
+            tags: "scenery".into(),
+            ratings: vec![Rating::General],
+            sort: Sort::Newest,
+            cursor,
+        };
+        let first = combined_search(&state, params(None)).await.unwrap();
+        let gelbooru = first.sites.iter().find(|site| site.source == Source::Gelbooru).unwrap();
+        assert!(matches!(gelbooru.error, Some(AppError::CredentialsMissing(_))) && !gelbooru.retry);
+        let (mut posts, mut next) = (first.posts, first.next);
+        for _ in 0..2 {
+            let page = combined_search(&state, params(next.clone())).await.unwrap();
+            assert!(page.sites.iter().all(|site| site.source == Source::Danbooru && site.error.is_none()));
+            posts.extend(page.posts);
+            next = page.next;
+        }
+        println!("3 页共 {} 张，最后的翻页位置 {} 字节", posts.len(), next.as_deref().map_or(0, str::len));
+        assert!(posts.len() >= 40, "只有 {} 张", posts.len());
+        let times: Vec<i64> = posts.iter().map(|post| combined::rank(post, Sort::Newest).unwrap().0).collect();
+        assert!(times.windows(2).all(|pair| pair[0] >= pair[1]));
+        // 翻页期间有新图上传时，页码翻页可能重复一两张。
+        let ids: HashSet<u64> = posts.iter().map(|post| post.id).collect();
+        assert!(ids.len() + 2 >= posts.len());
+    }
 }

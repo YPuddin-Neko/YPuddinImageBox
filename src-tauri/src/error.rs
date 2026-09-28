@@ -58,6 +58,11 @@ impl std::fmt::Display for AppError {
 }
 
 impl AppError {
+    /// 网络或站点临时出了问题，过一会儿再试可能就好了；账号、条件不对的错误再试也没用。
+    pub fn is_transient(&self) -> bool {
+        matches!(self, AppError::Network(_) | AppError::Http { .. } | AppError::Parse { .. })
+    }
+
     fn code(&self) -> &'static str {
         match self {
             AppError::Network(_) => "network",

@@ -353,7 +353,7 @@ button:disabled {
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
-.filter-select:hover,
+.filter-select:hover:not(:disabled),
 .filter-select[data-open] {
   border-color: var(--line-2);
   background-color: var(--chip);
@@ -498,14 +498,22 @@ button:disabled {
   opacity: 1;
 }
 
+/* 右上角的角标排成一行：已下载（或文件缺失）在左，来自哪个站点在最右。 */
+.card-badges {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  pointer-events: none;
+}
+
 .card-owned.is-missing {
   color: var(--warn);
 }
 
-.card-owned {
-  position: absolute;
-  top: 10px;
-  right: 8px;
+.card-owned,
+.card-source {
   height: 20px;
   display: inline-flex;
   align-items: center;
@@ -516,7 +524,28 @@ button:disabled {
   color: #fff;
   font-size: 10.5px;
   font-weight: 700;
-  pointer-events: none;
+}
+
+/* 站点名前面一个小圆点，不用读字也能分出站点。 */
+.card-source {
+  gap: 5px;
+  padding: 0 8px 0 7px;
+}
+
+.card-source::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--site-color);
+}
+
+.card-source[data-source="danbooru"] {
+  --site-color: var(--site-danbooru);
+}
+
+.card-source[data-source="gelbooru"] {
+  --site-color: var(--site-gelbooru);
 }
 
 /* 多选时列表底部留出选择条的高度，最后一排不被挡住。 */
@@ -2275,6 +2304,27 @@ kbd {
 
 .dialog-sub {
   color: var(--warn);
+}
+
+/* 聚合搜索时一个平台一行，前面写站点名。 */
+.dialog-site + .dialog-site {
+  margin-top: 4px;
+}
+
+.dialog-site-name {
+  display: inline-grid;
+  justify-items: start;
+  margin-right: 8px;
+  font-weight: 700;
+  color: var(--fg-2);
+}
+
+.dialog-site-name > * {
+  grid-area: 1 / 1;
+}
+
+.dialog-site-sizer {
+  visibility: hidden;
 }
 
 .dialog-paths dt label {

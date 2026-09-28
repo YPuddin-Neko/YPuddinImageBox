@@ -23,11 +23,18 @@ import {
   RATINGS,
   remoteSortLabel,
   remoteSorts,
+  scopeOptions,
   searchRemote,
+  searchSites,
+  SOURCE_LABEL,
   SOURCE_OPTIONS,
+  SOURCES,
   type Post,
   type Rating,
   type RemoteSort,
+  type Scope,
+  type SearchParams,
+  type SiteStatus,
   type Source,
 } from "../../lib/ipc";
 import type { PostRef } from "../../lib/library";
@@ -46,7 +53,10 @@ import { useDownloads } from "../downloads/context";
 import { Inspector } from "./Inspector";
 
 interface Criteria {
-  source: Source;
+  /** 一个站点，或者 all（聚合搜索）。 */
+  scope: Scope;
+  /** 聚合搜索时搜哪些平台（平台筛选）；只搜一个站点时不用。 */
+  platforms: Source[];
   tags: string;
   ratings: Rating[];
   sort: RemoteSort;
@@ -56,17 +66,25 @@ interface Results {
   posts: Post[];
   /** 下一页的位置，没有更多时为 null。 */
   next: string | null;
+  /** 各站点实际发出的查询、本地筛选的 tag 和出错情况；只搜一个站点时只有一项。 */
+  sites: SiteStatus[];
+  /** 聚合搜索的结果：卡片上标出每张图来自哪个站点。 */
+  combined: boolean;
+}
+
+type Count = number | null | "loading" | "failed";
+
+/** 对话框里一个站点的条件。 */
+interface SiteCriteria {
+  source: Source;
   query: string;
-  /** 超出 tag 上限、在本地筛选的 tag。 */
   localFilter: string;
 }
 
-/** 「下载全部结果」对话框。 */
+/** 「下载全部结果」对话框。聚合搜索时每个平台各建一个下载任务。 */
 interface Bulk {
   criteria: Criteria;
-  query: string;
-  localFilter: string;
-  count: number | null | "loading" | "failed";
+  sites: (SiteCriteria & { count: Count })[];
   /** 最多下载前多少张，留空表示不限。 */
   max: string;
 }
@@ -77,11 +95,11 @@ interface Toast {
   link?: View;
 }
 
-/** 「订阅」对话框。 */
+/** 「订阅」对话框。聚合搜索时每个平台各建一个订阅。 */
 interface SubscribeDraft {
   criteria: Criteria;
-  query: string;
-  localFilter: string;
+  /** 各平台实际订阅的条件：订阅不带排序，超出 tag 上限时的拆分可能和当前搜索不同。 */
+  sites: SiteCriteria[];
   interval: number;
   /** 现在是否也下载已有的图。 */
   existing: boolean;
@@ -90,22 +108,138 @@ interface SubscribeDraft {
   error: string | null;
 }
 
-const DEFAULT_CRITERIA: Criteria = { source: "danbooru", tags: "", ratings: ["general"], sort: "newest" };
+const DEFAULT_CRITERIA: Criteria = { scope: "danbooru", platforms: SOURCES, tags: "", ratings: ["general"], sort: "newest" };
 /** 与 Rust 端每页条数一致，用于卡片入场错开。 */
 const PAGE_SIZE = 40;
-/** 分级是复选，连着勾几项时等停下来再搜，免得每勾一项搜一次。 */
-const RATING_DEBOUNCE_MS = 300;
+/** 分级、平台是复选，连着勾几项时等停下来再搜，免得每勾一项搜一次。 */
+const FILTER_DEBOUNCE_MS = 300;
 
-function countText(count: Bulk["count"]): string {
+function countText(count: Count): string {
   if (count === "loading") return t("正在统计…");
   if (count === "failed") return t("暂时无法统计，可以直接开始");
   if (count === null) return t("站点没有给出总数（条件较复杂时会这样），可以直接开始");
   return t("约 {n} 张", { n: formatCount(count) });
 }
 
+/** 发给只认一个站点的接口（统计张数、下载全部结果、订阅）的条件。 */
+const siteParams = (criteria: Criteria, source: Source): SearchParams => ({
+  source,
+  tags: criteria.tags,
+  ratings: criteria.ratings,
+  sort: criteria.sort,
+});
+
+/** 实际搜的范围：聚合搜索只勾了一个平台时，和只搜这个站点一样。收藏按这个存，也按这个比较。 */
+const searchScope = (criteria: Criteria): Scope =>
+  criteria.scope === "all" && criteria.platforms.length === 1 ? criteria.platforms[0] : criteria.scope;
+
+/** 搜一页：只搜一个站点和聚合搜索的结果整理成同一种样子，`owned` 是这一页里已在图库中的帖子。 */
+async function searchPage(criteria: Criteria, cursor: string | null): Promise<{ results: Results; owned: string[] }> {
+  if (criteria.scope === "all") {
+    const page = await searchSites({
+      sources: criteria.platforms,
+      tags: criteria.tags,
+      ratings: criteria.ratings,
+      sort: criteria.sort,
+      cursor,
+    });
+    return {
+      results: { posts: page.posts, next: page.next, sites: page.sites, combined: true },
+      owned: page.owned.map((post) => postKey({ source: post.source, id: post.postId })),
+    };
+  }
+  const source = criteria.scope;
+  const page = await searchRemote({ ...siteParams(criteria, source), cursor });
+  const site: SiteStatus = { source, query: page.query, localFilter: page.localFilter, error: null, retry: false };
+  return {
+    results: { posts: page.posts, next: page.next, sites: [site], combined: false },
+    owned: page.owned.map((id) => postKey({ source, id })),
+  };
+}
+
+/** 接在已有的结果后面，同一帖子只留一张；同一张图（md5 相同）两个平台都有时只留先出现的那张。 */
+function appendNew(prev: Post[], incoming: Post[]): Post[] {
+  const keys = new Set(prev.map(postKey));
+  const hashes = new Set(prev.flatMap((post) => (post.md5 ? [post.md5.toLowerCase()] : [])));
+  const added = incoming.filter((post) => {
+    const key = postKey(post);
+    const hash = post.md5?.toLowerCase();
+    if (keys.has(key) || (hash && hashes.has(hash))) return false;
+    keys.add(key);
+    if (hash) hashes.add(hash);
+    return true;
+  });
+  return [...prev, ...added];
+}
+
+/** 往下翻时更新各站点的情况；这一页没搜的站点（已经翻完，或出错后不再往下翻）保留上一次的。 */
+const mergeSites = (prev: SiteStatus[], next: SiteStatus[]) =>
+  SOURCES.flatMap((source) => next.find((site) => site.source === source) ?? prev.find((site) => site.source === source) ?? []);
+
+/** 筛选行右侧显示的查询：各站点一样时只写一份，不一样时分站点写。 */
+function queryText(sites: SiteStatus[]): string {
+  const queries = sites.map((site) => site.query || t("最新帖子"));
+  if (new Set(queries).size <= 1) return queries[0] ?? "";
+  return sites.map((site, index) => `${SOURCE_LABEL[site.source]} ${queries[index]}`).join(" · ");
+}
+
+function queryTitle(sites: SiteStatus[]): string {
+  const title = t("实际发给站点的查询");
+  if (sites.length < 2) return title;
+  const lines = sites.map((site) =>
+    t("{site}：{message}", { site: SOURCE_LABEL[site.source], message: site.query || t("最新帖子") }),
+  );
+  return [title, ...lines].join("\n");
+}
+
+/** 站点出错的提示：出错信息里没提到是哪个站点时（例如网络问题）补上站点名。 */
+function siteMessage(site: SiteStatus): string {
+  const message = site.error?.message ?? "";
+  const name = SOURCE_LABEL[site.source];
+  return message.includes(name) ? message : t("{site}：{message}", { site: name, message });
+}
+
+const isAccountError = (code: string | null | undefined) => code === "credentials_missing" || code === "bad_credentials";
+
+const sitesLabel = (sources: Source[]) => sources.map((source) => SOURCE_LABEL[source]).join(t("、::list"));
+
+/** 对话框里的站点名。按最长的站点名留宽度，几行后面的条件、数量对齐。 */
+function SiteName({ source }: { source: Source }) {
+  return (
+    <span className="dialog-site-name">
+      {SOURCES.map((other) => (
+        <span key={other} className="dialog-site-sizer" aria-hidden="true">
+          {SOURCE_LABEL[other]}
+        </span>
+      ))}
+      <span>{SOURCE_LABEL[source]}</span>
+    </span>
+  );
+}
+
+/** 对话框里一个站点的条件；聚合搜索时每个平台一行，前面写站点名。 */
+function SiteCondition({ site, named }: { site: SiteCriteria; named: boolean }) {
+  const condition = (
+    <>
+      <code>{site.query || t("全部帖子")}</code>
+      {site.localFilter && (
+        <span className="dialog-sub">{tx("，本地筛选 {filter}", { filter: <code>{site.localFilter}</code> })}</span>
+      )}
+    </>
+  );
+  if (!named) return condition;
+  return (
+    <div className="dialog-site">
+      <SiteName source={site.source} />
+      {condition}
+    </div>
+  );
+}
+
 export function Discover({ active, onNavigate }: { active: boolean; onNavigate: Navigate }) {
   const { addPosts, addQuery } = useDownloads();
-  const [source, setSource] = useState<Source>(DEFAULT_CRITERIA.source);
+  const [scope, setScope] = useState<Scope>(DEFAULT_CRITERIA.scope);
+  const [platforms, setPlatforms] = useState<Source[]>(DEFAULT_CRITERIA.platforms);
   const [tags, setTags] = useState(DEFAULT_CRITERIA.tags);
   const [ratings, setRatings] = useState<Rating[]>(DEFAULT_CRITERIA.ratings);
   const [sort, setSort] = useState<RemoteSort>(DEFAULT_CRITERIA.sort);
@@ -125,7 +259,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [saved, setSaved] = useState<SavedSearch[]>([]);
   const committed = useRef<Criteria>(DEFAULT_CRITERIA);
   const requestId = useRef(0);
-  const ratingTimer = useRef(0);
+  const filterTimer = useRef(0);
   const sentinel = useRef<HTMLDivElement>(null);
 
   const posts = results?.posts ?? [];
@@ -135,23 +269,22 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const run = useCallback(async (criteria: Criteria, cursor: string | null) => {
     const id = ++requestId.current;
     const first = cursor === null;
-    // 重新搜第一页时，还没发出的分级改动已经包含在这次的条件里。
-    if (first) window.clearTimeout(ratingTimer.current);
+    // 重新搜第一页时，还没发出的分级、平台改动已经包含在这次的条件里。
+    if (first) window.clearTimeout(filterTimer.current);
     committed.current = criteria;
     setLoading(true);
     setError(null);
     try {
-      const next = await searchRemote({ ...criteria, cursor });
+      const page = await searchPage(criteria, cursor);
       if (id !== requestId.current) return;
+      const next = page.results;
       setResults((prev) => {
-        const page = { posts: next.posts, next: next.next, query: next.query, localFilter: next.localFilter };
-        if (first || !prev) return page;
-        const seen = new Set(prev.posts.map(postKey));
-        return { ...page, posts: [...prev.posts, ...next.posts.filter((p) => !seen.has(postKey(p)))] };
+        if (first || !prev) return { ...next, posts: appendNew([], next.posts) };
+        return { ...next, posts: appendNew(prev.posts, next.posts), sites: mergeSites(prev.sites, next.sites) };
       });
       setOwned((prev) => {
         const ownedNow = new Set(prev);
-        next.owned.forEach((postId) => ownedNow.add(postKey({ source: criteria.source, id: postId })));
+        page.owned.forEach((key) => ownedNow.add(key));
         return ownedNow;
       });
       if (first) {
@@ -167,7 +300,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   useEffect(() => {
     void run(DEFAULT_CRITERIA, null);
-    return () => window.clearTimeout(ratingTimer.current);
+    return () => window.clearTimeout(filterTimer.current);
   }, [run]);
 
   useEffect(() => {
@@ -199,10 +332,17 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  // 聚合搜索时有站点这一页没加载出来（网络问题），先不自动往下翻，免得一直重试，等用户点「重试」。
+  const paused = results?.sites.some((site) => site.error && site.retry) ?? false;
+
   const loadMore = useCallback(() => {
-    if (!results?.next || loading || error) return;
+    if (!results?.next || loading || error || paused) return;
     void run(committed.current, results.next);
-  }, [results, loading, error, run]);
+  }, [results, loading, error, paused, run]);
+
+  const retrySites = () => {
+    if (results?.next) void run(committed.current, results.next);
+  };
 
   useEffect(() => {
     const target = sentinel.current;
@@ -217,34 +357,48 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     return () => observer.disconnect();
   }, [loadMore, active]);
 
+  /** 搜索框和筛选行里现在的条件（输入框里的字还没提交也算）。 */
+  const formCriteria = (): Criteria => ({ scope, platforms, tags, ratings, sort });
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void run({ source, tags, ratings, sort }, null);
+    void run(formCriteria(), null);
+  };
+
+  const runLater = (criteria: Criteria) => {
+    window.clearTimeout(filterTimer.current);
+    filterTimer.current = window.setTimeout(() => void run(criteria, null), FILTER_DEBOUNCE_MS);
   };
 
   const changeRatings = (next: Rating[]) => {
     setRatings(next);
-    window.clearTimeout(ratingTimer.current);
-    ratingTimer.current = window.setTimeout(() => void run({ source, tags, ratings: next, sort }, null), RATING_DEBOUNCE_MS);
+    runLater({ ...formCriteria(), ratings: next });
+  };
+
+  const changePlatforms = (next: Source[]) => {
+    setPlatforms(next);
+    runLater({ ...formCriteria(), platforms: next });
   };
 
   const changeSort = (next: RemoteSort) => {
     setSort(next);
-    void run({ source, tags, ratings, sort: next }, null);
+    void run({ ...formCriteria(), sort: next }, null);
   };
 
-  // 换站点时，新站点不支持当前排序就回到默认顺序。
-  const changeSource = (next: Source) => {
+  // 换站点时，新站点不支持当前排序就回到默认顺序；聚合搜索只能用各站点都支持的排序。
+  const changeScope = (next: Scope) => {
     const nextSort = remoteSorts(next).some((option) => option.value === sort) ? sort : "newest";
-    setSource(next);
+    setScope(next);
     setSort(nextSort);
-    void run({ source: next, tags, ratings, sort: nextSort }, null);
+    void run({ ...formCriteria(), scope: next, sort: nextSort }, null);
   };
 
   const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
   const firstLoad = loading && !results;
   /** 当前结果对应的收藏（按已经搜过的条件算，不看输入框里还没提交的字）。 */
-  const currentSaved = saved.find((item) => sameSearch(item, committed.current)) ?? null;
+  const currentSaved =
+    saved.find((item) => sameSearch(item, { ...committed.current, scope: searchScope(committed.current) })) ?? null;
+  const localFilter = results?.sites.find((site) => site.localFilter)?.localFilter ?? "";
 
   const toggleSaved = async () => {
     try {
@@ -253,7 +407,14 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         setToast({ message: t("已取消收藏「{title}」", { title: savedTitle(currentSaved) }) });
       } else {
         const criteria = committed.current;
-        setSaved(await savedSearchAdd(criteria));
+        setSaved(
+          await savedSearchAdd({
+            source: searchScope(criteria),
+            tags: criteria.tags,
+            ratings: criteria.ratings,
+            sort: criteria.sort,
+          }),
+        );
         setToast({ message: t("已收藏「{title}」", { title: criteria.tags.trim() || t("全部帖子") }) });
       }
     } catch (err) {
@@ -263,12 +424,14 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   const applySaved = (item: SavedSearch) => {
     const criteria: Criteria = {
-      source: item.source,
+      scope: item.source,
+      platforms: SOURCES,
       tags: item.tags,
       ratings: item.ratings.length ? item.ratings : RATINGS,
       sort: item.sort,
     };
-    setSource(criteria.source);
+    setScope(criteria.scope);
+    setPlatforms(criteria.platforms);
     setTags(criteria.tags);
     setRatings(criteria.ratings);
     setSort(criteria.sort);
@@ -304,21 +467,40 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     if (await enqueue(pickedPosts, t("已加入下载队列：{n} 张", { n: formatCount(pickedPosts.length) }))) clearPicks();
   };
 
+  /** 能接着搜的站点：出错后不再往下翻的（例如没填账号）不下载、不订阅。 */
+  const healthySites = () => (results?.sites ?? []).filter((site) => !site.error || site.retry);
+
   const openBulk = () => {
     const criteria = committed.current;
-    setBulk({ criteria, query: results?.query ?? "", localFilter: results?.localFilter ?? "", count: "loading", max: "" });
-    const settle = (count: Bulk["count"]) =>
-      setBulk((current) => (current && current.criteria === criteria ? { ...current, count } : current));
-    countRemote(criteria).then(settle, () => settle("failed"));
+    const sites = healthySites();
+    setBulk({
+      criteria,
+      sites: sites.map((site) => ({ source: site.source, query: site.query, localFilter: site.localFilter, count: "loading" })),
+      max: "",
+    });
+    sites.forEach(({ source }) => {
+      const settle = (count: Count) =>
+        setBulk((current) =>
+          current && current.criteria === criteria
+            ? { ...current, sites: current.sites.map((site) => (site.source === source ? { ...site, count } : site)) }
+            : current,
+        );
+      countRemote(siteParams(criteria, source)).then(settle, () => settle("failed"));
+    });
   };
 
   const confirmBulk = async () => {
     if (!bulk) return;
     const max = Number.parseInt(bulk.max, 10);
+    const limit = Number.isFinite(max) && max > 0 ? max : null;
     setBulk(null);
     try {
-      await addQuery(bulk.criteria, Number.isFinite(max) && max > 0 ? max : null);
-      setToast({ message: t("已加入下载队列：{query}", { query: bulk.query || t("全部帖子") }), link: "downloads" });
+      for (const site of bulk.sites) await addQuery(siteParams(bulk.criteria, site.source), limit);
+      const title =
+        bulk.criteria.scope === "all"
+          ? `${bulk.criteria.tags.trim() || t("全部帖子")} · ${sitesLabel(bulk.sites.map((site) => site.source))}`
+          : bulk.sites[0]?.query || t("全部帖子");
+      setToast({ message: t("已加入下载队列：{query}", { query: title }), link: "downloads" });
     } catch (err) {
       setToast({ message: errorMessage(err) });
     }
@@ -327,12 +509,12 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   // 订阅不带排序，发给站点的条件以 Rust 端算出的为准。
   const openSubscribe = async () => {
     const criteria = committed.current;
+    const sources = healthySites().map((site) => site.source);
     try {
-      const preview = await subscriptionPreview(criteria);
+      const previews = await Promise.all(sources.map((source) => subscriptionPreview(siteParams(criteria, source))));
       setSubscribing({
         criteria,
-        query: preview.query,
-        localFilter: preview.localFilter,
+        sites: sources.map((source, index) => ({ source, ...previews[index] })),
         interval: 360,
         existing: false,
         max: "",
@@ -349,17 +531,29 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     const draft = subscribing;
     setSubscribing({ ...draft, busy: true, error: null });
     const max = Number.parseInt(draft.max, 10);
+    const limit = draft.existing && Number.isFinite(max) && max > 0 ? max : null;
+    const done: Source[] = [];
     try {
-      const sub = await subscriptionCreate(
-        draft.criteria,
-        draft.interval,
-        draft.existing,
-        draft.existing && Number.isFinite(max) && max > 0 ? max : null,
-      );
+      let title = "";
+      for (const site of draft.sites) {
+        const sub = await subscriptionCreate(siteParams(draft.criteria, site.source), draft.interval, draft.existing, limit);
+        done.push(site.source);
+        title = subscriptionTitle(sub);
+      }
       setSubscribing(null);
-      setToast({ message: t("已订阅「{title}」", { title: subscriptionTitle(sub) }), link: "subscriptions" });
+      const label = draft.criteria.scope === "all" ? `${title} · ${sitesLabel(done)}` : title;
+      setToast({ message: t("已订阅「{title}」", { title: label }), link: "subscriptions" });
     } catch (err) {
-      setSubscribing((current) => current && { ...current, busy: false, error: errorMessage(err) });
+      // 已经订阅好的平台留着，再点「订阅」时只订剩下的。
+      setSubscribing(
+        (current) =>
+          current && {
+            ...current,
+            sites: current.sites.filter((site) => !done.includes(site.source)),
+            busy: false,
+            error: sentences(done.length > 0 && t("{sites} 已订阅。", { sites: sitesLabel(done) }), errorMessage(err)),
+          },
+      );
     }
   };
 
@@ -443,9 +637,9 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               id="search-source"
               className="search-source"
               name={t("来源")}
-              value={source}
-              options={SOURCE_OPTIONS}
-              onChange={changeSource}
+              value={scope}
+              options={scopeOptions()}
+              onChange={changeScope}
             />
             <input
               id="search-tags"
@@ -495,6 +689,17 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         <div className="filters">
           <MultiSelect
             className="filter-select"
+            name={t("平台")}
+            label={t("平台")}
+            allLabel={t("全部")}
+            values={scope === "all" ? platforms : [scope]}
+            options={SOURCE_OPTIONS}
+            onChange={changePlatforms}
+            disabled={scope !== "all"}
+            title={scope === "all" ? undefined : t("选择「全部平台」聚合搜索时才能按平台筛选")}
+          />
+          <MultiSelect
+            className="filter-select"
             name={t("分级")}
             label={t("分级")}
             allLabel={t("全部")}
@@ -507,23 +712,23 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             name={t("排序")}
             label={t("排序")}
             value={sort}
-            options={remoteSorts(source)}
+            options={remoteSorts(scope)}
             onChange={changeSort}
           />
           <span className="filters-space" />
           {results && (
-            <span className="query" title={t("实际发给站点的查询")}>
-              {results.query || t("最新帖子")}
+            <span className="query" title={queryTitle(results.sites)}>
+              {queryText(results.sites)}
             </span>
           )}
-          {results?.localFilter && (
+          {localFilter && (
             <span
               className="local-filter"
               title={t("站点一次能搜的 tag 数有限，「{filter}」在本地逐页筛选，加载会慢一些。Gold 以上等级的账号能直接搜更多 tag。", {
-                filter: results.localFilter,
+                filter: localFilter,
               })}
             >
-              {t("本地筛选 {filter}", { filter: results.localFilter })}
+              {t("本地筛选 {filter}", { filter: localFilter })}
             </span>
           )}
           <span className="count">{t("{n} 张", { n: formatCount(posts.length) })}</span>
@@ -552,7 +757,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
           {error && (
             <div className="alert" role="alert">
               <span>{error.message}</span>
-              {error.code === "credentials_missing" || error.code === "bad_credentials" ? (
+              {isAccountError(error.code) ? (
                 <button type="button" className="btn" onClick={() => onNavigate("settings", "accounts")}>
                   <Icon name="user" size={15} />
                   {t("填写账号")}
@@ -565,8 +770,28 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               )}
             </div>
           )}
+          {results?.sites
+            .filter((site) => site.error)
+            .map((site) => (
+              <div key={site.source} className="alert" role="alert">
+                <span>{siteMessage(site)}</span>
+                {isAccountError(site.error?.code) ? (
+                  <button type="button" className="btn" onClick={() => onNavigate("settings", "accounts")}>
+                    <Icon name="user" size={15} />
+                    {t("填写账号")}
+                  </button>
+                ) : (
+                  site.retry && (
+                    <button type="button" className="btn" onClick={retrySites} disabled={loading}>
+                      <Icon name="retry" size={15} />
+                      {t("重试")}
+                    </button>
+                  )
+                )}
+              </div>
+            ))}
           {firstLoad && <p className="hint">{t("正在加载…")}</p>}
-          {results && posts.length === 0 && !loading && !error && (
+          {results && posts.length === 0 && !results.next && !loading && !error && (
             <p className="hint">
               {committed.current.sort === "popular"
                 ? t("没有找到符合条件的图片。「近期热门」只包含最近两天上传的图，可以换个排序再试。")
@@ -581,9 +806,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             owned={owned}
             picked={picked}
             onPick={togglePick}
+            showSource={results?.combined}
           />
           <div ref={sentinel} className="sentinel" aria-hidden="true" />
-          {results?.next && !error && (
+          {results?.next && !error && !paused && (
             <button type="button" className="btn more" onClick={loadMore} disabled={loading}>
               {loading ? t("正在加载…") : t("加载更多")}
             </button>
@@ -640,15 +866,21 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             <dl className="dialog-paths">
               <dt>{t("条件")}</dt>
               <dd>
-                <code>{bulk.query || t("全部帖子")}</code>
-                {bulk.localFilter && (
-                  <span className="dialog-sub">
-                    {tx("，本地筛选 {filter}", { filter: <code>{bulk.localFilter}</code> })}
-                  </span>
-                )}
+                {bulk.sites.map((site) => (
+                  <SiteCondition key={site.source} site={site} named={bulk.criteria.scope === "all"} />
+                ))}
               </dd>
               <dt>{t("数量")}</dt>
-              <dd>{countText(bulk.count)}</dd>
+              <dd>
+                {bulk.criteria.scope === "all"
+                  ? bulk.sites.map((site) => (
+                      <div key={site.source} className="dialog-site">
+                        <SiteName source={site.source} />
+                        {countText(site.count)}
+                      </div>
+                    ))
+                  : countText(bulk.sites[0]?.count ?? null)}
+              </dd>
               <dt>
                 <label htmlFor="bulk-max">{t("上限")}</label>
               </dt>
@@ -674,7 +906,12 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 </span>
               </dd>
             </dl>
-            <p className="dialog-note">{t("已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。")}</p>
+            <p className="dialog-note">
+              {sentences(
+                bulk.sites.length > 1 && t("每个平台各建一个下载任务，上限对每个平台分别计算。"),
+                t("已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。"),
+              )}
+            </p>
           </>
         )}
       </Dialog>
@@ -705,12 +942,9 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             <dl className="dialog-paths">
               <dt>{t("条件")}</dt>
               <dd>
-                <code>{subscribing.query || t("全部帖子")}</code>
-                {subscribing.localFilter && (
-                  <span className="dialog-sub">
-                    {tx("，本地筛选 {filter}", { filter: <code>{subscribing.localFilter}</code> })}
-                  </span>
-                )}
+                {subscribing.sites.map((site) => (
+                  <SiteCondition key={site.source} site={site} named={subscribing.criteria.scope === "all"} />
+                ))}
               </dd>
               <dt>
                 <label htmlFor="subscribe-interval">{t("检查")}</label>
@@ -769,6 +1003,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             <p className="dialog-note">
               {sentences(
                 t("以后按设定的间隔检查，有新图就自动下载。"),
+                subscribing.sites.length > 1 && t("每个平台各建一个订阅。"),
                 subscribing.criteria.sort !== "newest" &&
                   t("订阅按上传先后找新图，不使用「{sort}」排序。", { sort: remoteSortLabel(subscribing.criteria.sort) }),
                 t("关掉窗口后会在后台继续，可以在「设置 → 通用」里修改。"),

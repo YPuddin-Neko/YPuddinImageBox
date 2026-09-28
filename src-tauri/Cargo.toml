@@ -25,6 +25,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.13", features = ["json", "query", "gzip", "socks"] }
 tokio = { version = "1", features = ["sync", "time", "fs", "io-util", "macros", "rt-multi-thread"] }
+# 聚合搜索时几个站点一起请求（join_all）；依赖树里本来就有。
+futures-util = "0.3"
 thiserror = "2"
 percent-encoding = "2"
 url = "2"

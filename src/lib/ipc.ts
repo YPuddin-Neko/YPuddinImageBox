@@ -23,6 +23,17 @@ export const SOURCE_LABEL: Record<Source, string> = {
 
 export const SOURCES = Object.keys(SOURCE_LABEL) as Source[];
 export const SOURCE_OPTIONS = SOURCES.map((value) => ({ value, label: SOURCE_LABEL[value] }));
+
+/** 搜哪里：一个站点，或者全部平台一起搜（聚合搜索）。 */
+export type Scope = Source | "all";
+
+export const scopeLabel = (scope: Scope) => (scope === "all" ? t("全部平台") : SOURCE_LABEL[scope]);
+
+/** 搜索框里选来源：第一项是全部平台（聚合搜索），下面是各个站点。 */
+export const scopeOptions = (): { value: Scope; label: string; hint?: string; divider?: boolean }[] => [
+  { value: "all", label: t("全部平台"), hint: t("聚合搜索"), divider: true },
+  ...SOURCE_OPTIONS,
+];
 export const ratingOptions = () => RATINGS.map((value) => ({ value, label: ratingLabel(value) }));
 
 /** 站点搜索的排序；默认按上传先后，新的在前。 */
@@ -38,9 +49,9 @@ const REMOTE_SORTS: { value: RemoteSort; label: Msg; hint?: Msg; danbooruOnly?: 
   { value: "filesize", label: "文件最大", danbooruOnly: true },
 ];
 
-/** 站点支持的排序：Gelbooru 只能按上传先后和分数排。 */
-export function remoteSorts(source: Source) {
-  return REMOTE_SORTS.filter((sort) => source === "danbooru" || !sort.danbooruOnly).map(({ value, label, hint }) => ({
+/** 站点支持的排序：Gelbooru 只能按上传先后和分数排，聚合搜索也只能用各站点都支持的这几种。 */
+export function remoteSorts(scope: Scope) {
+  return REMOTE_SORTS.filter((sort) => scope === "danbooru" || !sort.danbooruOnly).map(({ value, label, hint }) => ({
     value,
     label: t(label),
     hint: hint && t(hint),
@@ -103,6 +114,40 @@ export interface SearchPage {
 
 export function searchRemote(params: SearchParams): Promise<SearchPage> {
   return invoke<SearchPage>("search_remote", { params });
+}
+
+/** 聚合搜索里一个站点这一页的情况。 */
+export interface SiteStatus {
+  source: Source;
+  query: string;
+  localFilter: string;
+  error: { code: string; message: string } | null;
+  /** 出错的站点往下翻时还会再试（网络问题）；账号、条件不对时这个站点不再往下翻。 */
+  retry: boolean;
+}
+
+export interface SitesSearchParams {
+  sources: Source[];
+  tags: string;
+  ratings: Rating[];
+  sort?: RemoteSort;
+  cursor?: string | null;
+}
+
+export interface SitesPage {
+  /** 各站点的结果按所选排序合在一起。 */
+  posts: Post[];
+  /** 下一页的位置，原样传回；没有更多时为 null。 */
+  next: string | null;
+  /** 这一页搜了的站点；有图在等着显示的站点这一页不用搜，不在里面。 */
+  sites: SiteStatus[];
+  /** 这一页里已在图库中的帖子。 */
+  owned: { source: Source; postId: number }[];
+}
+
+/** 聚合搜索：同样的条件同时搜几个站点，按所选排序合成一列。 */
+export function searchSites(params: SitesSearchParams): Promise<SitesPage> {
+  return invoke<SitesPage>("search_sites", { params });
 }
 
 /** 查询条件一共能搜到多少张；站点不给数字时为 null。 */

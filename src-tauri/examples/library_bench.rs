@@ -190,8 +190,10 @@ async fn main() {
         }
     }
 
-    let ids: Vec<u64> = (0..200).map(|i| 1_000_000 + i * (count / 200)).collect();
+    // 帖子 id 都在图库里，md5 换成图库里没有的：两种查法都要走一遍索引。
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    let probes: Vec<Post> = (0..200).map(|i| post(&mut rng, 1_000_000 + i * (count / 200))).collect();
     let start = Instant::now();
-    let owned = lib.owned(Source::Danbooru, &ids).await.expect("查询");
+    let owned = lib.owned(&probes).await.expect("查询");
     println!("{:<28} {:>8.1} ms   找到 {} 张", "搜索结果里哪些已下载（200 个）", ms(start.elapsed()), owned.len());
 }

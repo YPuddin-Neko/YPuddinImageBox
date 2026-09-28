@@ -12,7 +12,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
 use crate::i18n::{text, tr};
-use crate::sources::{timestamp, Post, PostTags, Rating, Sort, Source};
+use crate::sources::{timestamp, Post, PostTags, Rating, Scope, Sort, Source};
 
 const DB_FILE: &str = "library.sqlite3";
 /// 一次列表查询最多返回多少张。
@@ -45,7 +45,8 @@ pub struct LocalPost {
 #[serde(rename_all = "camelCase")]
 pub struct SavedSearch {
     pub id: i64,
-    pub source: Source,
+    /// 一个站点，或者 `all`（聚合搜索）。
+    pub source: Scope,
     pub tags: String,
     /// 为空表示全选。
     pub ratings: Vec<Rating>,
@@ -567,20 +568,47 @@ impl Library {
         Ok(paths.into_iter().map(PathBuf::from).collect())
     }
 
-    /// 给出的帖子里哪些已经在图库中。
-    pub async fn owned(&self, source: Source, ids: &[u64]) -> Result<HashSet<u64>, sqlx::Error> {
-        if ids.is_empty() {
+    /// 给出的帖子里哪些已经在图库中：这个帖子下载过，或者同一张图（md5 相同）从别的帖子、别的站点下载过。
+    pub async fn owned(&self, posts: &[Post]) -> Result<HashSet<(Source, u64)>, sqlx::Error> {
+        if posts.is_empty() {
             return Ok(HashSet::new());
         }
-        let mut query = QueryBuilder::<Sqlite>::new("SELECT post_id FROM posts WHERE source = ");
-        query.push_bind(source.as_str()).push(" AND post_id IN (");
-        let mut list = query.separated(", ");
-        for id in ids {
-            list.push_bind(*id as i64);
+        let mut query = QueryBuilder::<Sqlite>::new("SELECT source, post_id, md5 FROM posts WHERE ");
+        let mut first = true;
+        for source in Source::ALL {
+            let ids: Vec<i64> = posts.iter().filter(|post| post.source == source).map(|post| post.id as i64).collect();
+            if ids.is_empty() {
+                continue;
+            }
+            query.push(if first { "(source = " } else { " OR (source = " });
+            first = false;
+            query.push_bind(source.as_str()).push(" AND post_id IN (");
+            let mut list = query.separated(", ");
+            for id in ids {
+                list.push_bind(id);
+            }
+            query.push("))");
         }
-        query.push(")");
-        let rows: Vec<i64> = query.build_query_scalar().fetch_all(&self.pool).await?;
-        Ok(rows.into_iter().map(|id| id as u64).collect())
+        let md5s: Vec<String> = posts.iter().filter_map(|post| post.md5.as_deref()).map(str::to_ascii_lowercase).collect();
+        if !md5s.is_empty() {
+            query.push(" OR md5 IN (");
+            let mut list = query.separated(", ");
+            for md5 in md5s {
+                list.push_bind(md5);
+            }
+            query.push(")");
+        }
+        let rows: Vec<(String, i64, Option<String>)> = query.build_query_as().fetch_all(&self.pool).await?;
+        let saved: HashSet<(&str, i64)> = rows.iter().map(|(source, id, _)| (source.as_str(), *id)).collect();
+        let hashes: HashSet<&str> = rows.iter().filter_map(|(_, _, md5)| md5.as_deref()).collect();
+        Ok(posts
+            .iter()
+            .filter(|post| {
+                saved.contains(&(post.source.as_str(), post.id as i64))
+                    || post.md5.as_deref().is_some_and(|md5| hashes.contains(md5.to_ascii_lowercase().as_str()))
+            })
+            .map(|post| (post.source, post.id))
+            .collect())
     }
 
     /// 记录一张下载好的图。重复下载同一帖子时更新信息和路径。
@@ -906,7 +934,7 @@ impl Library {
             .filter_map(|(id, source, tags, ratings, sort, created_at)| {
                 Some(SavedSearch {
                     id,
-                    source: Source::parse(&source)?,
+                    source: Scope::parse(&source)?,
                     tags,
                     ratings: ratings.split(',').filter_map(Rating::parse).collect(),
                     sort: Sort::parse(&sort).unwrap_or_default(),
@@ -917,7 +945,7 @@ impl Library {
     }
 
     /// 收藏一个搜索条件；同样的条件已经收藏过时什么也不做。
-    pub async fn add_saved_search(&self, source: Source, tags: &str, ratings: &[Rating], sort: Sort) -> Result<(), sqlx::Error> {
+    pub async fn add_saved_search(&self, source: Scope, tags: &str, ratings: &[Rating], sort: Sort) -> Result<(), sqlx::Error> {
         let (tags, ratings) = normalize_search(tags, ratings);
         sqlx::query(
             "INSERT OR IGNORE INTO saved_searches (source, tags, ratings, sort, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -1402,9 +1430,17 @@ mod tests {
         assert_eq!(lib.list(&query("sky nobody")).await.unwrap().total, 0);
         assert_eq!(lib.list(&query("sky -nobody")).await.unwrap().total, 2);
 
-        let owned = lib.owned(Source::Danbooru, &[1, 3]).await.unwrap();
-        assert_eq!(owned, HashSet::from([1]));
-        assert!(lib.owned(Source::Gelbooru, &[1]).await.unwrap().is_empty());
+        let probe = |source, id, md5: String| Post { md5: Some(md5), ..post(source, id, PostTags::default()) };
+        let probes = vec![
+            post(Source::Danbooru, 1, PostTags::default()),
+            probe(Source::Danbooru, 3, "ab".repeat(16)),
+            // 另一个站点同样的 id 不算；同一张图（md5 相同，大小写不同）在另一个站点算。
+            probe(Source::Gelbooru, 1, "cd".repeat(16)),
+            probe(Source::Gelbooru, 9, format!("{:032X}", 2)),
+        ];
+        let owned = lib.owned(&probes).await.unwrap();
+        assert_eq!(owned, HashSet::from([(Source::Danbooru, 1), (Source::Gelbooru, 9)]));
+        assert!(lib.owned(&[]).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1497,22 +1533,22 @@ mod tests {
     #[tokio::test]
     async fn saved_searches_dedupe_and_remove() {
         let lib = Library::in_memory().await;
-        lib.add_saved_search(Source::Danbooru, " sky  cloud ", &[Rating::Sensitive, Rating::General], Sort::Score)
-            .await
-            .unwrap();
+        let danbooru = Scope::Site(Source::Danbooru);
+        lib.add_saved_search(danbooru, " sky  cloud ", &[Rating::Sensitive, Rating::General], Sort::Score).await.unwrap();
         // 空格、分级顺序不同的同一个条件只存一份；全选和都不选也算同一个。
-        lib.add_saved_search(Source::Danbooru, "sky cloud", &[Rating::General, Rating::Sensitive], Sort::Score)
-            .await
-            .unwrap();
-        lib.add_saved_search(Source::Gelbooru, "", &Rating::ALL, Sort::Newest).await.unwrap();
-        lib.add_saved_search(Source::Gelbooru, "", &[], Sort::Newest).await.unwrap();
+        lib.add_saved_search(danbooru, "sky cloud", &[Rating::General, Rating::Sensitive], Sort::Score).await.unwrap();
+        lib.add_saved_search(Scope::Site(Source::Gelbooru), "", &Rating::ALL, Sort::Newest).await.unwrap();
+        lib.add_saved_search(Scope::Site(Source::Gelbooru), "", &[], Sort::Newest).await.unwrap();
+        // 聚合搜索和单个站点的同一个条件分开存。
+        lib.add_saved_search(Scope::All, "sky cloud", &[Rating::General, Rating::Sensitive], Sort::Score).await.unwrap();
         let saved = lib.saved_searches().await.unwrap();
-        assert_eq!(saved.len(), 2);
-        assert_eq!((saved[1].tags.as_str(), saved[1].sort), ("sky cloud", Sort::Score));
-        assert_eq!(saved[1].ratings, vec![Rating::General, Rating::Sensitive]);
-        assert!(saved[0].ratings.is_empty());
-        lib.remove_saved_search(saved[0].id).await.unwrap();
-        assert_eq!(lib.saved_searches().await.unwrap().len(), 1);
+        assert_eq!(saved.len(), 3);
+        assert_eq!(saved[0].source, Scope::All);
+        assert_eq!((saved[2].source, saved[2].tags.as_str(), saved[2].sort), (danbooru, "sky cloud", Sort::Score));
+        assert_eq!(saved[2].ratings, vec![Rating::General, Rating::Sensitive]);
+        assert!(saved[1].ratings.is_empty());
+        lib.remove_saved_search(saved[1].id).await.unwrap();
+        assert_eq!(lib.saved_searches().await.unwrap().len(), 2);
     }
 
     #[tokio::test]

@@ -1,5 +1,6 @@
 //! 各 booru 站点的适配器：把不同站点的帖子统一成 [`Post`]。
 
+pub mod combined;
 pub mod danbooru;
 pub mod filter;
 pub mod gelbooru;
@@ -14,7 +15,7 @@ use crate::error::AppError;
 use crate::i18n::tr;
 use crate::net::Net;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Source {
     Danbooru,
@@ -78,6 +79,50 @@ impl Source {
             Source::Danbooru => 200,
             Source::Gelbooru => 100,
         }
+    }
+}
+
+/// 搜哪里：一个站点，或者所有站点一起搜（聚合搜索）。收藏的搜索里存成站点名或 `all`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Site(Source),
+    All,
+}
+
+impl Scope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scope::Site(source) => source.as_str(),
+            Scope::All => "all",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Scope> {
+        if value == "all" {
+            Some(Scope::All)
+        } else {
+            Source::parse(value).map(Scope::Site)
+        }
+    }
+
+    pub fn sources(self) -> Vec<Source> {
+        match self {
+            Scope::Site(source) => vec![source],
+            Scope::All => Source::ALL.to_vec(),
+        }
+    }
+}
+
+impl Serialize for Scope {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Scope {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Scope::parse(&value).ok_or_else(|| serde::de::Error::custom(format!("unknown source: {value}")))
     }
 }
 
