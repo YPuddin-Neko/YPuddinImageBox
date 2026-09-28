@@ -2195,26 +2195,20 @@ kbd {
   width: 0;
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
   transition: width 0.3s ease;
 }
 
-.job[data-status="done"] .bar > i {
+.bar-saved {
   background: var(--ok);
 }
 
-.job[data-status="failed"] .bar > i {
+.bar-failed {
   background: var(--err);
 }
 
-.job[data-status="paused"] .bar > i,
-.job[data-status="canceled"] .bar > i,
-.job[data-status="queued"] .bar > i {
-  background: var(--fg-3);
-}
-
 /* 总数未知时来回滑动。 */
-.bar.is-indeterminate > i {
+.bar-indeterminate {
+  background: var(--accent);
   width: 30%;
   animation: bar-slide 1.3s ease-in-out infinite;
 }

@@ -71,19 +71,28 @@ function summary(jobs: Job[]): string {
 
 function Progress({ job }: { job: Job }) {
   const done = processed(job);
-  const percent = job.total ? Math.min(100, (done / job.total) * 100) : null;
+  const total = job.total ?? (done > 0 ? done : null);
+  const savedPercent = total ? Math.min(100, (job.saved / total) * 100) : 0;
+  const failedPercent = total ? Math.min(100 - savedPercent, (job.failed / total) * 100) : 0;
   // 按条件下载且站点没给总数时，下载中显示来回滑动的进度条。
-  const indeterminate = percent === null && job.status === "running";
+  const indeterminate = total === null && job.status === "running";
   return (
     <div className="job-progress">
       <div
         className={`bar${indeterminate ? " is-indeterminate" : ""}`}
         role="progressbar"
         aria-valuemin={0}
-        aria-valuemax={job.total ?? undefined}
+        aria-valuemax={total ?? undefined}
         aria-valuenow={done}
       >
-        <i style={indeterminate ? undefined : { width: `${job.status === "done" ? 100 : (percent ?? 0)}%` }} />
+        {indeterminate ? (
+          <i className="bar-indeterminate" />
+        ) : (
+          <>
+            {savedPercent > 0 && <i className="bar-saved" style={{ width: `${savedPercent}%` }} />}
+            {failedPercent > 0 && <i className="bar-failed" style={{ width: `${failedPercent}%` }} />}
+          </>
+        )}
       </div>
       <span className="job-count">
         {job.total != null ? `${formatCount(done)} / ${formatCount(job.total)}` : t("{n} 张", { n: formatCount(done) })}
