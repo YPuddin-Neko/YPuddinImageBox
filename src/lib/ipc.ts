@@ -2,7 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 import { t, type Msg } from "./i18n";
 
-export type Source = "danbooru" | "gelbooru" | "yandere";
+export type Source = "danbooru" | "gelbooru" | "yandere" | "pixiv";
 export type Rating = "general" | "sensitive" | "questionable" | "explicit";
 
 export const RATINGS: Rating[] = ["general", "sensitive", "questionable", "explicit"];
@@ -20,6 +20,7 @@ export const SOURCE_LABEL: Record<Source, string> = {
   danbooru: "Danbooru",
   gelbooru: "Gelbooru",
   yandere: "Yande.re",
+  pixiv: "Pixiv",
 };
 
 export const SOURCES = Object.keys(SOURCE_LABEL) as Source[];
@@ -52,6 +53,7 @@ const SITE_SORTS: Record<Source, RemoteSort[]> = {
   danbooru: ["newest", "oldest", "score", "favorites", "popular", "resolution", "filesize"],
   gelbooru: ["newest", "oldest", "score"],
   yandere: ["newest", "oldest", "score", "resolution"],
+  pixiv: ["newest", "oldest"],
 };
 
 /** 几个站点一起搜时能合在一起排的，和 Rust 端的 `combined::can_merge` 一致。 */
@@ -98,6 +100,8 @@ export interface Post {
   createdAt: string | null;
   postUrl: string;
   tags: PostTags;
+  /** Pixiv 的多页作品有几页；只有一张图时没有。 */
+  pages?: number | null;
 }
 
 export interface SearchParams {
@@ -171,6 +175,21 @@ const GOLD_ONLY_TAGS = ["loli", "shota", "toddlercon"];
 /** 没有原图地址是不是因为账号等级不够；其余情况（画师被封禁、图片下架）连 Gold 也拿不到。 */
 export const goldOnly = (post: Post) =>
   post.source === "danbooru" && post.tags.general.some((tag) => GOLD_ONLY_TAGS.includes(tag));
+
+/** Pixiv 的帖子 id 是「作品 id × 1000 + 页码」（和 Rust 端的 `pixiv::post_id` 一致）。 */
+const PIXIV_PAGE_FACTOR = 1000;
+
+/**
+ * 界面上显示的编号（前面的 # 由文案自己写），和 Rust 端的 `Post::label` 一致：
+ * Pixiv 显示作品 id，第二页起再写页码。`grouped` 时数字带千位分隔（详情面板的标题用）。
+ */
+export function postNumber(post: Pick<Post, "source" | "id">, { grouped = false } = {}): string {
+  const pixiv = post.source === "pixiv";
+  const id = pixiv ? Math.floor(post.id / PIXIV_PAGE_FACTOR) : post.id;
+  const page = pixiv ? post.id % PIXIV_PAGE_FACTOR : 0;
+  const number = grouped ? id.toLocaleString("en-US") : String(id);
+  return page === 0 ? number : `${number} p${page + 1}`;
+}
 
 /** 帖子在界面上的唯一键。 */
 export const postKey = (post: Pick<Post, "source" | "id">) => `${post.source}-${post.id}`;

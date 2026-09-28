@@ -462,6 +462,7 @@ fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
             created_at: row.try_get("created_at")?,
             post_url: row.try_get("post_url")?,
             tags: PostTags::default(),
+            pages: None,
         },
         path: row.try_get("local_path")?,
         downloaded_at: row.try_get("downloaded_at")?,
@@ -1403,6 +1404,7 @@ mod tests {
             created_at: Some("2026-09-27T00:00:00Z".into()),
             post_url: format!("https://danbooru.donmai.us/posts/{id}"),
             tags,
+            pages: None,
         }
     }
 
@@ -1513,7 +1515,7 @@ mod tests {
         // 每个站点一个文件夹，没下载过的站点张数为 0。
         assert_eq!(
             folders.iter().map(|f| (f.source, f.count)).collect::<Vec<_>>(),
-            [(Source::Danbooru, 4), (Source::Gelbooru, 1), (Source::Yandere, 0)]
+            [(Source::Danbooru, 4), (Source::Gelbooru, 1), (Source::Yandere, 0), (Source::Pixiv, 0)]
         );
         let ids: Vec<u64> = folders[0].covers.iter().map(|c| c.post_id).collect();
         assert_eq!(ids, [4, 3, 2, 1]);

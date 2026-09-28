@@ -13,7 +13,7 @@ import {
 } from "../../lib/downloads";
 import { formatCount, formatTime } from "../../lib/format";
 import { t, tx, type Msg } from "../../lib/i18n";
-import { errorMessage, SOURCE_LABEL } from "../../lib/ipc";
+import { errorMessage, postNumber, SOURCE_LABEL, type Source } from "../../lib/ipc";
 import { EASE_OUT } from "../../lib/motion";
 import type { Navigate } from "../../lib/nav";
 import { useDownloads } from "./context";
@@ -92,7 +92,7 @@ function Progress({ job }: { job: Job }) {
   );
 }
 
-function NoteList({ notes }: { notes: Notes | undefined }) {
+function NoteList({ source, notes }: { source: Source; notes: Notes | undefined }) {
   if (notes === undefined || notes === "loading") return <p className="job-notes-hint">{t("正在读取…")}</p>;
   if (notes === "failed") return <p className="job-notes-hint">{t("读取失败，请稍后再试。")}</p>;
   if (notes.length === 0) return <p className="job-notes-hint">{t("没有跳过或失败的图。")}</p>;
@@ -100,7 +100,7 @@ function NoteList({ notes }: { notes: Notes | undefined }) {
     <ul className="job-notes">
       {notes.map((note) => (
         <li key={`${note.postId}-${note.status}`}>
-          <span className="mono">#{note.postId}</span>
+          <span className="mono">#{postNumber({ source, id: note.postId })}</span>
           <span className={`note-status ${note.status}`}>{note.status === "failed" ? t("失败") : t("跳过")}</span>
           <span>{note.note ?? "—"}</span>
         </li>
@@ -238,7 +238,7 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
                 )}
               </div>
               {job.error && !isActive(job) && <p className="job-error">{job.error}</p>}
-              {open === job.id && <NoteList notes={notes[job.id]} />}
+              {open === job.id && <NoteList source={job.source} notes={notes[job.id]} />}
             </motion.li>
           ))}
         </AnimatePresence>

@@ -168,6 +168,7 @@ mod tests {
             created_at: Some(created_at.into()),
             post_url: String::new(),
             tags: PostTags::default(),
+            pages: None,
         }
     }
 

@@ -114,7 +114,22 @@ const GROUP_SORTS: { value: GroupSort; label: Msg }[] = [
   { value: "name", label: "名称" },
 ];
 
-export const groupKinds = () => GROUP_KINDS.map(({ value, label }) => ({ value, label: t(label) }));
+/** 各来源能怎么分组：Gelbooru、Yande.re 的 tag 不分类别，只能按一般 tag；Pixiv 只分画师和作品上的 tag。 */
+const SOURCE_GROUP_KINDS: Record<Source, GroupKind[]> = {
+  danbooru: ["artist", "copyright", "character", "general"],
+  gelbooru: ["general"],
+  yandere: ["general"],
+  pixiv: ["artist", "general"],
+};
+
+export function groupKinds(source: Source) {
+  const kinds = SOURCE_GROUP_KINDS[source];
+  return GROUP_KINDS.filter(({ value }) => kinds.includes(value)).map(({ value, label }) => ({
+    value,
+    label: t(label),
+  }));
+}
+
 export const groupSorts = () => GROUP_SORTS.map(({ value, label }) => ({ value, label: t(label) }));
 
 /** 「128 位画师」这样的组数说明。 */

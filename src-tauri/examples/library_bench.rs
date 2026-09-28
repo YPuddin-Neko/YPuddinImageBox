@@ -79,6 +79,7 @@ fn post(rng: &mut Rng, id: u64) -> Post {
         )),
         post_url: format!("https://danbooru.donmai.us/posts/{id}"),
         tags,
+        pages: None,
     }
 }
 

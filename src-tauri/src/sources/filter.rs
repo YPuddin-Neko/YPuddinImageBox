@@ -136,6 +136,7 @@ mod tests {
                 artist: artist.iter().map(|s| s.to_string()).collect(),
                 ..PostTags::default()
             },
+            pages: None,
         }
     }
 

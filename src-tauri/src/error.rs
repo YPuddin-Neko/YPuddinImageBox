@@ -34,6 +34,10 @@ impl std::fmt::Display for AppError {
                 "{site} allows at most {limit} tags per search, counting excluded tags and order:"
             ),
             AppError::Upstream { site, message } => tr!("{site}：{message}", "{site}: {message}"),
+            // Pixiv 不登录也能用，只有 R-18 作品要登录。
+            AppError::CredentialsMissing("Pixiv") => {
+                tr!("看 Pixiv 的 R-18 作品需要先登录 Pixiv", "Sign in to Pixiv to see R-18 works")
+            }
             AppError::CredentialsMissing(site) => {
                 tr!("{site} 需要账号和 API Key", "{site} requires an account and an API key")
             }

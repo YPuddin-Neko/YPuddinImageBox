@@ -95,6 +95,9 @@ pub struct AccountNames {
     pub danbooru: Option<SavedAccount>,
     #[serde(default)]
     pub gelbooru: Option<SavedAccount>,
+    /// Pixiv 的名字是账号昵称，「Key」是登录后的 PHPSESSID。
+    #[serde(default)]
+    pub pixiv: Option<SavedAccount>,
 }
 
 impl AccountNames {
@@ -102,6 +105,7 @@ impl AccountNames {
         match source {
             Source::Danbooru => self.danbooru.as_ref(),
             Source::Gelbooru => self.gelbooru.as_ref(),
+            Source::Pixiv => self.pixiv.as_ref(),
             Source::Yandere => None,
         }
     }
@@ -110,6 +114,7 @@ impl AccountNames {
         match source {
             Source::Danbooru => self.danbooru.as_mut(),
             Source::Gelbooru => self.gelbooru.as_mut(),
+            Source::Pixiv => self.pixiv.as_mut(),
             Source::Yandere => None,
         }
     }
@@ -118,6 +123,7 @@ impl AccountNames {
         match source {
             Source::Danbooru => self.danbooru = account,
             Source::Gelbooru => self.gelbooru = account,
+            Source::Pixiv => self.pixiv = account,
             // 不用登录的站点没有账号可存。
             Source::Yandere => {}
         }
@@ -218,6 +224,7 @@ mod tests {
             accounts: AccountNames {
                 danbooru: Some(SavedAccount { name: "sora".into(), level: Some("Gold".into()), sealed_key: None }),
                 gelbooru: Some(SavedAccount { name: "42".into(), level: None, sealed_key: Some("v1.abc".into()) }),
+                pixiv: None,
             },
             key_storage: KeyStorage::File,
             key_salt: Some("salt".into()),

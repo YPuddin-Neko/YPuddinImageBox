@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::error::AppError;
 use crate::i18n::{self, text, tr, Language, LanguageSetting};
@@ -10,14 +10,14 @@ use crate::library::{
 };
 use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
-use crate::sources::{self, combined, danbooru, gelbooru, Page, Post, Rating, SearchPage, SearchParams, Sort, Source};
+use crate::sources::{self, combined, danbooru, gelbooru, pixiv, Page, Post, Rating, SearchPage, SearchParams, Sort, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
 use crate::{keys, net, secrets, thumbs, AppState};
 
 /// 瀑布流每页条数。下载任务另按站点上限（200 / 100）分页。
 const PAGE_SIZE: u32 = 40;
 
-/// Danbooru 一次能搜几个 tag：看当前实际登录的账号等级；Gelbooru、Yande.re 不限。
+/// Danbooru 一次能搜几个 tag：看当前实际登录的账号等级；其余站点不限。
 fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
     match source {
         Source::Danbooru => {
@@ -25,7 +25,7 @@ fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
             let level = state.settings().accounts.danbooru.as_ref().and_then(|a| a.level.clone());
             Some(filter::danbooru_tag_limit(if signed_in { level.as_deref() } else { None }))
         }
-        Source::Gelbooru | Source::Yandere => None,
+        Source::Gelbooru | Source::Yandere | Source::Pixiv => None,
     }
 }
 
@@ -684,6 +684,7 @@ fn accounts_info_of(state: &AppState) -> AccountsInfo {
         accounts: vec![
             view(Source::Danbooru, &settings.accounts.danbooru, accounts.danbooru.is_some()),
             view(Source::Gelbooru, &settings.accounts.gelbooru, accounts.gelbooru.is_some()),
+            view(Source::Pixiv, &settings.accounts.pixiv, accounts.pixiv.is_some()),
         ],
         key_storage: settings.key_storage,
         error: state.accounts_error(),
@@ -702,6 +703,7 @@ pub fn accounts_info(state: State<'_, AppState>) -> AccountsInfo {
 }
 
 /// 先用填写的账号访问一次站点，通过了才把 API Key 存进钥匙串。
+/// Pixiv 填的是登录后的 PHPSESSID，账号名从站点取，不用填。
 #[tauri::command]
 pub async fn account_save(
     state: State<'_, AppState>,
@@ -709,9 +711,13 @@ pub async fn account_save(
     name: String,
     api_key: String,
 ) -> Result<AccountsInfo, AppError> {
+    save_account(&state, source, name, api_key).await
+}
+
+async fn save_account(state: &AppState, source: Source, name: String, api_key: String) -> Result<AccountsInfo, AppError> {
     let name = name.trim().to_string();
     let api_key = api_key.trim().to_string();
-    if name.is_empty() {
+    if name.is_empty() && matches!(source, Source::Danbooru | Source::Gelbooru) {
         return Err(AppError::InvalidInput(if source == Source::Danbooru {
             tr!("请填写用户名", "Enter your username")
         } else {
@@ -719,17 +725,32 @@ pub async fn account_save(
         }));
     }
     if api_key.is_empty() {
-        return Err(AppError::InvalidInput(tr!("请填写 API Key", "Enter your API key")));
+        return Err(AppError::InvalidInput(if source == Source::Pixiv {
+            tr!("请粘贴 PHPSESSID", "Paste your PHPSESSID")
+        } else {
+            tr!("请填写 API Key", "Enter your API key")
+        }));
     }
-    let level = match source {
+    let (name, level, api_key) = match source {
         Source::Danbooru => {
             let creds = danbooru::Credentials { username: name.clone(), api_key: api_key.clone() };
-            danbooru::verify(&state.net, &creds).await?.level_string
+            let level = danbooru::verify(&state.net, &creds).await?.level_string;
+            (name, level, api_key)
         }
         Source::Gelbooru => {
             let creds = gelbooru::Credentials { user_id: name.clone(), api_key: api_key.clone() };
             gelbooru::verify(&state.net, &creds).await?;
-            None
+            (name, None, api_key)
+        }
+        Source::Pixiv => {
+            let creds = pixiv::Credentials::from_session(&api_key).ok_or_else(|| {
+                AppError::InvalidInput(tr!(
+                    "这不是登录后的 PHPSESSID，它应该是「数字_字母」的样子",
+                    "That isn't a signed-in PHPSESSID. It should look like digits_letters"
+                ))
+            })?;
+            let user = pixiv::verify(&state.net, &creds).await?;
+            (user, None, creds.session)
         }
         Source::Yandere => {
             return Err(AppError::InvalidInput(tr!("Yande.re 不需要账号", "Yande.re doesn't need an account")))
@@ -756,19 +777,92 @@ pub async fn account_save(
     })?;
     state.accounts.update(|accounts| accounts.set(source, Some((name, api_key))));
     state.clear_accounts_error();
-    Ok(accounts_info_of(&state))
+    Ok(accounts_info_of(state))
 }
 
-/// 退出登录：删掉保存的 API Key 和设置里的用户名。
+/// 退出登录：删掉保存的 API Key 和设置里的用户名。Pixiv 还要清掉登录窗口留下的 Cookie，
+/// 不然下次点「登录」会直接用上一个账号登录。
 #[tauri::command]
-pub async fn account_remove(state: State<'_, AppState>, source: Source) -> Result<AccountsInfo, AppError> {
+pub async fn account_remove(app: AppHandle, state: State<'_, AppState>, source: Source) -> Result<AccountsInfo, AppError> {
     let saved = state.settings().accounts.get(source).cloned();
     if let Some(saved) = saved {
         blocking(move || keys::forget(source, &saved)).await?;
     }
     state.update_settings(|settings| settings.accounts.set(source, None))?;
     state.accounts.update(|accounts| accounts.set(source, None));
+    if source == Source::Pixiv {
+        forget_pixiv_cookies(&app);
+    }
     Ok(accounts_info_of(&state))
+}
+
+const PIXIV_LOGIN_WINDOW: &str = "pixiv-login";
+
+fn pixiv_site() -> url::Url {
+    url::Url::parse(pixiv::REFERER_URL).expect("固定的地址")
+}
+
+/// 所有窗口共用一份 Cookie，从主窗口删掉 Pixiv 的登录 Cookie 就行。
+fn forget_pixiv_cookies(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(crate::MAIN_WINDOW) else { return };
+    let Ok(cookies) = window.cookies_for_url(pixiv_site()) else { return };
+    for cookie in cookies.into_iter().filter(|cookie| cookie.name() == "PHPSESSID") {
+        let _ = window.delete_cookie(cookie);
+    }
+}
+
+/// 打开 Pixiv 的登录页。账号密码只在 Pixiv 自己的页面里输入，这个窗口没有调用软件功能的权限；
+/// 登录成功后由 [`pixiv_login_check`] 从窗口的 Cookie 里取出登录状态。
+#[tauri::command]
+pub async fn pixiv_login_open(app: AppHandle) -> Result<(), AppError> {
+    if let Some(window) = app.get_webview_window(PIXIV_LOGIN_WINDOW) {
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    let url = "https://accounts.pixiv.net/login?return_to=https%3A%2F%2Fwww.pixiv.net%2F&source=pc&view_type=page";
+    let url = url.parse().map_err(|err: url::ParseError| AppError::Internal(err.to_string()))?;
+    WebviewWindowBuilder::new(&app, PIXIV_LOGIN_WINDOW, WebviewUrl::External(url))
+        .title(tr!("登录 Pixiv", "Sign in to Pixiv"))
+        .inner_size(480.0, 720.0)
+        .build()
+        .map_err(|err| AppError::Internal(err.to_string()))?;
+    Ok(())
+}
+
+/// 登录窗口现在的情况。
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum PixivLogin {
+    /// 窗口还开着，还没登录好。
+    Waiting,
+    /// 窗口已经关掉了（登录成功后软件自己关的除外）。
+    Closed,
+    /// 登录成功，账号已保存，窗口已关掉。
+    SignedIn { info: AccountsInfo },
+}
+
+/// 登录窗口里是否已经登录：读到登录后的 PHPSESSID 就验证、保存并关掉窗口。界面每隔一会儿问一次。
+/// Windows 上读 Cookie 不能在主线程，所以这是异步命令。
+#[tauri::command]
+pub async fn pixiv_login_check(app: AppHandle, state: State<'_, AppState>) -> Result<PixivLogin, AppError> {
+    let Some(window) = app.get_webview_window(PIXIV_LOGIN_WINDOW) else { return Ok(PixivLogin::Closed) };
+    let cookies = window.cookies_for_url(pixiv_site()).map_err(|err| AppError::Internal(err.to_string()))?;
+    let Some(session) = cookies
+        .iter()
+        .filter(|cookie| cookie.name() == "PHPSESSID")
+        .find_map(|cookie| pixiv::Credentials::from_session(cookie.value()))
+    else {
+        return Ok(PixivLogin::Waiting);
+    };
+    match save_account(&state, Source::Pixiv, String::new(), session.session).await {
+        Ok(info) => {
+            let _ = window.close();
+            Ok(PixivLogin::SignedIn { info })
+        }
+        // 上次登录留下的 Cookie 已经失效：用户正在窗口里重新登录，接着等。
+        Err(AppError::BadCredentials { .. }) => Ok(PixivLogin::Waiting),
+        Err(err) => Err(err),
+    }
 }
 
 /// 切换 API Key 的保存方式，已保存的 Key 一起搬过去。

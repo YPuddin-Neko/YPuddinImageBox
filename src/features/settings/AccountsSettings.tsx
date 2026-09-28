@@ -1,7 +1,8 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { Icon } from "../../components/Icon";
+import { SwapLabel } from "../../components/SwapLabel";
 import { Toast, useToast } from "../../components/Toast";
 import { t, type Msg } from "../../lib/i18n";
 import { errorMessage, SOURCE_LABEL, type Source } from "../../lib/ipc";
@@ -11,6 +12,8 @@ import {
   accountRemove,
   accountSave,
   accountsInfo,
+  pixivLoginCheck,
+  pixivLoginOpen,
   type AccountsInfo,
   type AccountView,
   type KeyStorage,
@@ -25,7 +28,7 @@ interface SiteText {
   helpLink: Msg;
 }
 
-/** 要填账号的站点。不用登录的站点（Yande.re）不在这里，也不会出现在账号列表里。 */
+/** 填用户名和 API Key 的站点。Pixiv 用自己的卡片（见 PixivCard）；不用登录的站点（Yande.re）不在账号列表里。 */
 const SITES: Partial<Record<Source, SiteText>> = {
   danbooru: {
     nameLabel: "用户名",
@@ -198,6 +201,178 @@ function AccountCard({
   );
 }
 
+/** 登录窗口开着时，隔多久问一次登录好了没有。 */
+const LOGIN_POLL_MS = 1500;
+
+/**
+ * Pixiv 没有 API Key：在弹出的 Pixiv 登录页里登录，软件从窗口的 Cookie 里取出登录状态；
+ * 登录页打不开时（例如用 Google 账号登录），也可以粘贴浏览器里的 PHPSESSID。
+ */
+function PixivCard({
+  account,
+  onChange,
+  onNotice,
+}: {
+  account: AccountView;
+  onChange: (info: AccountsInfo) => void;
+  onNotice: (message: string) => void;
+}) {
+  const label = SOURCE_LABEL[account.source];
+  const signedIn = account.name !== null && !account.keyMissing;
+  const [session, setSession] = useState("");
+  const [busy, setBusy] = useState<"save" | "remove" | null>(null);
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // 每次打开登录窗口加一，重新开始等待。
+  const [round, setRound] = useState(0);
+  const latest = useRef({ onChange, onNotice });
+  latest.current = { onChange, onNotice };
+
+  // 登录窗口开着时隔一会儿问一次。打开这一页时也问一次：离开时窗口还开着的话接着等。
+  useEffect(() => {
+    if (signedIn) return;
+    let stopped = false;
+    let timer = 0;
+    const check = async () => {
+      try {
+        const login = await pixivLoginCheck();
+        if (stopped) return;
+        setWaiting(login.status === "waiting");
+        if (login.status === "waiting") {
+          timer = window.setTimeout(() => void check(), LOGIN_POLL_MS);
+        } else if (login.status === "signedIn") {
+          latest.current.onChange(login.info);
+          latest.current.onNotice(t("已登录 {site}", { site: label }));
+        }
+      } catch (err) {
+        if (stopped) return;
+        setWaiting(false);
+        setError(errorMessage(err));
+      }
+    };
+    void check();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [round, signedIn, label]);
+
+  const openLogin = async () => {
+    setError(null);
+    try {
+      await pixivLoginOpen();
+      setWaiting(true);
+      setRound((count) => count + 1);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy("save");
+    setError(null);
+    try {
+      onChange(await accountSave(account.source, "", session));
+      setSession("");
+      onNotice(t("已登录 {site}", { site: label }));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const remove = async () => {
+    setBusy("remove");
+    setError(null);
+    try {
+      onChange(await accountRemove(account.source));
+      onNotice(t("已退出 {site}", { site: label }));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const status = signedIn ? (
+    <span className="badge ok">{t("已登录")}</span>
+  ) : account.keyMissing ? (
+    <span className="badge warn">{t("需要重新登录")}</span>
+  ) : (
+    <span className="badge">{t("未登录")}</span>
+  );
+
+  return (
+    <section className="set-card" aria-labelledby={`account-${account.source}`}>
+      <div className="set-title">
+        <h2 id={`account-${account.source}`}>{label}</h2>
+        {status}
+      </div>
+      <p className="set-desc">{t("不登录也能搜全年龄作品、下载原图，但按 tag 搜最多翻 10 页。看 R-18 作品要先登录。")}</p>
+
+      {signedIn ? (
+        <div className="set-line">
+          <div className="identity">
+            <Icon name="user" size={15} />
+            <b>{account.name}</b>
+          </div>
+          <div className="set-actions">
+            <button type="button" className="btn ghost" onClick={() => void remove()} disabled={busy !== null}>
+              {busy === "remove" ? t("正在退出…") : t("退出登录")}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form className="form-row" onSubmit={(event) => void save(event)}>
+          <label className="field">
+            <span>PHPSESSID</span>
+            <input
+              className="field-input"
+              type="password"
+              value={session}
+              onChange={(event) => setSession(event.target.value)}
+              placeholder={t("粘贴 PHPSESSID")}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <div className="set-actions">
+            <button type="submit" className="btn" disabled={busy !== null}>
+              <SwapLabel labels={[t("保存并验证"), t("正在验证…")]} active={busy === "save" ? 1 : 0} />
+            </button>
+            <button type="button" className="btn primary" onClick={() => void openLogin()} disabled={busy !== null}>
+              <SwapLabel labels={[t("登录 Pixiv"), t("等待登录…")]} active={waiting ? 1 : 0} />
+            </button>
+            {account.keyMissing && (
+              <button type="button" className="btn ghost" onClick={() => void remove()} disabled={busy !== null}>
+                {t("退出登录")}
+              </button>
+            )}
+          </div>
+        </form>
+      )}
+
+      {error && <p className="form-error">{error}</p>}
+      {!signedIn && (
+        <p className="form-hint">
+          <span>
+            {waiting
+              ? t("在弹出的窗口里登录 Pixiv，登录好后这里会自动完成。")
+              : t("也可以在浏览器里登录 Pixiv，再粘贴 Cookie 里的 PHPSESSID。")}
+          </span>
+          {!waiting && (
+            <button type="button" className="link" onClick={() => void openUrl("https://www.pixiv.net/")}>
+              {t("打开 Pixiv")}
+            </button>
+          )}
+        </p>
+      )}
+    </section>
+  );
+}
+
 export function AccountsSettings() {
   const [info, setInfo] = useState<AccountsInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -242,17 +417,13 @@ export function AccountsSettings() {
 
       <div className="set-list">
         {info?.accounts.map((account) => {
+          const key = `${account.source}-${account.name ?? ""}-${account.keyMissing}`;
+          if (account.source === "pixiv") {
+            return <PixivCard key={key} account={account} onChange={setInfo} onNotice={setNotice} />;
+          }
           const site = SITES[account.source];
           return (
-            site && (
-              <AccountCard
-                key={`${account.source}-${account.name ?? ""}-${account.keyMissing}`}
-                site={site}
-                account={account}
-                onChange={setInfo}
-                onNotice={setNotice}
-              />
-            )
+            site && <AccountCard key={key} site={site} account={account} onChange={setInfo} onNotice={setNotice} />
           );
         })}
 

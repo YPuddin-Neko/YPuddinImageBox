@@ -511,12 +511,16 @@ button:disabled {
   opacity: 1;
 }
 
-/* 右上角的角标排成一行：已下载（或文件缺失）在左，来自哪个站点在最右。 */
+/* 右上角的角标排成一行：页数、已下载（或文件缺失）在左，来自哪个站点在最右。
+   左边留出勾选框的位置，窄卡片上放不下时换到下一行，不压住勾选框。 */
 .card-badges {
   position: absolute;
   top: 10px;
   right: 8px;
+  left: 40px;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 4px;
   pointer-events: none;
 }
@@ -525,6 +529,7 @@ button:disabled {
   color: var(--warn);
 }
 
+.card-pages,
 .card-owned,
 .card-source {
   height: 20px;
@@ -563,6 +568,10 @@ button:disabled {
 
 .card-source[data-source="yandere"] {
   --site-color: var(--site-yandere);
+}
+
+.card-source[data-source="pixiv"] {
+  --site-color: var(--site-pixiv);
 }
 
 /* 多选时列表底部留出选择条的高度，最后一排不被挡住。 */

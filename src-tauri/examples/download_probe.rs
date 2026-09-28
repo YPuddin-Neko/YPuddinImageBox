@@ -1,7 +1,7 @@
 //! 用真实网络跑一遍下载队列：选中下载 3 张、按条件下载 5 张、订阅检查一次（起点设在
 //! 第 3 新的帖子，应该正好找到比它新的几张），存到临时目录后检查文件、缩略图和图库记录，
 //! 最后删除临时目录。
-//! 运行：cargo run --example download_probe（默认 Danbooru，后面加 yandere 换成 Yande.re）
+//! 运行：cargo run --example download_probe（默认 Danbooru，后面加 yandere、pixiv 换站点）
 
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -17,6 +17,7 @@ use imagebox_lib::storage::{Defaults, Storage};
 fn target() -> (Source, &'static str, &'static str) {
     match std::env::args().nth(1).as_deref() {
         Some("yandere") => (Source::Yandere, "landscape mpixels:..0.8", "landscape mpixels:..0.8 rating:s"),
+        Some("pixiv") => (Source::Pixiv, "初音ミク", "初音ミク rating:general"),
         _ => (Source::Danbooru, "scenery filesize:..300kb", "scenery filesize:..300kb rating:g"),
     }
 }
@@ -53,9 +54,11 @@ async fn main() {
     );
     tokio::spawn(Arc::clone(&downloader).run());
 
-    let (posts, _) = sources::fetch(&net, &accounts.get(), source, query, &Page::Number(1), 3)
+    let (mut posts, _) = sources::fetch(&net, &accounts.get(), source, query, &Page::Number(1), 3)
         .await
         .expect("搜索");
+    // Pixiv 一页固定 60 个作品，只取前 3 个。
+    posts.truncate(3);
     println!("选中下载 {} 张", posts.len());
     let first = downloader.enqueue_posts(posts.clone()).await.expect("加入队列");
     let second =

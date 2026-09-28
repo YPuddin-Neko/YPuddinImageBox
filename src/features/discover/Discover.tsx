@@ -19,6 +19,7 @@ import {
   errorMessage,
   goldOnly,
   postKey,
+  postNumber,
   ratingOptions,
   RATINGS,
   remoteSortLabel,
@@ -211,6 +212,8 @@ function siteMessage(site: SiteStatus): string {
 }
 
 const isAccountError = (code: string | null | undefined) => code === "credentials_missing" || code === "bad_credentials";
+/** 账号出错时去设置页的按钮：Pixiv 是登录，其余站点填用户名和 API Key。 */
+const accountAction = (source: Source | undefined) => (source === "pixiv" ? t("登录 Pixiv") : t("填写账号"));
 
 const sitesLabel = (sources: Source[]) => sources.map((source) => SOURCE_LABEL[source]).join(t("、::list"));
 
@@ -598,7 +601,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
       if (picked.size > 0) {
         if (!busy) void downloadPicked();
       } else if (selectedPost?.fileUrl && selectedKey && !owned.has(selectedKey) && !queued.has(selectedKey) && !busy) {
-        void enqueue([selectedPost], t("已加入下载队列：#{id}", { id: selectedPost.id }));
+        void enqueue([selectedPost], t("已加入下载队列：#{id}", { id: postNumber(selectedPost) }));
       }
       return true;
     }
@@ -621,7 +624,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         type="button"
         className="btn primary"
         disabled={busy}
-        onClick={() => void enqueue([selectedPost], t("已加入下载队列：#{id}", { id: selectedPost.id }))}
+        onClick={() => void enqueue([selectedPost], t("已加入下载队列：#{id}", { id: postNumber(selectedPost) }))}
       >
         <Icon name="download" size={15} />
         {t("下载原图")}
@@ -661,7 +664,12 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               id="search-tags"
               className="search-input"
               aria-label={t("搜索 tag")}
-              placeholder={t("输入 tag，空格分隔，例如 scenery sky")}
+              placeholder={
+                // Pixiv 还能看画师的全部作品；几个站点一起搜时 user: 对别的站点另有意思，不提示。
+                sources.length === 1 && sources[0] === "pixiv"
+                  ? t("输入 tag、user:画师 ID，或粘贴画师、作品链接")
+                  : t("输入 tag，空格分隔，例如 scenery sky")
+              }
               value={tags}
               onChange={(event) => setTags(event.target.value)}
               spellCheck={false}
@@ -777,7 +785,8 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               {isAccountError(error.code) ? (
                 <button type="button" className="btn" onClick={() => onNavigate("settings", "accounts")}>
                   <Icon name="user" size={15} />
-                  {t("填写账号")}
+                  {/* 几个站点全都出错时报的是排在最前的那个站点的错。 */}
+                  {accountAction(SOURCES.find((source) => searchSources(committed.current).includes(source)))}
                 </button>
               ) : (
                 <button type="button" className="btn" onClick={() => void run(committed.current, error.cursor)}>
@@ -795,7 +804,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 {isAccountError(site.error?.code) ? (
                   <button type="button" className="btn" onClick={() => onNavigate("settings", "accounts")}>
                     <Icon name="user" size={15} />
-                    {t("填写账号")}
+                    {accountAction(site.source)}
                   </button>
                 ) : (
                   site.retry && (

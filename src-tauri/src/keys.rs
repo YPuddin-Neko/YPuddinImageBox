@@ -9,8 +9,6 @@ use crate::settings::{AccountNames, KeyStorage, SavedAccount, Settings};
 use crate::sources::{Accounts, Source};
 use crate::{sealed, secrets};
 
-const SOURCES: [Source; 2] = [Source::Danbooru, Source::Gelbooru];
-
 /// 加密时绑定的附加数据，密文不能挪给别的账号用。
 fn context(source: Source, name: &str) -> String {
     format!("{}:{name}", source.as_str())
@@ -31,7 +29,7 @@ fn read(settings: &Settings, source: Source, saved: &SavedAccount) -> Result<Opt
 pub fn load(settings: &Settings) -> (Accounts, Option<String>) {
     let mut accounts = Accounts::default();
     let mut errors = Vec::new();
-    for source in SOURCES {
+    for source in Source::ALL {
         let Some(saved) = settings.accounts.get(source) else { continue };
         match read(settings, source, saved) {
             Ok(Some(key)) => accounts.set(source, Some((saved.name.clone(), key))),
@@ -84,7 +82,7 @@ pub fn migrate(settings: &Settings, accounts: &Accounts, to: KeyStorage) -> Resu
     let mut names = settings.accounts.clone();
     let mut key_salt = settings.key_salt.clone();
     let mut stale = Vec::new();
-    for source in SOURCES {
+    for source in Source::ALL {
         let (Some(saved), Some(key)) = (names.get_mut(source), accounts.api_key(source)) else { continue };
         match to {
             KeyStorage::File => {
@@ -128,6 +126,7 @@ mod tests {
             accounts: AccountNames {
                 danbooru: Some(SavedAccount { name: "sora".into(), level: None, sealed_key: None }),
                 gelbooru: Some(SavedAccount { name: "42".into(), level: None, sealed_key: None }),
+                pixiv: None,
             },
             ..Settings::default()
         };

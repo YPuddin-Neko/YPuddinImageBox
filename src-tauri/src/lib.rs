@@ -428,6 +428,8 @@ pub fn run() {
             commands::accounts_info,
             commands::account_save,
             commands::account_remove,
+            commands::pixiv_login_open,
+            commands::pixiv_login_check,
             commands::account_key_storage,
             commands::subscriptions_list,
             commands::saved_searches_list,

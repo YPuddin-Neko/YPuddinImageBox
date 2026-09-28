@@ -202,6 +202,7 @@ fn normalize(raw: RawPost) -> Option<Post> {
             general: split_tags(raw.tag_string_general.as_deref()),
             meta: split_tags(raw.tag_string_meta.as_deref()),
         },
+        pages: None,
     })
 }
 

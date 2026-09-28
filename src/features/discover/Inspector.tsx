@@ -6,7 +6,7 @@ import { Icon } from "../../components/Icon";
 import { ShimmerImage } from "../../components/ShimmerImage";
 import { formatBytes } from "../../lib/format";
 import { t, type Msg } from "../../lib/i18n";
-import { imageSrc, ratingLabel, SOURCE_LABEL, type Post, type PostTags } from "../../lib/ipc";
+import { imageSrc, postNumber, ratingLabel, SOURCE_LABEL, type Post, type PostTags } from "../../lib/ipc";
 import { PANEL_ENTER } from "../../lib/motion";
 
 const TAG_GROUPS: { key: keyof PostTags; label: Msg }[] = [
@@ -61,16 +61,22 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice }:
       <motion.div className="insp-body" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} transition={PANEL_ENTER}>
         <figure className="insp-figure">
           <div className="insp-pv">
-            <ShimmerImage src={imageSrc(post.sampleUrl ?? post.thumbUrl)} alt={`#${post.id}`} loading="eager" fit="contain" />
+            <ShimmerImage
+              src={imageSrc(post.sampleUrl ?? post.thumbUrl)}
+              alt={`#${postNumber(post)}`}
+              loading="eager"
+              fit="contain"
+            />
           </div>
           <figcaption className="insp-res">
             {post.width} × {post.height}
             {post.fileExt ? ` · ${post.fileExt.toUpperCase()}` : ""}
+            {post.pages ? ` · ${t("{n} 页", { n: post.pages })}` : ""}
           </figcaption>
         </figure>
         {notice && <p className="insp-notice">{notice}</p>}
         <div className="insp-id">
-          <b>#{post.id.toLocaleString("en-US")}</b>
+          <b>#{postNumber(post, { grouped: true })}</b>
           <span className="badge">{SOURCE_LABEL[post.source]}</span>
           {post.rating && <span className="badge">{ratingLabel(post.rating)}</span>}
         </div>
@@ -81,7 +87,8 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice }:
           </div>
           <div>
             <dt>{t("分数")}</dt>
-            <dd>{post.score}</dd>
+            {/* Pixiv 的作品列表不给分数。 */}
+            <dd>{post.source === "pixiv" ? "—" : post.score}</dd>
           </div>
           <div>
             <dt>{t("收藏")}</dt>

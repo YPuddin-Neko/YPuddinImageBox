@@ -13,7 +13,7 @@ import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
 import { hasMod, spaceForButton, useHotkeys } from "../../lib/hotkeys";
 import { collapsedTitle, t, tx } from "../../lib/i18n";
-import { errorMessage, postKey, ratingOptions, RATINGS, type Rating, type Source } from "../../lib/ipc";
+import { errorMessage, postKey, postNumber, ratingOptions, RATINGS, type Rating, type Source } from "../../lib/ipc";
 import {
   libraryDelete,
   libraryList,
@@ -208,7 +208,7 @@ export function LibraryGrid({
     try {
       await addPosts([post]);
       setRequeued((prev) => new Set(prev).add(postKey(post)));
-      setNotice(t("已加入下载队列：#{id}", { id: post.id }));
+      setNotice(t("已加入下载队列：#{id}", { id: postNumber(post) }));
     } catch (err) {
       setActionError(errorMessage(err));
     }

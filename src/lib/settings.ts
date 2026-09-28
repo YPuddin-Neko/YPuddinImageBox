@@ -5,7 +5,7 @@ import type { Source } from "./ipc";
 
 export interface AccountView {
   source: Source;
-  /** 用户名（Gelbooru 是 User ID）；未登录时为 null。 */
+  /** 用户名（Gelbooru 是 User ID，Pixiv 是账号昵称）；未登录时为 null。 */
   name: string | null;
   level: string | null;
   /** 设置里记着账号，但钥匙串里找不到 API Key。 */
@@ -35,6 +35,13 @@ export const accountSave = (source: Source, name: string, apiKey: string) =>
 export const accountRemove = (source: Source) => invoke<AccountsInfo>("account_remove", { source });
 /** 切换保存方式，已保存的 Key 一起搬过去。 */
 export const accountKeyStorage = (storage: KeyStorage) => invoke<AccountsInfo>("account_key_storage", { storage });
+
+/** Pixiv 登录窗口的情况：还在等、被关掉了，或者已经登录（账号已保存）。 */
+export type PixivLogin = { status: "waiting" } | { status: "closed" } | { status: "signedIn"; info: AccountsInfo };
+
+/** 打开 Pixiv 的登录页；已经开着时切到前面。 */
+export const pixivLoginOpen = () => invoke<void>("pixiv_login_open");
+export const pixivLoginCheck = () => invoke<PixivLogin>("pixiv_login_check");
 
 export const proxyInfo = () => invoke<ProxySettings>("proxy_info");
 export const proxySave = (proxy: ProxySettings) => invoke<ProxySettings>("proxy_save", { proxy });

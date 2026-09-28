@@ -23,7 +23,7 @@ use crate::library::{now_ms, ItemStatus, JobInfo, JobItem, JobKind, JobStatus, L
 use crate::net::Net;
 use crate::protocol::sniff;
 use crate::sources::filter::LocalFilter;
-use crate::sources::{self, AccountStore, Page, Post, Source};
+use crate::sources::{self, pixiv, AccountStore, Page, Post, Source};
 use crate::storage::{Storage, StorageKind};
 use crate::thumbs;
 
@@ -189,7 +189,7 @@ impl Downloader {
         }
         let count = posts.len();
         let title = match posts.as_slice() {
-            [post] => format!("#{}", post.id),
+            [post] => post.label(),
             _ => tr!("选中的 {count} 张", "{count} selected images"),
         };
         let job = self.library.create_posts_job(source, &title, &posts).await?;
@@ -507,7 +507,8 @@ impl Downloader {
         let ids = posts.iter().map(|post| post.id);
         let bounds = ids.clone().min().zip(ids.max());
         // 未登录时站点会从结果里隐去部分帖子，一页不满不代表翻完了，取到空页才算。
-        let mut exhausted = fetched == 0 || bounds.is_none();
+        // 按 id 翻页时要靠这一页的 id 定下一页，一张都没留下就只能停；按页码翻的接着翻下一页。
+        let mut exhausted = fetched == 0 || (bounds.is_none() && !matches!(page, Page::Number(_)));
         // 翻页位置按站点返回的整页算，本地筛选只决定哪些帖子进任务。
         if let Some(filter) = job.local_filter.as_deref().map(LocalFilter::parse) {
             posts.retain(|post| filter.matches(post));
@@ -530,6 +531,48 @@ impl Downloader {
     }
 
     async fn save(&self, post: &Post) -> Result<Outcome, AppError> {
+        if post.source == Source::Pixiv {
+            return self.save_pixiv(post).await;
+        }
+        self.save_file(post).await
+    }
+
+    /// Pixiv 的作品下载时才取每一页的原图，每页在图库里各存一条。有一页失败就算这个作品失败，
+    /// 重试时已存好的页直接跳过，只补失败的页。
+    async fn save_pixiv(&self, work: &Post) -> Result<Outcome, AppError> {
+        if pixiv::is_animation(work) {
+            return Ok(Outcome::Skipped(note_not_image()));
+        }
+        let pages = match pixiv::pages(&self.net, self.accounts.get().pixiv.as_ref(), work).await {
+            Ok(pages) => pages,
+            Err(err) => return Ok(Outcome::Failed(err.to_string())),
+        };
+        let (mut saved, mut failed) = (false, None);
+        for (index, page) in pages.iter().enumerate() {
+            match self.save_file(page).await? {
+                Outcome::Saved => saved = true,
+                Outcome::Failed(err) => {
+                    let page = index + 1;
+                    failed.get_or_insert(tr!("第 {page} 页：{err}", "Page {page}: {err}"));
+                }
+                Outcome::Skipped(_) => {}
+            }
+        }
+        Ok(match (saved, failed) {
+            (saved, Some(err)) => {
+                // 存上的页已经进了图库，照样通知界面刷新。
+                if saved {
+                    self.emit(Event::Saved { source: work.source, post_id: work.id });
+                }
+                Outcome::Failed(err)
+            }
+            (true, None) => Outcome::Saved,
+            (false, None) => Outcome::Skipped(note_owned()),
+        })
+    }
+
+    /// 下载一个文件（其他站点的一个帖子，或 Pixiv 作品的一页）。
+    async fn save_file(&self, post: &Post) -> Result<Outcome, AppError> {
         if let Some(path) = self.library.local_path(post.source, post.id).await? {
             if exists(&path).await {
                 return Ok(Outcome::Skipped(note_owned()));
@@ -590,12 +633,20 @@ fn image_ext(post: &Post) -> Option<String> {
 }
 
 /// 保存位置：`图片位置/站点/画师/帖子id.扩展名`；没有画师 tag 时直接放在站点目录下。
+/// Pixiv 的文件名和原图一样是「作品id_p页码」。
 pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
     let mut dir = root.join(post.source.site_name());
     if let Some(artist) = post.tags.artist.first() {
         dir.push(safe_name(artist));
     }
-    dir.join(format!("{}.{ext}", post.id))
+    let name = match post.source {
+        Source::Pixiv => {
+            let (illust, page) = pixiv::split_id(post.id);
+            format!("{illust}_p{page}")
+        }
+        _ => post.id.to_string(),
+    };
+    dir.join(format!("{name}.{ext}"))
 }
 
 /// 把 tag 变成 Windows 和 macOS 都能用的文件夹名。
@@ -762,6 +813,7 @@ mod tests {
             created_at: None,
             post_url: format!("https://danbooru.donmai.us/posts/{id}"),
             tags: PostTags { artist: vec!["alice".into()], ..PostTags::default() },
+            pages: None,
         }
     }
 

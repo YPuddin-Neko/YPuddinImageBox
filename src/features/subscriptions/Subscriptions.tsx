@@ -9,7 +9,7 @@ import { Toast, useToast } from "../../components/Toast";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount, formatTime } from "../../lib/format";
 import { t, tx } from "../../lib/i18n";
-import { errorMessage, SOURCE_LABEL } from "../../lib/ipc";
+import { errorMessage, postNumber, SOURCE_LABEL } from "../../lib/ipc";
 import { EASE_OUT } from "../../lib/motion";
 import type { Navigate } from "../../lib/nav";
 import {
@@ -188,7 +188,7 @@ export function Subscriptions({ onNavigate }: { onNavigate: Navigate }) {
               <div className="job-meta">
                 <span>{lastResult(sub)}</span>
                 {nextCheck(sub) && <span>{nextCheck(sub)}</span>}
-                <span>{tx("已处理到 {id}", { id: <b>#{sub.lastSeenId}</b> })}</span>
+                <span>{tx("已处理到 {id}", { id: <b>#{postNumber({ source: sub.source, id: sub.lastSeenId })}</b> })}</span>
                 {sub.activeJob !== null && (
                   <button type="button" className="link" onClick={() => onNavigate("downloads")}>
                     {t("查看下载")}

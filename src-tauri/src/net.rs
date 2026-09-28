@@ -116,6 +116,9 @@ pub struct Net {
     pub preview: Lane,
     /// 原图下载：5 次/秒，最多 4 个并发。
     pub file: Lane,
+    /// Pixiv 的接口：1 次/秒，最多 2 个并发。Pixiv 对频繁请求限得很严，单独一条通道，
+    /// 被限速时不拖慢其他站点。
+    pub pixiv: Lane,
 }
 
 impl Net {
@@ -125,6 +128,7 @@ impl Net {
             api: Lane::new("接口", 2.0, 4),
             preview: Lane::new("预览", 10.0, 6),
             file: Lane::new("下载", 5.0, 4),
+            pixiv: Lane::new("Pixiv", 1.0, 2),
         })
     }
 

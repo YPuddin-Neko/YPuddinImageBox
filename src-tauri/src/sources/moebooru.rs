@@ -99,6 +99,7 @@ fn normalize(raw: RawPost) -> Option<Post> {
         created_at: raw.created_at.map(timestamp::iso_utc),
         post_url: format!("{BASE}/post/show/{id}"),
         tags: PostTags { general: split_tags(raw.tags.as_deref()), ..PostTags::default() },
+        pages: None,
     })
 }
 

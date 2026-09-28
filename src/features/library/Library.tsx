@@ -49,9 +49,6 @@ function useLibraryChanges(refresh: () => void) {
   useTauriEvent(EVENTS.libraryRemoved, schedule);
 }
 
-/** Gelbooru、Yande.re 的 tag 不分类别，只能按一般 tag 分组。 */
-const onlyGeneral = (source: Source) => source === "gelbooru" || source === "yandere";
-
 export function Library({ active, onNavigate }: { active: boolean; onNavigate: Navigate }) {
   const [place, setPlace] = useState<Place>({ level: "folders" });
   // 分组方式按文件夹记住，排序各文件夹共用。
@@ -59,6 +56,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
     danbooru: "artist",
     gelbooru: "general",
     yandere: "general",
+    pixiv: "artist",
   });
   const [sort, setSort] = useState<GroupSort>("recent");
 
@@ -272,6 +270,7 @@ function GroupShelf({
   }, [hasMore, loading, count, load]);
 
   const name = SOURCE_LABEL[source];
+  const kindOptions = groupKinds(source);
   return (
     <div className="page">
       <header className="page-head" data-tauri-drag-region>
@@ -292,13 +291,13 @@ function GroupShelf({
           </p>
         </div>
         <div className="page-actions">
-          {!onlyGeneral(source) && (
+          {kindOptions.length > 1 && (
             <Select
               className="select"
               name={t("分组")}
               label={t("分组")}
               value={kind}
-              options={groupKinds()}
+              options={kindOptions}
               onChange={onKind}
             />
           )}

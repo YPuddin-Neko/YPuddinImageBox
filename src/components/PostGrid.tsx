@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent 
 import { motion } from "motion/react";
 
 import { t } from "../lib/i18n";
-import { imageSrc, postKey, SOURCE_LABEL, type Post } from "../lib/ipc";
+import { imageSrc, postKey, postNumber, SOURCE_LABEL, type Post } from "../lib/ipc";
 import { cardEnter } from "../lib/motion";
 import { Icon } from "./Icon";
 import { ShimmerImage } from "./ShimmerImage";
@@ -175,6 +175,7 @@ export function PostGrid<T extends Post>({
         const key = postKey(post);
         const isPicked = picked?.has(key) ?? false;
         const animate = !entered.current.has(key);
+        const about = { id: postNumber(post), width: post.width, height: post.height };
         const state = missing?.has(key) ? (
           <span className="card-owned is-missing">{t("文件缺失")}</span>
         ) : (
@@ -201,7 +202,11 @@ export function PostGrid<T extends Post>({
               type="button"
               className="card-hit"
               aria-pressed={key === selected}
-              aria-label={t("#{id}，{width} × {height}", { id: post.id, width: post.width, height: post.height })}
+              aria-label={
+                post.pages
+                  ? t("#{id}，{width} × {height}，{n} 页", { ...about, n: post.pages })
+                  : t("#{id}，{width} × {height}", about)
+              }
               onClick={(event) => onSelect(post, event)}
             >
               <ShimmerImage src={imageSrc(post.thumbUrl)} alt="" />
@@ -212,14 +217,20 @@ export function PostGrid<T extends Post>({
                 className="card-pick"
                 role="checkbox"
                 aria-checked={isPicked}
-                aria-label={t("选择 #{id}", { id: post.id })}
+                aria-label={t("选择 #{id}", { id: about.id })}
                 onClick={(event) => onPick(post, event)}
               >
                 <Icon name="check" size={13} />
               </button>
             )}
-            {(state || showSource) && (
+            {(state || showSource || !!post.pages) && (
               <span className="card-badges">
+                {!!post.pages && (
+                  <span className="card-pages">
+                    <Icon name="pages" size={11} />
+                    {post.pages}
+                  </span>
+                )}
                 {state}
                 {showSource && (
                   <span className="card-source" data-source={post.source}>

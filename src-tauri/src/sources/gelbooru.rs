@@ -174,6 +174,7 @@ fn normalize(raw: RawPost) -> Option<Post> {
         created_at: raw.created_at,
         post_url: format!("{BASE}/index.php?page=post&s=view&id={id}"),
         tags: PostTags { general: split_tags(raw.tags.as_deref()), ..PostTags::default() },
+        pages: None,
     })
 }
 

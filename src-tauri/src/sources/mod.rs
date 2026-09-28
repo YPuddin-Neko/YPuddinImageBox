@@ -5,6 +5,7 @@ pub mod danbooru;
 pub mod filter;
 pub mod gelbooru;
 pub mod moebooru;
+pub mod pixiv;
 pub mod timestamp;
 
 use std::sync::{PoisonError, RwLock};
@@ -22,10 +23,11 @@ pub enum Source {
     Danbooru,
     Gelbooru,
     Yandere,
+    Pixiv,
 }
 
 impl Source {
-    pub const ALL: [Source; 3] = [Source::Danbooru, Source::Gelbooru, Source::Yandere];
+    pub const ALL: [Source; 4] = [Source::Danbooru, Source::Gelbooru, Source::Yandere, Source::Pixiv];
 
     /// 数据库、文件夹名和图片路由里用的小写名称。
     pub fn as_str(self) -> &'static str {
@@ -33,6 +35,7 @@ impl Source {
             Source::Danbooru => "danbooru",
             Source::Gelbooru => "gelbooru",
             Source::Yandere => "yandere",
+            Source::Pixiv => "pixiv",
         }
     }
 
@@ -45,6 +48,7 @@ impl Source {
             Source::Danbooru => "Danbooru",
             Source::Gelbooru => "Gelbooru",
             Source::Yandere => "Yande.re",
+            Source::Pixiv => "Pixiv",
         }
     }
 
@@ -54,6 +58,8 @@ impl Source {
             Source::Danbooru => &["donmai.us"],
             Source::Gelbooru => &["gelbooru.com"],
             Source::Yandere => &["yande.re"],
+            // 网页和接口在 pixiv.net，图片在 i.pximg.net。
+            Source::Pixiv => &["pixiv.net", "pximg.net"],
         }
     }
 
@@ -62,6 +68,7 @@ impl Source {
             Source::Danbooru => "https://danbooru.donmai.us/",
             Source::Gelbooru => "https://gelbooru.com/",
             Source::Yandere => "https://yande.re/",
+            Source::Pixiv => pixiv::REFERER_URL,
         }
     }
 
@@ -80,6 +87,7 @@ impl Source {
         match self {
             Source::Danbooru => 200,
             Source::Gelbooru | Source::Yandere => 100,
+            Source::Pixiv => pixiv::PAGE_SIZE,
         }
     }
 }
@@ -201,7 +209,9 @@ impl Sort {
             (Source::Yandere, Sort::Oldest) => "order:id",
             (Source::Yandere, Sort::Score) => "order:score",
             (Source::Yandere, Sort::Resolution) => "order:mpixels",
-            (Source::Gelbooru | Source::Yandere, _) => {
+            // Pixiv 的适配器自己认这个条件（换成 order=date），不是站点的语法。
+            (Source::Pixiv, Sort::Oldest) => "order:date",
+            (Source::Gelbooru | Source::Yandere | Source::Pixiv, _) => {
                 let site = source.site_name();
                 return Err(AppError::InvalidInput(tr!("{site} 不支持这种排序", "{site} doesn't support this sort order")));
             }
@@ -265,12 +275,26 @@ pub struct Post {
     pub created_at: Option<String>,
     pub post_url: String,
     pub tags: PostTags,
+    /// 一个作品里有几页（Pixiv 的多页作品），只有一页或别的站点时为空。下载时每页各存一张。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<u32>,
 }
 
 /// Danbooru 的受限 tag：带这些 tag 的帖子只对 Gold 及以上等级开放原图，普通账号和未登录都拿不到原图地址。
 const GOLD_ONLY_TAGS: [&str; 3] = ["loli", "shota", "toddlercon"];
 
 impl Post {
+    /// 界面上显示的编号。Pixiv 显示作品 id，第二页起再写页码。
+    pub fn label(&self) -> String {
+        match self.source {
+            Source::Pixiv => match pixiv::split_id(self.id) {
+                (illust, 0) => format!("#{illust}"),
+                (illust, page) => format!("#{illust} p{}", page + 1),
+            },
+            _ => format!("#{}", self.id),
+        }
+    }
+
     /// 没有原图地址是不是因为账号等级不够。其余情况（画师被封禁、图片下架）连 Gold 也拿不到。
     pub fn gold_only(&self) -> bool {
         self.source == Source::Danbooru && self.tags.general.iter().any(|tag| GOLD_ONLY_TAGS.contains(&tag.as_str()))
@@ -388,6 +412,8 @@ pub fn has_custom_order(query: &str) -> bool {
 pub struct Accounts {
     pub danbooru: Option<danbooru::Credentials>,
     pub gelbooru: Option<gelbooru::Credentials>,
+    /// 不登录也能用，登录后才能看 R-18 作品。
+    pub pixiv: Option<pixiv::Credentials>,
 }
 
 impl Accounts {
@@ -400,6 +426,7 @@ impl Accounts {
             Source::Danbooru => self.danbooru.as_ref().map(|c| c.api_key.as_str()),
             Source::Gelbooru => self.gelbooru.as_ref().map(|c| c.api_key.as_str()),
             Source::Yandere => None,
+            Source::Pixiv => self.pixiv.as_ref().map(|c| c.session.as_str()),
         }
     }
 
@@ -413,6 +440,8 @@ impl Accounts {
                 self.gelbooru = account.map(|(user_id, api_key)| gelbooru::Credentials { user_id, api_key })
             }
             Source::Yandere => {}
+            // Pixiv 存的「Key」是登录后的 PHPSESSID，账号的用户 id 从里面取。
+            Source::Pixiv => self.pixiv = account.and_then(|(_, session)| pixiv::Credentials::from_session(&session)),
         }
     }
 }
@@ -465,6 +494,7 @@ pub async fn fetch(
             Page::Before(id) => moebooru::search(net, format!("{query} id:<{id}").trim(), 1, limit).await,
             Page::After(id) => moebooru::search(net, format!("{query} id:>{id} order:id").trim(), 1, limit).await,
         },
+        Source::Pixiv => pixiv::search(net, accounts.pixiv.as_ref(), query, page).await,
     }
 }
 
@@ -474,6 +504,7 @@ pub async fn count(net: &Net, accounts: &Accounts, source: Source, query: &str) 
         Source::Danbooru => danbooru::count(net, query, accounts.danbooru.as_ref()).await,
         Source::Gelbooru => gelbooru::count(net, query, accounts.gelbooru()?).await,
         Source::Yandere => moebooru::count(net, query).await,
+        Source::Pixiv => pixiv::count(net, accounts.pixiv.as_ref(), query).await,
     }
 }
 
@@ -497,6 +528,11 @@ pub fn build_query(source: Source, tags: &str, ratings: &[Rating]) -> String {
                 parts.push(format!("{{{}}}", alternatives.join(" ~ ")));
             }
             Source::Yandere => parts.extend(moebooru::rating_term(&selected)),
+            // Pixiv 的适配器自己认这个条件：换成搜索的 mode，再在本地按分级筛。
+            Source::Pixiv => {
+                let names: Vec<&str> = selected.iter().map(|r| r.as_str()).collect();
+                parts.push(format!("rating:{}", names.join(",")));
+            }
         }
     }
     parts.join(" ")
