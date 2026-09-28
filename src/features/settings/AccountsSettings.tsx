@@ -205,8 +205,7 @@ function AccountCard({
 const LOGIN_POLL_MS = 1500;
 
 /**
- * Pixiv 没有 API Key：在弹出的 Pixiv 登录页里登录，软件从窗口的 Cookie 里取出登录状态；
- * 登录页打不开时（例如用 Google 账号登录），也可以粘贴浏览器里的 PHPSESSID。
+ * Pixiv 没有 API Key：推荐在系统浏览器里登录后粘贴 PHPSESSID；也可以在软件窗口里登录。
  */
 function PixivCard({
   account,
@@ -263,6 +262,16 @@ function PixivCard({
       await pixivLoginOpen();
       setWaiting(true);
       setRound((count) => count + 1);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
+  const openBrowser = async () => {
+    setError(null);
+    try {
+      await openUrl("https://www.pixiv.net/");
+      onNotice(t("已在浏览器打开 Pixiv，请登录后粘贴 PHPSESSID"));
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -342,8 +351,11 @@ function PixivCard({
             <button type="submit" className="btn" disabled={busy !== null}>
               <SwapLabel labels={[t("保存并验证"), t("正在验证…")]} active={busy === "save" ? 1 : 0} />
             </button>
-            <button type="button" className="btn primary" onClick={() => void openLogin()} disabled={busy !== null}>
-              <SwapLabel labels={[t("登录 Pixiv"), t("等待登录…")]} active={waiting ? 1 : 0} />
+            <button type="button" className="btn primary" onClick={() => void openBrowser()} disabled={busy !== null}>
+              {t("在浏览器登录")}
+            </button>
+            <button type="button" className="btn ghost" onClick={() => void openLogin()} disabled={busy !== null}>
+              <SwapLabel labels={[t("软件内登录"), t("等待登录…")]} active={waiting ? 1 : 0} />
             </button>
             {account.keyMissing && (
               <button type="button" className="btn ghost" onClick={() => void remove()} disabled={busy !== null}>
@@ -359,14 +371,9 @@ function PixivCard({
         <p className="form-hint">
           <span>
             {waiting
-              ? t("在弹出的窗口里登录 Pixiv，登录好后这里会自动完成。")
-              : t("也可以在浏览器里登录 Pixiv，再粘贴 Cookie 里的 PHPSESSID。")}
+              ? t("在软件窗口里登录 Pixiv，登录好后这里会自动完成。")
+              : t("推荐在浏览器里登录 Pixiv，再粘贴 Cookie 里的 PHPSESSID；软件内登录窗口会使用当前代理。")}
           </span>
-          {!waiting && (
-            <button type="button" className="link" onClick={() => void openUrl("https://www.pixiv.net/")}>
-              {t("打开 Pixiv")}
-            </button>
-          )}
         </p>
       )}
     </section>

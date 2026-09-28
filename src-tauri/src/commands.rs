@@ -8,7 +8,7 @@ use crate::i18n::{self, text, tr, Language, LanguageSetting};
 use crate::library::{
     Folder, GroupPage, GroupQuery, ItemNote, JobInfo, LibraryPage, LibraryQuery, NewSubscription, SavedSearch, Subscription,
 };
-use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
+use crate::settings::{parse_proxy_url, KeyStorage, ProxyMode, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
 use crate::sources::{self, combined, danbooru, gelbooru, pixiv, Page, Post, Rating, SearchPage, SearchParams, Sort, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
@@ -801,6 +801,26 @@ pub async fn account_remove(app: AppHandle, state: State<'_, AppState>, source: 
 
 const PIXIV_LOGIN_WINDOW: &str = "pixiv-login";
 
+fn webview_proxy(proxy: &ProxySettings) -> Result<Option<url::Url>, AppError> {
+    if proxy.mode != ProxyMode::Manual {
+        return Ok(None);
+    }
+    let mut url = parse_proxy_url(&proxy.url)?;
+    if url.scheme() == "socks5h" {
+        url.set_scheme("socks5").map_err(|_| AppError::InvalidInput(tr!(
+            "登录窗口不支持这个代理地址",
+            "The login window doesn't support this proxy address"
+        )))?;
+    }
+    if !matches!(url.scheme(), "http" | "socks5") {
+        return Err(AppError::InvalidInput(tr!(
+            "Pixiv 登录窗口只支持 http 或 socks5 代理",
+            "The Pixiv login window supports http or socks5 proxies"
+        )));
+    }
+    Ok(Some(url))
+}
+
 fn x_page(username: &str) -> Result<url::Url, AppError> {
     let username = username.trim().trim_start_matches('@');
     if username.is_empty() || username.len() > 15 || !username.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
@@ -857,16 +877,21 @@ fn forget_pixiv_cookies(app: &AppHandle) {
 /// 打开 Pixiv 的登录页。账号密码只在 Pixiv 自己的页面里输入，这个窗口没有调用软件功能的权限；
 /// 登录成功后由 [`pixiv_login_check`] 从窗口的 Cookie 里取出登录状态。
 #[tauri::command]
-pub async fn pixiv_login_open(app: AppHandle) -> Result<(), AppError> {
+pub async fn pixiv_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
     if let Some(window) = app.get_webview_window(PIXIV_LOGIN_WINDOW) {
         let _ = window.set_focus();
         return Ok(());
     }
     let url = "https://accounts.pixiv.net/login?return_to=https%3A%2F%2Fwww.pixiv.net%2F&source=pc&view_type=page";
     let url = url.parse().map_err(|err: url::ParseError| AppError::Internal(err.to_string()))?;
-    WebviewWindowBuilder::new(&app, PIXIV_LOGIN_WINDOW, WebviewUrl::External(url))
+    let proxy = webview_proxy(&state.settings().proxy)?;
+    let mut builder = WebviewWindowBuilder::new(&app, PIXIV_LOGIN_WINDOW, WebviewUrl::External(url))
         .title(tr!("登录 Pixiv", "Sign in to Pixiv"))
-        .inner_size(480.0, 720.0)
+        .inner_size(480.0, 720.0);
+    if let Some(proxy) = proxy {
+        builder = builder.proxy_url(proxy);
+    }
+    builder
         .build()
         .map_err(|err| AppError::Internal(err.to_string()))?;
     Ok(())
@@ -943,10 +968,14 @@ pub fn proxy_info(state: State<'_, AppState>) -> ProxySettings {
 
 /// 保存代理设置并立即生效。
 #[tauri::command]
-pub fn proxy_save(state: State<'_, AppState>, proxy: ProxySettings) -> Result<ProxySettings, AppError> {
+pub fn proxy_save(app: AppHandle, state: State<'_, AppState>, proxy: ProxySettings) -> Result<ProxySettings, AppError> {
     proxy.validate()?;
     state.net.apply_proxy(&proxy)?;
     state.update_settings(|settings| settings.proxy = proxy.clone())?;
+    // WebView 的代理只能在创建窗口时设置；让下一次 Pixiv 登录使用新代理。
+    if let Some(window) = app.get_webview_window(PIXIV_LOGIN_WINDOW) {
+        let _ = window.close();
+    }
     Ok(proxy)
 }
 
