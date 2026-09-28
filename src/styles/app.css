@@ -619,9 +619,11 @@ button:disabled {
   color: var(--fg-3);
 }
 
-/* 所有选项的文字叠在同一格里，按钮按最宽的那个定宽，换选项时不跳动。 */
+/* 所有选项的文字叠在同一格里，按钮按最宽的那个定宽，换选项时不跳动。
+   文字靠左，不跟着按钮默认的居中，和前面小标题的间距才固定。 */
 .dropdown-value {
   display: inline-grid;
+  justify-items: start;
 }
 
 .dropdown-value > * {
