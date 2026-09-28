@@ -5,7 +5,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
 use crate::i18n::{self, text, tr, Language, LanguageSetting};
-use crate::library::{ItemNote, JobInfo, LibraryPage, LibraryQuery, NewSubscription, SavedSearch, Subscription};
+use crate::library::{
+    Folder, GroupPage, GroupQuery, ItemNote, JobInfo, LibraryPage, LibraryQuery, NewSubscription, SavedSearch, Subscription,
+};
 use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
 use crate::sources::{self, danbooru, gelbooru, Page, Post, SearchPage, SearchParams, Source};
@@ -162,6 +164,18 @@ pub async fn library_list(state: State<'_, AppState>, query: LibraryQuery) -> Re
         post.missing = !tokio::fs::try_exists(&post.path).await.unwrap_or(false);
     }
     Ok(page)
+}
+
+/// 图库首页的文件夹（按来源）。
+#[tauri::command]
+pub async fn library_folders(state: State<'_, AppState>) -> Result<Vec<Folder>, AppError> {
+    Ok(state.library.folders().await?)
+}
+
+/// 文件夹里按画师、作品、角色或 tag 分的组。
+#[tauri::command]
+pub async fn library_groups(state: State<'_, AppState>, query: GroupQuery) -> Result<GroupPage, AppError> {
+    Ok(state.library.groups(&query).await?)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

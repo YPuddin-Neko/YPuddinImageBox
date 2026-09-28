@@ -122,6 +122,102 @@ pub struct LibraryPage {
     pub has_more: bool,
 }
 
+/// 文件夹和分组卡片上扇形展开的封面，按下载时间从新到旧。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cover {
+    pub source: Source,
+    pub post_id: u64,
+    pub width: u32,
+    pub height: u32,
+    /// 本地缩略图的路由，和图库列表里的 thumbUrl 一样。
+    pub thumb_url: String,
+}
+
+/// 图库首页按来源分的文件夹。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Folder {
+    pub source: Source,
+    pub count: i64,
+    /// 最近一次下载的时间，文件夹是空的时为空。
+    pub latest_at: Option<i64>,
+    pub covers: Vec<Cover>,
+}
+
+/// 文件夹里按哪类 tag 分组。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupKind {
+    Artist,
+    Copyright,
+    Character,
+    General,
+}
+
+impl GroupKind {
+    fn category(self) -> &'static str {
+        match self {
+            GroupKind::Artist => "artist",
+            GroupKind::Copyright => "copyright",
+            GroupKind::Character => "character",
+            GroupKind::General => "general",
+        }
+    }
+}
+
+/// 分组的排序；默认最近有新下载的在前。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GroupSort {
+    #[default]
+    Recent,
+    Count,
+    Name,
+}
+
+impl GroupSort {
+    fn order_by(self) -> &'static str {
+        match self {
+            GroupSort::Recent => "latest DESC, t.id DESC",
+            GroupSort::Count => "count DESC, latest DESC",
+            GroupSort::Name => "t.name",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupQuery {
+    pub source: Source,
+    pub kind: GroupKind,
+    #[serde(default)]
+    pub sort: GroupSort,
+    #[serde(default)]
+    pub offset: u32,
+    #[serde(default)]
+    pub limit: u32,
+}
+
+/// 一个分组：同一个画师（作品、角色、tag）的图。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    pub name: String,
+    pub count: i64,
+    pub latest_at: i64,
+    pub covers: Vec<Cover>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupPage {
+    pub groups: Vec<Group>,
+    /// 这个文件夹里一共有多少组。
+    pub total: i64,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobKind {
@@ -327,13 +423,26 @@ fn subscription_from_row(row: &SqliteRow) -> Result<Subscription, sqlx::Error> {
     })
 }
 
+/// 图库里的图经 ibx 协议加载的路由：`kind` 是 thumb（缩略图）或 file（原图）。
+fn local_route(kind: &str, source: Source, post_id: u64) -> String {
+    format!("local/{kind}/{}/{post_id}", source.as_str())
+}
+
+/// 每个文件夹、分组卡片上最多放几张封面。
+const COVERS: i64 = 5;
+
+fn cover(source: Source, post_id: i64, width: u32, height: u32) -> Cover {
+    let post_id = post_id as u64;
+    Cover { source, post_id, width, height, thumb_url: local_route("thumb", source, post_id) }
+}
+
 fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
     let source: String = row.try_get("source")?;
     let source = Source::parse(&source).ok_or_else(|| unknown_source(&source))?;
     let post_id: i64 = row.try_get("post_id")?;
     let rating: Option<String> = row.try_get("rating")?;
     let file_size: Option<i64> = row.try_get("file_size")?;
-    let route = |kind: &str| Some(format!("local/{kind}/{}/{post_id}", source.as_str()));
+    let route = |kind: &str| Some(local_route(kind, source, post_id as u64));
     Ok(LocalPost {
         post: Post {
             source,
@@ -608,6 +717,106 @@ impl Library {
 
         let has_more = (query.offset as i64 + posts.len() as i64) < total;
         Ok(LibraryPage { posts, total, offset: query.offset, has_more })
+    }
+
+    // ---------- 文件夹视图 ----------
+
+    /// 按来源分的文件夹，每个带张数和最近下载的几张封面。没有图的来源也列出来。
+    pub async fn folders(&self) -> Result<Vec<Folder>, sqlx::Error> {
+        // 张数只数来源索引就够了；最近下载时间就是第一张封面的时间，不用再把整张表扫一遍。
+        let counts: Vec<(String, i64)> =
+            sqlx::query_as("SELECT source, COUNT(*) FROM posts GROUP BY source").fetch_all(&self.pool).await?;
+        let mut folders = Vec::with_capacity(Source::ALL.len());
+        for source in Source::ALL {
+            let count = counts.iter().find(|(name, _)| name == source.as_str()).map_or(0, |(_, count)| *count);
+            let rows: Vec<(i64, u32, u32, i64)> = if count == 0 {
+                Vec::new()
+            } else {
+                sqlx::query_as(
+                    "SELECT post_id, width, height, downloaded_at FROM posts WHERE source = ? \
+                     ORDER BY downloaded_at DESC, id DESC LIMIT ?",
+                )
+                .bind(source.as_str())
+                .bind(COVERS)
+                .fetch_all(&self.pool)
+                .await?
+            };
+            let latest_at = rows.first().map(|row| row.3);
+            let covers = rows.into_iter().map(|(id, width, height, _)| cover(source, id, width, height)).collect();
+            folders.push(Folder { source, count, latest_at, covers });
+        }
+        Ok(folders)
+    }
+
+    /// 文件夹里按画师、作品、角色或一般 tag 分组，每组带张数和最近下载的几张封面。
+    /// 没有这类 tag 的图不在任何一组里，从「全部」里看。
+    pub async fn groups(&self, query: &GroupQuery) -> Result<GroupPage, sqlx::Error> {
+        let limit = match query.limit {
+            0 => 60,
+            n => n.min(MAX_PAGE),
+        };
+        // 用 CROSS JOIN 固定连接顺序。统计信息过时的连接上（例如软件开着时图库从空的涨到几万张），
+        // SQLite 自己挑的顺序可能慢好几倍。画师、作品、角色从 tag 一侧查：每张图只有一两个这类 tag，
+        // 要看的关联很少（十万张约 70 ms）；一般 tag 每张图有十几二十个，从图一侧顺着查更快（约 0.7 秒，从 tag 一侧要 1.3 秒）。
+        let from = match query.kind {
+            GroupKind::General => {
+                "posts p CROSS JOIN post_tags pt ON pt.post_id = p.id CROSS JOIN tags t ON t.id = pt.tag_id"
+            }
+            _ => "tags t CROSS JOIN post_tags pt ON pt.tag_id = t.id CROSS JOIN posts p ON p.id = pt.post_id",
+        };
+        let sql = format!(
+            "SELECT t.id, t.name, COUNT(*) AS count, MAX(p.downloaded_at) AS latest, COUNT(*) OVER () AS total
+             FROM {from}
+             WHERE t.category = ? AND p.source = ?
+             GROUP BY t.id
+             ORDER BY {}
+             LIMIT ? OFFSET ?",
+            query.sort.order_by()
+        );
+        // 拼进去的只有固定的连接顺序和排序子句，条件都走参数绑定。
+        let rows: Vec<(i64, String, i64, i64, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(query.kind.category())
+            .bind(query.source.as_str())
+            .bind(i64::from(limit))
+            .bind(i64::from(query.offset))
+            .fetch_all(&self.pool)
+            .await?;
+        // 翻过了最后一页时拿不到总数，按已经翻过的算。
+        let total = rows.first().map_or(i64::from(query.offset), |row| row.4);
+
+        // 封面也固定顺序：先按这一页的 tag 找关联，再查图。反过来会把整个来源的图都过一遍，慢十几到几十倍。
+        let mut covers: HashMap<i64, Vec<Cover>> = HashMap::new();
+        if !rows.is_empty() {
+            let mut sql = QueryBuilder::<Sqlite>::new(
+                "SELECT tag_id, post_id, width, height FROM (
+                   SELECT pt.tag_id, p.post_id, p.width, p.height,
+                          ROW_NUMBER() OVER (PARTITION BY pt.tag_id ORDER BY p.downloaded_at DESC, p.id DESC) AS rn
+                   FROM post_tags pt CROSS JOIN posts p ON p.id = pt.post_id
+                   WHERE p.source = ",
+            );
+            sql.push_bind(query.source.as_str()).push(" AND pt.tag_id IN (");
+            let mut ids = sql.separated(", ");
+            for row in &rows {
+                ids.push_bind(row.0);
+            }
+            sql.push(")) WHERE rn <= ").push_bind(COVERS).push(" ORDER BY tag_id, rn");
+            let cover_rows: Vec<(i64, i64, u32, u32)> = sql.build_query_as().fetch_all(&self.pool).await?;
+            for (tag_id, post_id, width, height) in cover_rows {
+                covers.entry(tag_id).or_default().push(cover(query.source, post_id, width, height));
+            }
+        }
+
+        let groups: Vec<Group> = rows
+            .into_iter()
+            .map(|(tag_id, name, count, latest_at, _)| Group {
+                name,
+                count,
+                latest_at,
+                covers: covers.remove(&tag_id).unwrap_or_default(),
+            })
+            .collect();
+        let has_more = i64::from(query.offset) + (groups.len() as i64) < total;
+        Ok(GroupPage { groups, total, has_more })
     }
 
     /// 从图库删除记录（tag 关联随之删除），返回删掉的条数。不碰文件。
@@ -1239,6 +1448,50 @@ mod tests {
         lib.backfill_posted_at().await.unwrap();
         let posted: Option<i64> = sqlx::query_scalar("SELECT posted_at FROM posts").fetch_one(&lib.pool).await.unwrap();
         assert_eq!(posted, timestamp::parse("2026-09-27T00:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn folders_and_groups_show_latest_downloads() {
+        let lib = Library::in_memory().await;
+        // 下载时间按 id 递增：id 越大越新。
+        let saves = [
+            (Source::Danbooru, 1, tags(&["alice"], &["sky"])),
+            (Source::Danbooru, 2, tags(&["bob"], &["sky"])),
+            (Source::Danbooru, 3, tags(&["alice"], &["sea"])),
+            (Source::Danbooru, 4, tags(&["alice", "bob"], &["sky"])),
+            (Source::Gelbooru, 5, tags(&[], &["sky"])),
+        ];
+        for (source, id, tags) in saves {
+            let path = format!("/images/{id}.png");
+            lib.save_post(&post(source, id, tags), Path::new(&path), id as i64 * 1000).await.unwrap();
+        }
+
+        let folders = lib.folders().await.unwrap();
+        assert_eq!(folders.iter().map(|f| (f.source, f.count)).collect::<Vec<_>>(), [(Source::Danbooru, 4), (Source::Gelbooru, 1)]);
+        let ids: Vec<u64> = folders[0].covers.iter().map(|c| c.post_id).collect();
+        assert_eq!(ids, [4, 3, 2, 1]);
+        assert_eq!(folders[0].covers[0].thumb_url, "local/thumb/danbooru/4");
+        assert_eq!(folders[1].latest_at, Some(5000));
+
+        let query = |kind, sort| GroupQuery { source: Source::Danbooru, kind, sort, offset: 0, limit: 0 };
+        let page = lib.groups(&query(GroupKind::Artist, GroupSort::Recent)).await.unwrap();
+        assert_eq!(page.total, 2);
+        assert!(!page.has_more);
+        // alice 和 bob 最近都有 #4，同时间的按 tag 先后；封面从新到旧。
+        let alice = page.groups.iter().find(|g| g.name == "alice").unwrap();
+        assert_eq!((alice.count, alice.latest_at), (3, 4000));
+        assert_eq!(alice.covers.iter().map(|c| c.post_id).collect::<Vec<_>>(), [4, 3, 1]);
+
+        let by_count = lib.groups(&query(GroupKind::General, GroupSort::Count)).await.unwrap();
+        assert_eq!(by_count.groups.iter().map(|g| (g.name.as_str(), g.count)).collect::<Vec<_>>(), [("sky", 3), ("sea", 1)]);
+        let by_name = lib.groups(&query(GroupKind::Artist, GroupSort::Name)).await.unwrap();
+        assert_eq!(by_name.groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["alice", "bob"]);
+
+        let second = lib
+            .groups(&GroupQuery { limit: 1, offset: 1, ..query(GroupKind::Artist, GroupSort::Name) })
+            .await
+            .unwrap();
+        assert_eq!((second.groups.len(), second.total, second.has_more), (1, 2, false));
     }
 
     #[tokio::test]

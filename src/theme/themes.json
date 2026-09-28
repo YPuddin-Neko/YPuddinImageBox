@@ -22,10 +22,14 @@
   },
   "modeTokens": {
     "dark": {
-      "shimmer": "rgba(255,255,255,.07)"
+      "shimmer": "rgba(255,255,255,.07)",
+      "photo": "#efebe3",
+      "photo-shadow": "0 8px 20px -6px rgba(0,0,0,.6)"
     },
     "light": {
-      "shimmer": "rgba(255,255,255,.72)"
+      "shimmer": "rgba(255,255,255,.72)",
+      "photo": "#ffffff",
+      "photo-shadow": "0 8px 18px -8px rgba(30,30,50,.28)"
     }
   },
   "themes": [

@@ -232,6 +232,33 @@ button:disabled {
   font-size: 12.5px;
 }
 
+/* 图库里点进文件夹后，搜索框左侧换成返回按钮，写着当前所在的文件夹或分组。 */
+.search-back {
+  height: 34px;
+  max-width: 220px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 0 14px 0 9px;
+  border: 0;
+  border-radius: 17px;
+  background: var(--raised-2);
+  font-weight: 700;
+  font-size: 12.5px;
+  transition: background-color 0.15s ease;
+}
+
+.search-back:hover {
+  background: color-mix(in srgb, var(--fg-1) 10%, var(--raised-2));
+}
+
+.search-back span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .search-input {
   flex: 1;
   min-width: 0;
@@ -610,6 +637,7 @@ button:disabled {
   display: inline-flex;
   flex: none;
   align-items: center;
+  gap: 6px;
   white-space: nowrap;
 }
 
@@ -1746,8 +1774,195 @@ kbd {
   min-width: 0;
 }
 
-.page-head > .btn {
+.page-head > .btn,
+.page-actions {
   margin-top: 2px;
+}
+
+/* 标题右侧的一组按钮或下拉框，间距和任务行里的按钮一样。 */
+.page-actions {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+
+/* 图库分组页的标题：「图库 / Danbooru」，前一级可以点回去。 */
+.crumbs {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.crumb {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-3);
+  transition: color 0.15s ease;
+}
+
+.crumb:hover {
+  color: var(--fg-1);
+}
+
+.crumb-sep {
+  color: var(--fg-3);
+  font-weight: 500;
+}
+
+/* ---------- 图库文件夹 ---------- */
+
+.shelf {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+  transition: opacity 0.15s ease;
+}
+
+.shelf[data-size="lg"] {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.shelf[data-size="md"] {
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 14px;
+}
+
+/* 换分组方式、排序后，新结果回来之前先把旧的调淡。 */
+.shelf[data-loading] {
+  opacity: 0.55;
+}
+
+/* 文件夹卡片：上面一手扇形展开的相片（最近下载的几张），下面是名称和张数。 */
+.stack-card {
+  min-width: 0;
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px 13px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--raised);
+  text-align: left;
+  transition: border-color 0.18s ease;
+}
+
+.stack-card:hover:not(:disabled, [aria-disabled]) {
+  border-color: var(--line-2);
+}
+
+/* 空文件夹不能点开，但不调暗：虚线空卡和说明文字已经表明是空的。 */
+.stack-card:disabled,
+.stack-card[aria-disabled] {
+  opacity: 1;
+  cursor: default;
+}
+
+/*
+ * 相片宽度跟着卡片宽度走：扇面悬停张开时最宽约 2 张相片，窗口再窄也不会伸出卡片。
+ * 往右转开的相片，左上角最多比最前面那张高出约 0.3 张相片宽，高度里预留出来。
+ * 不支持容器单位的旧系统用固定宽度。
+ */
+.fan {
+  --fan-w: 104px;
+  --fan-step: 8deg;
+  --fan-bottom: 12px;
+  position: relative;
+  display: block;
+  height: calc(var(--fan-w) * 4 / 3 + var(--fan-w) * 0.3 + var(--fan-bottom));
+}
+
+.shelf[data-size="md"] .fan {
+  --fan-w: 64px;
+  --fan-bottom: 10px;
+}
+
+@supports (width: 1cqi) {
+  .fan {
+    --fan-w: min(124px, 46cqi);
+  }
+
+  .shelf[data-size="md"] .fan {
+    --fan-w: min(80px, 50cqi);
+  }
+}
+
+/*
+ * 最前面那张和下面的名称左对齐。其余的绕右下角下方一点转开，越旧转得越多，
+ * 像往右捻开的一手牌，底边基本不往下掉，不会碰到下面的文字。--k 是第几新的一张，最新的是 0。
+ */
+.fan-card {
+  position: absolute;
+  bottom: var(--fan-bottom);
+  left: 0;
+  width: var(--fan-w);
+  aspect-ratio: 3 / 4;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--photo);
+  box-shadow: var(--photo-shadow);
+  transform-origin: 100% 115%;
+  transform: translateY(calc(0px - var(--lift, 0px))) rotate(calc(var(--k) * var(--fan-step)));
+  transition: transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.fan-card .shimmer-img {
+  border-radius: 6px;
+}
+
+.fan-card[data-empty] {
+  border: 1.5px dashed var(--line-2);
+  background: transparent;
+  box-shadow: none;
+}
+
+/* 悬停时像把牌捻开：张开得更大，最前面那张往上抽出一点。 */
+.stack-card:hover:not(:disabled, [aria-disabled]) .fan {
+  --fan-step: 10deg;
+}
+
+.stack-card:hover:not(:disabled, [aria-disabled]) .fan-card[data-front] {
+  --lift: 6px;
+}
+
+.shelf[data-size="md"] .stack-card:hover:not(:disabled, [aria-disabled]) .fan-card[data-front] {
+  --lift: 4px;
+}
+
+.stack-meta {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.stack-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.shelf[data-size="md"] .stack-title {
+  font-size: 13px;
+}
+
+.stack-count {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-3);
+}
+
+.stack-sub {
+  font-size: 12px;
+  color: var(--fg-3);
 }
 
 .page-block {

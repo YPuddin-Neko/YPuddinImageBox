@@ -3,10 +3,11 @@
 //! 运行：cargo run --release --example library_bench [-- 张数]
 //! 设了 IBX_BENCH_DB=目录 时数据库留在那里，下次运行直接用，不用重新写入。
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use imagebox_lib::library::{Library, LibraryQuery, LibrarySort};
+use imagebox_lib::library::{GroupKind, GroupQuery, GroupSort, Library, LibraryQuery, LibrarySort};
 use imagebox_lib::sources::{Post, PostTags, Rating, Source};
 
 /// 固定种子的 xorshift，每次造出来的数据一样，前后两次测量可以直接比较。
@@ -81,18 +82,23 @@ fn post(rng: &mut Rng, id: u64) -> Post {
     }
 }
 
-/// 跑 5 次取中位数，排除第一次冷缓存的影响。
-async fn measure(lib: &Library, label: &str, query: LibraryQuery) {
+/// 跑 5 次取中位数，排除第一次冷缓存的影响；同时返回最后一次的结果。
+async fn median<T, F: Future<Output = T>>(mut run: impl FnMut() -> F) -> (Duration, T) {
     let mut times = Vec::new();
-    let mut total = 0;
+    let mut result = None;
     for _ in 0..5 {
         let start = Instant::now();
-        let page = lib.list(&query).await.expect("查询");
+        result = Some(run().await);
         times.push(start.elapsed());
-        total = page.total;
     }
     times.sort();
-    println!("{label:<28} {:>8.1} ms   共 {total} 张", ms(times[2]));
+    (times[2], result.expect("跑过 5 次"))
+}
+
+async fn measure(lib: &Library, label: &str, query: LibraryQuery) {
+    let query = &query;
+    let (time, page) = median(|| async move { lib.list(query).await.expect("查询") }).await;
+    println!("{label:<28} {:>8.1} ms   共 {} 张", ms(time), page.total);
 }
 
 fn ms(duration: Duration) -> f64 {
@@ -165,6 +171,24 @@ async fn main() {
     let ratings = vec![Rating::General, Rating::Sensitive];
     measure(&lib, "分级 + 来源", LibraryQuery { ratings: ratings.clone(), source: Some(Source::Danbooru), ..page(LibrarySort::Downloaded) }).await;
     measure(&lib, "分级 + tag + 发布时间", LibraryQuery { ratings, tags: "tag_3".into(), ..page(LibrarySort::Newest) }).await;
+
+    // 图库首页的来源文件夹，以及点进去以后按画师、作品、角色、一般 tag 分组。
+    let library = &lib;
+    let (time, folders) = median(|| async move { library.folders().await.expect("查询") }).await;
+    let summary: Vec<String> = folders.iter().map(|folder| format!("{} {} 张", folder.source.as_str(), folder.count)).collect();
+    println!("{:<28} {:>8.1} ms   {}", "来源文件夹（含封面）", ms(time), summary.join("，"));
+    for (kind, name) in [
+        (GroupKind::Artist, "画师"),
+        (GroupKind::Copyright, "作品"),
+        (GroupKind::Character, "角色"),
+        (GroupKind::General, "一般 tag"),
+    ] {
+        for (label, sort) in [("最近下载", GroupSort::Recent), ("图片最多", GroupSort::Count), ("名称", GroupSort::Name)] {
+            let query = &GroupQuery { source: Source::Danbooru, kind, sort, offset: 0, limit: 60 };
+            let (time, page) = median(|| async move { library.groups(query).await.expect("查询") }).await;
+            println!("{:<28} {:>8.1} ms   {} 组", format!("分组：{name}（{label}）"), ms(time), page.total);
+        }
+    }
 
     let ids: Vec<u64> = (0..200).map(|i| 1_000_000 + i * (count / 200)).collect();
     let start = Instant::now();

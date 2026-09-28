@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import { formatCount } from "./format";
 import { t, type Msg } from "./i18n";
 import type { Post, Rating, Source } from "./ipc";
 
@@ -63,6 +64,68 @@ export interface LibraryPage {
 }
 
 export const libraryList = (query: LibraryQuery) => invoke<LibraryPage>("library_list", { query });
+
+/** 文件夹、分组卡片上扇形展开的封面，按下载时间从新到旧。 */
+export interface Cover {
+  source: Source;
+  postId: number;
+  width: number;
+  height: number;
+  thumbUrl: string;
+}
+
+/** 图库首页按来源分的文件夹。 */
+export interface Folder {
+  source: Source;
+  count: number;
+  /** 最近一次下载的时间；文件夹是空的时为 null。 */
+  latestAt: number | null;
+  covers: Cover[];
+}
+
+/** 文件夹里按哪类 tag 分组。 */
+export type GroupKind = "artist" | "copyright" | "character" | "general";
+export type GroupSort = "recent" | "count" | "name";
+
+export interface Group {
+  name: string;
+  count: number;
+  latestAt: number;
+  covers: Cover[];
+}
+
+export interface GroupPage {
+  groups: Group[];
+  /** 这个文件夹里一共有多少组。 */
+  total: number;
+  hasMore: boolean;
+}
+
+const GROUP_KINDS: { value: GroupKind; label: Msg; total: Msg }[] = [
+  { value: "artist", label: "画师", total: "{n} 位画师" },
+  { value: "copyright", label: "作品", total: "{n} 部作品" },
+  { value: "character", label: "角色", total: "{n} 个角色" },
+  { value: "general", label: "一般 tag", total: "{n} 个 tag" },
+];
+
+const GROUP_SORTS: { value: GroupSort; label: Msg }[] = [
+  { value: "recent", label: "最近下载" },
+  { value: "count", label: "图片最多" },
+  { value: "name", label: "名称" },
+];
+
+export const groupKinds = () => GROUP_KINDS.map(({ value, label }) => ({ value, label: t(label) }));
+export const groupSorts = () => GROUP_SORTS.map(({ value, label }) => ({ value, label: t(label) }));
+
+/** 「128 位画师」这样的组数说明。 */
+export function groupTotal(kind: GroupKind, total: number): string {
+  const entry = GROUP_KINDS.find((item) => item.value === kind);
+  return entry ? t(entry.total, { n: formatCount(total) }) : "";
+}
+
+export const libraryFolders = () => invoke<Folder[]>("library_folders");
+export const libraryGroups = (query: { source: Source; kind: GroupKind; sort: GroupSort; offset: number; limit: number }) =>
+  invoke<GroupPage>("library_groups", { query });
 
 /** 从图库删除；keepFiles 为 false 时图片移到废纸篓（回收站）。 */
 export const libraryDelete = (posts: PostRef[], keepFiles: boolean) =>

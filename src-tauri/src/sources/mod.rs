@@ -22,6 +22,8 @@ pub enum Source {
 }
 
 impl Source {
+    pub const ALL: [Source; 2] = [Source::Danbooru, Source::Gelbooru];
+
     /// 数据库、文件夹名和图片路由里用的小写名称。
     pub fn as_str(self) -> &'static str {
         match self {
