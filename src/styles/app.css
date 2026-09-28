@@ -177,17 +177,21 @@ button:disabled {
 }
 
 /*
- * 英文比中文长：中间一栏窄到放不下一整行时，筛选行右侧的按钮（订阅、下载全部结果、新下载的图）只留图标，
- * 完整文字在悬停提示里。中文在最小窗口下也放得下，不受影响。
+ * 中间一栏窄（窗口宽约 1150px 以下）时，筛选行右侧的按钮（订阅、下载全部结果、新下载的图）只留图标，
+ * 完整文字在悬停提示里；实际发给站点的查询也收起，本来也只剩一点地方。
  */
 @container (max-width: 740px) {
-  .btn.sm.collapsible:lang(en) {
+  .btn.sm.collapsible {
     width: 30px;
     justify-content: center;
     padding: 0;
   }
 
-  .btn.sm.collapsible:lang(en) .btn-text {
+  .btn.sm.collapsible .btn-text {
+    display: none;
+  }
+
+  .filters .query {
     display: none;
   }
 }
@@ -322,11 +326,13 @@ button:disabled {
   transform: scale(0.94);
 }
 
+/* 一行放不下时（英文、窄窗口），右侧的张数和按钮整组换到下一行，仍然靠右。 */
 .filters {
   min-height: 40px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px 10px;
   padding: 0 20px 8px;
 }
 
@@ -359,15 +365,22 @@ button:disabled {
   background-color: var(--chip);
 }
 
-.filters-space {
-  flex: 1;
+.filters-end {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
 }
 
+/* 占下拉框和右侧之间剩下的地方，文字靠右，放不下时省略；多长都不会让右侧换行。 */
 .query {
-  max-width: 44%;
+  flex: 1 1 0;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  text-align: right;
   font-size: 11.5px;
   color: var(--fg-3);
 }
@@ -375,7 +388,7 @@ button:disabled {
 /* 超出 tag 上限时的提示，和筛选胶囊同高。 */
 .local-filter {
   height: 30px;
-  max-width: 30%;
+  max-width: 240px;
   display: inline-flex;
   align-items: center;
   padding: 0 11px;

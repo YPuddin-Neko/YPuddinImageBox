@@ -324,19 +324,20 @@ export function LibraryGrid({
             options={librarySorts()}
             onChange={changeSort}
           />
-          <span className="filters-space" />
-          {fresh > 0 && deep && (
-            <button
-              type="button"
-              className="btn sm collapsible"
-              title={collapsedTitle(t("有 {n} 张新下载的图", { n: formatCount(fresh) }))}
-              onClick={() => void load(committed.current, 0)}
-            >
-              <Icon name="retry" size={14} />
-              <span className="btn-text">{t("有 {n} 张新下载的图", { n: formatCount(fresh) })}</span>
-            </button>
-          )}
-          <span className="count">{t("共 {n} 张", { n: formatCount(listing?.total ?? 0) })}</span>
+          <div className="filters-end">
+            {fresh > 0 && deep && (
+              <button
+                type="button"
+                className="btn sm collapsible"
+                title={collapsedTitle(t("有 {n} 张新下载的图", { n: formatCount(fresh) }))}
+                onClick={() => void load(committed.current, 0)}
+              >
+                <Icon name="retry" size={14} />
+                <span className="btn-text">{t("有 {n} 张新下载的图", { n: formatCount(fresh) })}</span>
+              </button>
+            )}
+            <span className="count">{t("共 {n} 张", { n: formatCount(listing?.total ?? 0) })}</span>
+          </div>
         </div>
         <div className="scroll">
           {error && (

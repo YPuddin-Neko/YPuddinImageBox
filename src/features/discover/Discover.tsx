@@ -715,43 +715,44 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             options={remoteSorts(scope)}
             onChange={changeSort}
           />
-          <span className="filters-space" />
           {results && (
             <span className="query" title={queryTitle(results.sites)}>
               {queryText(results.sites)}
             </span>
           )}
-          {localFilter && (
-            <span
-              className="local-filter"
-              title={t("站点一次能搜的 tag 数有限，「{filter}」在本地逐页筛选，加载会慢一些。Gold 以上等级的账号能直接搜更多 tag。", {
-                filter: localFilter,
-              })}
+          <div className="filters-end">
+            {localFilter && (
+              <span
+                className="local-filter"
+                title={t("站点一次能搜的 tag 数有限，「{filter}」在本地逐页筛选，加载会慢一些。Gold 以上等级的账号能直接搜更多 tag。", {
+                  filter: localFilter,
+                })}
+              >
+                {t("本地筛选 {filter}", { filter: localFilter })}
+              </span>
+            )}
+            <span className="count">{t("{n} 张", { n: formatCount(posts.length) })}</span>
+            <button
+              type="button"
+              className="btn sm collapsible"
+              title={collapsedTitle(t("订阅"))}
+              onClick={() => void openSubscribe()}
+              disabled={!results || loading}
             >
-              {t("本地筛选 {filter}", { filter: localFilter })}
-            </span>
-          )}
-          <span className="count">{t("{n} 张", { n: formatCount(posts.length) })}</span>
-          <button
-            type="button"
-            className="btn sm collapsible"
-            title={collapsedTitle(t("订阅"))}
-            onClick={() => void openSubscribe()}
-            disabled={!results || loading}
-          >
-            <Icon name="bell" size={14} />
-            <span className="btn-text">{t("订阅")}</span>
-          </button>
-          <button
-            type="button"
-            className="btn sm collapsible"
-            title={collapsedTitle(t("下载全部结果"))}
-            onClick={openBulk}
-            disabled={posts.length === 0 || loading}
-          >
-            <Icon name="download" size={14} />
-            <span className="btn-text">{t("下载全部结果")}</span>
-          </button>
+              <Icon name="bell" size={14} />
+              <span className="btn-text">{t("订阅")}</span>
+            </button>
+            <button
+              type="button"
+              className="btn sm collapsible"
+              title={collapsedTitle(t("下载全部结果"))}
+              onClick={openBulk}
+              disabled={posts.length === 0 || loading}
+            >
+              <Icon name="download" size={14} />
+              <span className="btn-text">{t("下载全部结果")}</span>
+            </button>
+          </div>
         </div>
         <div className="scroll">
           {error && (
