@@ -17,7 +17,7 @@ use crate::{keys, net, secrets, thumbs, AppState};
 /// 瀑布流每页条数。下载任务另按站点上限（200 / 100）分页。
 const PAGE_SIZE: u32 = 40;
 
-/// Danbooru 一次能搜几个 tag：看当前实际登录的账号等级；Gelbooru 不限。
+/// Danbooru 一次能搜几个 tag：看当前实际登录的账号等级；Gelbooru、Yande.re 不限。
 fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
     match source {
         Source::Danbooru => {
@@ -25,7 +25,7 @@ fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
             let level = state.settings().accounts.danbooru.as_ref().and_then(|a| a.level.clone());
             Some(filter::danbooru_tag_limit(if signed_in { level.as_deref() } else { None }))
         }
-        Source::Gelbooru => None,
+        Source::Gelbooru | Source::Yandere => None,
     }
 }
 
@@ -170,8 +170,8 @@ async fn combined_search(state: &AppState, params: SitesSearchParams) -> Result<
     }
     if !combined::can_merge(params.sort) {
         return Err(AppError::InvalidInput(tr!(
-            "聚合搜索只能按上传先后或分数排序",
-            "Combined search can only sort by upload date or score"
+            "聚合搜索只能按上传先后、分数或分辨率排序",
+            "Combined search can only sort by upload date, score or resolution"
         )));
     }
     for source in &sources {
@@ -730,6 +730,9 @@ pub async fn account_save(
             let creds = gelbooru::Credentials { user_id: name.clone(), api_key: api_key.clone() };
             gelbooru::verify(&state.net, &creds).await?;
             None
+        }
+        Source::Yandere => {
+            return Err(AppError::InvalidInput(tr!("Yande.re 不需要账号", "Yande.re doesn't need an account")))
         }
     };
 

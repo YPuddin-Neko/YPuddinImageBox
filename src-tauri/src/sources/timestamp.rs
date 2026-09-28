@@ -1,5 +1,6 @@
-//! 帖子发布时间的解析。两个站点的格式不同：Danbooru 是 ISO 8601（`2026-09-26T08:48:12.345-04:00`），
-//! Gelbooru 是 `Sat Sep 27 01:02:03 -0500 2026`。统一换算成 Unix 毫秒存进图库，按上传先后排序时用。
+//! 帖子发布时间的解析。各站点的格式不同：Danbooru 是 ISO 8601（`2026-09-26T08:48:12.345-04:00`），
+//! Gelbooru 是 `Sat Sep 27 01:02:03 -0500 2026`，Yande.re 给 Unix 秒（先用 [`iso_utc`] 换成 ISO 8601）。
+//! 统一换算成 Unix 毫秒存进图库，按上传先后排序时用。
 
 const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
@@ -76,6 +77,27 @@ fn to_millis(year: i64, month: u32, day: u32, clock: (u32, u32, u32), millis: i6
     Some((seconds - offset * 60) * 1000 + millis)
 }
 
+/// Unix 秒写成 UTC 的 ISO 8601，例如 `2026-09-28T14:12:18Z`。
+pub fn iso_utc(unix_seconds: i64) -> String {
+    let (days, seconds) = (unix_seconds.div_euclid(86_400), unix_seconds.rem_euclid(86_400));
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", seconds / 3600, seconds % 3600 / 60, seconds % 60)
+}
+
+/// [`days_from_civil`] 的逆运算：距 1970-01-01 的天数换回公历日期。
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let mp = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
 /// 公历日期距 1970-01-01 的天数（Howard Hinnant 的 days_from_civil）。
 fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
@@ -99,6 +121,16 @@ mod tests {
         assert_eq!(parse("Mon Feb 29 12:00:00 +0000 2016"), Some(1_456_747_200_000));
         assert_eq!(parse("2007-02-03T04:05:06.123456Z"), Some(1_170_475_506_123));
         assert_eq!(parse("2007-02-03T04:05:06.5Z"), Some(1_170_475_506_500));
+    }
+
+    #[test]
+    fn writes_unix_seconds_as_iso() {
+        assert_eq!(iso_utc(1_790_601_138), "2026-09-28T13:12:18Z");
+        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_utc(951_782_400), "2000-02-29T00:00:00Z");
+        for seconds in [1_182_690_420, 1_456_747_200, 1_790_601_138] {
+            assert_eq!(parse(&iso_utc(seconds)), Some(seconds * 1000));
+        }
     }
 
     #[test]

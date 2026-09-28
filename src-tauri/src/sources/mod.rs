@@ -4,6 +4,7 @@ pub mod combined;
 pub mod danbooru;
 pub mod filter;
 pub mod gelbooru;
+pub mod moebooru;
 pub mod timestamp;
 
 use std::sync::{PoisonError, RwLock};
@@ -20,31 +21,30 @@ use crate::net::Net;
 pub enum Source {
     Danbooru,
     Gelbooru,
+    Yandere,
 }
 
 impl Source {
-    pub const ALL: [Source; 2] = [Source::Danbooru, Source::Gelbooru];
+    pub const ALL: [Source; 3] = [Source::Danbooru, Source::Gelbooru, Source::Yandere];
 
     /// 数据库、文件夹名和图片路由里用的小写名称。
     pub fn as_str(self) -> &'static str {
         match self {
             Source::Danbooru => "danbooru",
             Source::Gelbooru => "gelbooru",
+            Source::Yandere => "yandere",
         }
     }
 
     pub fn parse(value: &str) -> Option<Source> {
-        match value {
-            "danbooru" => Some(Source::Danbooru),
-            "gelbooru" => Some(Source::Gelbooru),
-            _ => None,
-        }
+        Source::ALL.into_iter().find(|source| source.as_str() == value)
     }
 
     pub fn site_name(self) -> &'static str {
         match self {
             Source::Danbooru => "Danbooru",
             Source::Gelbooru => "Gelbooru",
+            Source::Yandere => "Yande.re",
         }
     }
 
@@ -53,6 +53,7 @@ impl Source {
         match self {
             Source::Danbooru => &["donmai.us"],
             Source::Gelbooru => &["gelbooru.com"],
+            Source::Yandere => &["yande.re"],
         }
     }
 
@@ -60,12 +61,13 @@ impl Source {
         match self {
             Source::Danbooru => "https://danbooru.donmai.us/",
             Source::Gelbooru => "https://gelbooru.com/",
+            Source::Yandere => "https://yande.re/",
         }
     }
 
     pub fn for_host(host: &str) -> Option<Source> {
         let host = host.trim_end_matches('.').to_ascii_lowercase();
-        [Source::Danbooru, Source::Gelbooru].into_iter().find(|source| {
+        Source::ALL.into_iter().find(|source| {
             source
                 .allowed_host_suffixes()
                 .iter()
@@ -77,7 +79,7 @@ impl Source {
     pub fn max_page_size(self) -> u32 {
         match self {
             Source::Danbooru => 200,
-            Source::Gelbooru => 100,
+            Source::Gelbooru | Source::Yandere => 100,
         }
     }
 }
@@ -184,7 +186,7 @@ impl Sort {
         Sort::ALL.into_iter().find(|sort| sort.as_str() == value)
     }
 
-    /// 加进查询的排序条件，默认顺序为 `None`。只有 Danbooru 能按收藏、热度、分辨率和文件大小排序。
+    /// 加进查询的排序条件，默认顺序为 `None`。只有 Danbooru 能按收藏、热度和文件大小排序，分辨率还有 Yande.re 能排。
     pub fn term(self, source: Source) -> Result<Option<&'static str>, AppError> {
         let term = match (source, self) {
             (_, Sort::Newest) => return Ok(None),
@@ -196,7 +198,10 @@ impl Sort {
             (Source::Danbooru, Sort::Filesize) => "order:filesize",
             (Source::Gelbooru, Sort::Oldest) => "sort:id:asc",
             (Source::Gelbooru, Sort::Score) => "sort:score:desc",
-            (Source::Gelbooru, _) => {
+            (Source::Yandere, Sort::Oldest) => "order:id",
+            (Source::Yandere, Sort::Score) => "order:score",
+            (Source::Yandere, Sort::Resolution) => "order:mpixels",
+            (Source::Gelbooru | Source::Yandere, _) => {
                 let site = source.site_name();
                 return Err(AppError::InvalidInput(tr!("{site} 不支持这种排序", "{site} doesn't support this sort order")));
             }
@@ -359,7 +364,7 @@ impl Page {
 
     /// 取完这一页后的下一页。`bounds` 是这一页里帖子 id 的（最小值，最大值）。
     pub fn next(&self, source: Source, query: &str, bounds: Option<(u64, u64)>) -> Page {
-        let by_id = source == Source::Danbooru && !has_custom_order(query);
+        let by_id = matches!(source, Source::Danbooru | Source::Yandere) && !has_custom_order(query);
         match (self, bounds) {
             (Page::After(_), Some((_, max))) => Page::After(max),
             (Page::Number(_) | Page::Before(_), Some((min, _))) if by_id => Page::Before(min),
@@ -394,6 +399,7 @@ impl Accounts {
         match source {
             Source::Danbooru => self.danbooru.as_ref().map(|c| c.api_key.as_str()),
             Source::Gelbooru => self.gelbooru.as_ref().map(|c| c.api_key.as_str()),
+            Source::Yandere => None,
         }
     }
 
@@ -406,6 +412,7 @@ impl Accounts {
             Source::Gelbooru => {
                 self.gelbooru = account.map(|(user_id, api_key)| gelbooru::Credentials { user_id, api_key })
             }
+            Source::Yandere => {}
         }
     }
 }
@@ -452,6 +459,12 @@ pub async fn fetch(
                 Page::Before(_) => gelbooru::search(net, query, 1, limit, creds).await,
             }
         }
+        // Yande.re 用 id 条件翻页：默认从新到旧，id:< 接着往旧的方向翻；找新图时 id:> 加按 id 升序。
+        Source::Yandere => match page {
+            Page::Number(n) => moebooru::search(net, query, *n, limit).await,
+            Page::Before(id) => moebooru::search(net, format!("{query} id:<{id}").trim(), 1, limit).await,
+            Page::After(id) => moebooru::search(net, format!("{query} id:>{id} order:id").trim(), 1, limit).await,
+        },
     }
 }
 
@@ -460,6 +473,7 @@ pub async fn count(net: &Net, accounts: &Accounts, source: Source, query: &str) 
     match source {
         Source::Danbooru => danbooru::count(net, query, accounts.danbooru.as_ref()).await,
         Source::Gelbooru => gelbooru::count(net, query, accounts.gelbooru()?).await,
+        Source::Yandere => moebooru::count(net, query).await,
     }
 }
 
@@ -482,6 +496,7 @@ pub fn build_query(source: Source, tags: &str, ratings: &[Rating]) -> String {
                     selected.iter().map(|r| format!("rating:{}", r.as_str())).collect();
                 parts.push(format!("{{{}}}", alternatives.join(" ~ ")));
             }
+            Source::Yandere => parts.extend(moebooru::rating_term(&selected)),
         }
     }
     parts.join(" ")
@@ -511,7 +526,7 @@ mod tests {
     fn sources_join_in_fixed_order() {
         assert_eq!(join_sources(&[Source::Gelbooru, Source::Danbooru, Source::Gelbooru]), "danbooru,gelbooru");
         assert_eq!(join_sources(&[Source::Gelbooru]), "gelbooru");
-        assert_eq!(split_sources("gelbooru,yandere,danbooru"), [Source::Danbooru, Source::Gelbooru]);
+        assert_eq!(split_sources("gelbooru,konachan,danbooru"), [Source::Danbooru, Source::Gelbooru]);
         assert_eq!(split_sources("danbooru"), [Source::Danbooru]);
         assert!(split_sources("all").is_empty());
     }

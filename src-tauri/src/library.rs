@@ -1510,7 +1510,11 @@ mod tests {
         }
 
         let folders = lib.folders().await.unwrap();
-        assert_eq!(folders.iter().map(|f| (f.source, f.count)).collect::<Vec<_>>(), [(Source::Danbooru, 4), (Source::Gelbooru, 1)]);
+        // 每个站点一个文件夹，没下载过的站点张数为 0。
+        assert_eq!(
+            folders.iter().map(|f| (f.source, f.count)).collect::<Vec<_>>(),
+            [(Source::Danbooru, 4), (Source::Gelbooru, 1), (Source::Yandere, 0)]
+        );
         let ids: Vec<u64> = folders[0].covers.iter().map(|c| c.post_id).collect();
         assert_eq!(ids, [4, 3, 2, 1]);
         assert_eq!(folders[0].covers[0].thumb_url, "local/thumb/danbooru/4");

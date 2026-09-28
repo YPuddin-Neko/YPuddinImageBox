@@ -10,12 +10,12 @@ use serde::{Deserialize, Serialize};
 use super::{timestamp, Post, Sort, Source};
 
 /// 帖子在所选排序里的位置，大的排在前面。上传先后比上传时间（两个站点的 id 不能互相比），
-/// 按分数排时分数一样的新图在前。
+/// 按分数、分辨率排时一样的新图在前。
 pub type Rank = (i64, i64);
 
-/// 能合在一起排的排序：各站点都支持的这几种。
+/// 能合在一起排的排序。能不能用还要看所选站点是不是都支持（见 [`Sort::term`](super::Sort::term)）。
 pub fn can_merge(sort: Sort) -> bool {
-    matches!(sort, Sort::Newest | Sort::Oldest | Sort::Score)
+    matches!(sort, Sort::Newest | Sort::Oldest | Sort::Score | Sort::Resolution)
 }
 
 /// 认不出上传时间时为空（按分数排时照样能排）。
@@ -23,6 +23,7 @@ pub fn rank(post: &Post, sort: Sort) -> Option<Rank> {
     let time = post.created_at.as_deref().and_then(timestamp::parse);
     match sort {
         Sort::Score => Some((post.score, time.unwrap_or(0))),
+        Sort::Resolution => Some((i64::from(post.width) * i64::from(post.height), time.unwrap_or(0))),
         Sort::Oldest => time.map(|time| (-time, 0)),
         _ => time.map(|time| (time, 0)),
     }
@@ -146,6 +147,9 @@ mod tests {
     use super::*;
     use crate::sources::PostTags;
 
+    /// 测试里合并这两个站点。
+    const SITES: [Source; 2] = [Source::Danbooru, Source::Gelbooru];
+
     fn post(source: Source, id: u64, created_at: &str, score: i64) -> Post {
         Post {
             source,
@@ -180,7 +184,7 @@ mod tests {
         let source = posts[0].source;
         let next = more.then(|| "2".to_string());
         cursor.advance(source, next, lowest(&posts, sort));
-        queues[Source::ALL.iter().position(|s| *s == source).unwrap()].extend(posts);
+        queues[SITES.iter().position(|s| *s == source).unwrap()].extend(posts);
     }
 
     fn due(cursor: &Cursor) -> Vec<Source> {
@@ -201,14 +205,17 @@ mod tests {
         unknown.created_at = Some("yesterday".into());
         assert_eq!(rank(&unknown, Sort::Newest), None);
         assert_eq!(rank(&unknown, Sort::Score), Some((5, 0)));
+        let mut big = gelbooru.clone();
+        (big.width, big.height) = (4000, 3000);
+        assert!(rank(&big, Sort::Resolution) > rank(&danbooru, Sort::Resolution));
     }
 
     #[test]
     fn keeps_order_across_pages_when_one_site_is_busier() {
         // Gelbooru 一批只覆盖一两个小时，Danbooru 一批覆盖六个小时。
         let (d, g, sort) = (Source::Danbooru, Source::Gelbooru, Sort::Newest);
-        let mut cursor = Cursor::start(&Source::ALL);
-        let mut queues = by_site(&Source::ALL, Vec::new());
+        let mut cursor = Cursor::start(&SITES);
+        let mut queues = by_site(&SITES, Vec::new());
         fetched(&mut cursor, &mut queues, vec![at(d, 100, 23), at(d, 99, 20), at(d, 98, 17)], true, sort);
         fetched(&mut cursor, &mut queues, vec![at(g, 50, 23), at(g, 49, 22), at(g, 48, 21)], true, sort);
         // G 翻到 21 点，D 早于 21 点的图要等 G 再往下翻。
@@ -219,7 +226,7 @@ mod tests {
         // 下一页只搜没有图在等的 Gelbooru。
         assert_eq!(due(&cursor), [g]);
 
-        let mut queues = by_site(&Source::ALL, std::mem::take(&mut cursor.held));
+        let mut queues = by_site(&SITES, std::mem::take(&mut cursor.held));
         fetched(&mut cursor, &mut queues, vec![at(g, 47, 20), at(g, 46, 19), at(g, 45, 18)], false, sort);
         // G 翻完了，只剩 D 在限制：D 已经翻到 17 点，所以都能显示。
         let second = take_ready(&mut queues, cursor.bar(), sort);
@@ -236,8 +243,8 @@ mod tests {
     fn oldest_and_score_merge_the_same_way() {
         let (d, g) = (Source::Danbooru, Source::Gelbooru);
         // 从旧到新：D 翻到 5 点、G 翻到 3 点，两边都没翻完，3 点之后的要等。
-        let mut cursor = Cursor::start(&Source::ALL);
-        let mut queues = by_site(&Source::ALL, Vec::new());
+        let mut cursor = Cursor::start(&SITES);
+        let mut queues = by_site(&SITES, Vec::new());
         fetched(&mut cursor, &mut queues, vec![at(d, 1, 1), at(d, 2, 5)], true, Sort::Oldest);
         fetched(&mut cursor, &mut queues, vec![at(g, 1, 2), at(g, 2, 3)], true, Sort::Oldest);
         let ready = take_ready(&mut queues, cursor.bar(), Sort::Oldest);
@@ -247,7 +254,7 @@ mod tests {
         // 两边都翻完了：全部按分数排，同样 9 分时新的在前。
         let score = |source, id, hour, score| post(source, id, &format!("2026-09-27T{hour:02}:00:00Z"), score);
         let posts = vec![score(d, 1, 1, 50), score(d, 2, 1, 9), score(g, 1, 2, 9), score(g, 2, 2, 3)];
-        let mut queues = by_site(&Source::ALL, posts);
+        let mut queues = by_site(&SITES, posts);
         let ready = take_ready(&mut queues, None, Sort::Score);
         assert_eq!(keys(&ready), [(d, 1), (g, 1), (d, 2), (g, 2)]);
     }
@@ -257,7 +264,7 @@ mod tests {
         let (d, g) = (Source::Danbooru, Source::Gelbooru);
         let mut odd = at(d, 7, 12);
         odd.created_at = None;
-        let mut queues = by_site(&Source::ALL, vec![odd, at(d, 6, 11), at(g, 1, 20)]);
+        let mut queues = by_site(&SITES, vec![odd, at(d, 6, 11), at(g, 1, 20)]);
         // 认不出时间的 D#7 轮到就放出；G#1 正好在界线（20 点）上也放出；D#6 在 11 点，要等。
         let ready = take_ready(&mut queues, rank(&at(g, 1, 20), Sort::Newest), Sort::Newest);
         assert_eq!(keys(&ready), [(d, 7), (g, 1)]);
@@ -266,7 +273,7 @@ mod tests {
 
     #[test]
     fn cursor_round_trips_through_json() {
-        let mut cursor = Cursor::start(&Source::ALL);
+        let mut cursor = Cursor::start(&SITES);
         cursor.sites[0].page = Some("b123".into());
         cursor.sites[0].reach(Some((5, 0)));
         cursor.sites[0].reach(Some((9, 0)));

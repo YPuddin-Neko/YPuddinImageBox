@@ -25,7 +25,8 @@ interface SiteText {
   helpLink: Msg;
 }
 
-const SITES: Record<Source, SiteText> = {
+/** 要填账号的站点。不用登录的站点（Yande.re）不在这里，也不会出现在账号列表里。 */
+const SITES: Partial<Record<Source, SiteText>> = {
   danbooru: {
     nameLabel: "用户名",
     namePlaceholder: "Danbooru 用户名",
@@ -60,15 +61,16 @@ const storageOptions = (): { value: KeyStorage; title: string; description: stri
 ];
 
 function AccountCard({
+  site,
   account,
   onChange,
   onNotice,
 }: {
+  site: SiteText;
   account: AccountView;
   onChange: (info: AccountsInfo) => void;
   onNotice: (message: string) => void;
 }) {
-  const site = SITES[account.source];
   const label = SOURCE_LABEL[account.source];
   const signedIn = account.name !== null && !account.keyMissing;
   const [editing, setEditing] = useState(!signedIn);
@@ -239,14 +241,20 @@ export function AccountsSettings() {
       )}
 
       <div className="set-list">
-        {info?.accounts.map((account) => (
-          <AccountCard
-            key={`${account.source}-${account.name ?? ""}-${account.keyMissing}`}
-            account={account}
-            onChange={setInfo}
-            onNotice={setNotice}
-          />
-        ))}
+        {info?.accounts.map((account) => {
+          const site = SITES[account.source];
+          return (
+            site && (
+              <AccountCard
+                key={`${account.source}-${account.name ?? ""}-${account.keyMissing}`}
+                site={site}
+                account={account}
+                onChange={setInfo}
+                onNotice={setNotice}
+              />
+            )
+          );
+        })}
 
         {info && (
           <section className="set-card" aria-labelledby="key-storage-title">

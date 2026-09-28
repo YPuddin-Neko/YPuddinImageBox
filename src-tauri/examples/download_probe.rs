@@ -1,7 +1,7 @@
 //! 用真实网络跑一遍下载队列：选中下载 3 张、按条件下载 5 张、订阅检查一次（起点设在
 //! 第 3 新的帖子，应该正好找到比它新的几张），存到临时目录后检查文件、缩略图和图库记录，
 //! 最后删除临时目录。
-//! 运行：cargo run --example download_probe
+//! 运行：cargo run --example download_probe（默认 Danbooru，后面加 yandere 换成 Yande.re）
 
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -13,11 +13,18 @@ use imagebox_lib::settings::ProxySettings;
 use imagebox_lib::sources::{self, AccountStore, Page, Rating, Source};
 use imagebox_lib::storage::{Defaults, Storage};
 
-// 小图，免得探测时下载太多流量。
-const QUERY: &str = "scenery filesize:..300kb rating:g";
+/// 要探测的站点和条件：（站点，订阅里的 tag，发给站点的完整查询）。都挑小图，免得下载太多流量。
+fn target() -> (Source, &'static str, &'static str) {
+    match std::env::args().nth(1).as_deref() {
+        Some("yandere") => (Source::Yandere, "landscape mpixels:..0.8", "landscape mpixels:..0.8 rating:s"),
+        _ => (Source::Danbooru, "scenery filesize:..300kb", "scenery filesize:..300kb rating:g"),
+    }
+}
 
 #[tokio::main]
 async fn main() {
+    let (source, tags, query) = target();
+    println!("站点：{}，条件：{query}", source.site_name());
     let dir = tempfile::tempdir().expect("临时目录");
     let defaults = Defaults {
         images: dir.path().join("images"),
@@ -46,22 +53,22 @@ async fn main() {
     );
     tokio::spawn(Arc::clone(&downloader).run());
 
-    let (posts, _) = sources::fetch(&net, &accounts.get(), Source::Danbooru, QUERY, &Page::Number(1), 3)
+    let (posts, _) = sources::fetch(&net, &accounts.get(), source, query, &Page::Number(1), 3)
         .await
         .expect("搜索");
     println!("选中下载 {} 张", posts.len());
     let first = downloader.enqueue_posts(posts.clone()).await.expect("加入队列");
     let second =
-        downloader.enqueue_query(Source::Danbooru, "按条件", QUERY, None, QUERY, Some(5)).await.expect("加入队列");
+        downloader.enqueue_query(source, "按条件", query, None, query, Some(5)).await.expect("加入队列");
 
     // 订阅：起点设在第 3 新的帖子，检查时应该找到比它新的那几张。
     let start = posts.iter().map(|post| post.id).min().expect("至少一张") as i64;
     let sub = library
         .create_subscription(NewSubscription {
-            source: Source::Danbooru,
-            tags: "scenery filesize:..300kb",
+            source,
+            tags,
             ratings: &[Rating::General],
-            query: QUERY,
+            query,
             interval_minutes: 60,
             last_seen_id: start,
             local_filter: None,
@@ -98,7 +105,7 @@ async fn main() {
     println!("图库共 {} 张", page.total);
     for post in &page.posts {
         let file = std::fs::metadata(&post.path).map(|m| m.len()).unwrap_or(0);
-        let thumb = dir.path().join("cache/thumbs/danbooru").join(post.post.id.to_string());
+        let thumb = dir.path().join("cache/thumbs").join(post.post.source.as_str()).join(post.post.id.to_string());
         let thumb = std::fs::metadata(&thumb).map(|m| m.len()).unwrap_or(0);
         println!(
             "  #{} {} 字节，缩略图 {} 字节，tag {} 个，{}",

@@ -2,7 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 import { t, type Msg } from "./i18n";
 
-export type Source = "danbooru" | "gelbooru";
+export type Source = "danbooru" | "gelbooru" | "yandere";
 export type Rating = "general" | "sensitive" | "questionable" | "explicit";
 
 export const RATINGS: Rating[] = ["general", "sensitive", "questionable", "explicit"];
@@ -19,6 +19,7 @@ export const ratingLabel = (rating: Rating) => t(RATING_LABEL[rating]);
 export const SOURCE_LABEL: Record<Source, string> = {
   danbooru: "Danbooru",
   gelbooru: "Gelbooru",
+  yandere: "Yande.re",
 };
 
 export const SOURCES = Object.keys(SOURCE_LABEL) as Source[];
@@ -36,20 +37,31 @@ export const ratingOptions = () => RATINGS.map((value) => ({ value, label: ratin
 /** 站点搜索的排序；默认按上传先后，新的在前。 */
 export type RemoteSort = "newest" | "oldest" | "score" | "favorites" | "popular" | "resolution" | "filesize";
 
-const REMOTE_SORTS: { value: RemoteSort; label: Msg; hint?: Msg; danbooruOnly?: boolean }[] = [
+const REMOTE_SORTS: { value: RemoteSort; label: Msg; hint?: Msg }[] = [
   { value: "newest", label: "最新上传" },
   { value: "oldest", label: "最早上传" },
   { value: "score", label: "分数最高" },
-  { value: "favorites", label: "收藏最多", danbooruOnly: true },
-  { value: "popular", label: "近期热门", hint: "近两天", danbooruOnly: true },
-  { value: "resolution", label: "分辨率最高", danbooruOnly: true },
-  { value: "filesize", label: "文件最大", danbooruOnly: true },
+  { value: "favorites", label: "收藏最多" },
+  { value: "popular", label: "近期热门", hint: "近两天" },
+  { value: "resolution", label: "分辨率最高" },
+  { value: "filesize", label: "文件最大" },
 ];
 
-/** 所选站点都支持的排序：Gelbooru 只能按上传先后和分数排，几个站点一起搜时只能用各站点都支持的。 */
+/** 各站点支持的排序，和 Rust 端的 `Sort::term` 一致。 */
+const SITE_SORTS: Record<Source, RemoteSort[]> = {
+  danbooru: ["newest", "oldest", "score", "favorites", "popular", "resolution", "filesize"],
+  gelbooru: ["newest", "oldest", "score"],
+  yandere: ["newest", "oldest", "score", "resolution"],
+};
+
+/** 几个站点一起搜时能合在一起排的，和 Rust 端的 `combined::can_merge` 一致。 */
+const MERGEABLE_SORTS: RemoteSort[] = ["newest", "oldest", "score", "resolution"];
+
+/** 所选站点都支持的排序；几个站点一起搜时还要能合在一起排。 */
 export function remoteSorts(sources: Source[]) {
-  const danbooru = sources.every((source) => source === "danbooru");
-  return REMOTE_SORTS.filter((sort) => danbooru || !sort.danbooruOnly).map(({ value, label, hint }) => ({
+  const usable = (sort: RemoteSort) =>
+    sources.every((source) => SITE_SORTS[source].includes(sort)) && (sources.length < 2 || MERGEABLE_SORTS.includes(sort));
+  return REMOTE_SORTS.filter((sort) => usable(sort.value)).map(({ value, label, hint }) => ({
     value,
     label: t(label),
     hint: hint && t(hint),

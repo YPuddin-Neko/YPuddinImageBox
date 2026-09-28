@@ -561,6 +561,10 @@ button:disabled {
   --site-color: var(--site-gelbooru);
 }
 
+.card-source[data-source="yandere"] {
+  --site-color: var(--site-yandere);
+}
+
 /* 多选时列表底部留出选择条的高度，最后一排不被挡住。 */
 .center[data-picking] .scroll {
   padding-bottom: 92px;

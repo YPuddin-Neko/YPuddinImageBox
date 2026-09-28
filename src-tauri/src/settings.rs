@@ -102,6 +102,7 @@ impl AccountNames {
         match source {
             Source::Danbooru => self.danbooru.as_ref(),
             Source::Gelbooru => self.gelbooru.as_ref(),
+            Source::Yandere => None,
         }
     }
 
@@ -109,6 +110,7 @@ impl AccountNames {
         match source {
             Source::Danbooru => self.danbooru.as_mut(),
             Source::Gelbooru => self.gelbooru.as_mut(),
+            Source::Yandere => None,
         }
     }
 
@@ -116,6 +118,8 @@ impl AccountNames {
         match source {
             Source::Danbooru => self.danbooru = account,
             Source::Gelbooru => self.gelbooru = account,
+            // 不用登录的站点没有账号可存。
+            Source::Yandere => {}
         }
     }
 }

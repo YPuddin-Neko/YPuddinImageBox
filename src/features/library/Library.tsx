@@ -49,13 +49,17 @@ function useLibraryChanges(refresh: () => void) {
   useTauriEvent(EVENTS.libraryRemoved, schedule);
 }
 
-/** Gelbooru 的 tag 不分类别，只能按一般 tag 分组。 */
-const onlyGeneral = (source: Source) => source === "gelbooru";
+/** Gelbooru、Yande.re 的 tag 不分类别，只能按一般 tag 分组。 */
+const onlyGeneral = (source: Source) => source === "gelbooru" || source === "yandere";
 
 export function Library({ active, onNavigate }: { active: boolean; onNavigate: Navigate }) {
   const [place, setPlace] = useState<Place>({ level: "folders" });
   // 分组方式按文件夹记住，排序各文件夹共用。
-  const [kinds, setKinds] = useState<Record<Source, GroupKind>>({ danbooru: "artist", gelbooru: "general" });
+  const [kinds, setKinds] = useState<Record<Source, GroupKind>>({
+    danbooru: "artist",
+    gelbooru: "general",
+    yandere: "general",
+  });
   const [sort, setSort] = useState<GroupSort>("recent");
 
   if (place.level === "grid") {
