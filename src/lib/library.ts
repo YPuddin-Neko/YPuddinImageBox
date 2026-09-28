@@ -120,6 +120,7 @@ const SOURCE_GROUP_KINDS: Record<Source, GroupKind[]> = {
   gelbooru: ["general"],
   yandere: ["general"],
   pixiv: ["artist", "general"],
+  x: ["artist", "general"],
 };
 
 export function groupKinds(source: Source) {

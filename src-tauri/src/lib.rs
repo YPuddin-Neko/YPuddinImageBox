@@ -12,6 +12,7 @@ pub mod settings;
 pub mod sources;
 pub mod storage;
 mod thumbs;
+mod x_bridge;
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -334,6 +335,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         // 软件已经在运行（例如开机启动后又手动打开）时，只把已有的窗口叫出来，不再开第二份。必须最先注册。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)))
+        .plugin(x_bridge::init())
         .plugin(tauri_plugin_window_state::Builder::new().with_state_flags(WINDOW_STATE).build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -430,6 +432,8 @@ pub fn run() {
             commands::account_remove,
             commands::pixiv_login_open,
             commands::pixiv_login_check,
+            commands::x_capture_open,
+            commands::x_capture_close,
             commands::account_key_storage,
             commands::subscriptions_list,
             commands::saved_searches_list,

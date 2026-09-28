@@ -107,6 +107,7 @@ impl AccountNames {
             Source::Gelbooru => self.gelbooru.as_ref(),
             Source::Pixiv => self.pixiv.as_ref(),
             Source::Yandere => None,
+            Source::X => None,
         }
     }
 
@@ -116,6 +117,7 @@ impl AccountNames {
             Source::Gelbooru => self.gelbooru.as_mut(),
             Source::Pixiv => self.pixiv.as_mut(),
             Source::Yandere => None,
+            Source::X => None,
         }
     }
 
@@ -126,6 +128,7 @@ impl AccountNames {
             Source::Pixiv => self.pixiv = account,
             // 不用登录的站点没有账号可存。
             Source::Yandere => {}
+            Source::X => {}
         }
     }
 }

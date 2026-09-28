@@ -7,6 +7,7 @@ pub mod gelbooru;
 pub mod moebooru;
 pub mod pixiv;
 pub mod timestamp;
+pub mod x;
 
 use std::sync::{PoisonError, RwLock};
 
@@ -24,10 +25,12 @@ pub enum Source {
     Gelbooru,
     Yandere,
     Pixiv,
+    X,
 }
 
 impl Source {
-    pub const ALL: [Source; 4] = [Source::Danbooru, Source::Gelbooru, Source::Yandere, Source::Pixiv];
+    pub const ALL: [Source; 5] = [Source::Danbooru, Source::Gelbooru, Source::Yandere, Source::Pixiv, Source::X];
+    pub const REMOTE: [Source; 4] = [Source::Danbooru, Source::Gelbooru, Source::Yandere, Source::Pixiv];
 
     /// 数据库、文件夹名和图片路由里用的小写名称。
     pub fn as_str(self) -> &'static str {
@@ -36,6 +39,7 @@ impl Source {
             Source::Gelbooru => "gelbooru",
             Source::Yandere => "yandere",
             Source::Pixiv => "pixiv",
+            Source::X => "x",
         }
     }
 
@@ -49,6 +53,7 @@ impl Source {
             Source::Gelbooru => "Gelbooru",
             Source::Yandere => "Yande.re",
             Source::Pixiv => "Pixiv",
+            Source::X => "X",
         }
     }
 
@@ -60,6 +65,7 @@ impl Source {
             Source::Yandere => &["yande.re"],
             // 网页和接口在 pixiv.net，图片在 i.pximg.net。
             Source::Pixiv => &["pixiv.net", "pximg.net"],
+            Source::X => &["x.com", "twitter.com", "twimg.com"],
         }
     }
 
@@ -69,6 +75,7 @@ impl Source {
             Source::Gelbooru => "https://gelbooru.com/",
             Source::Yandere => "https://yande.re/",
             Source::Pixiv => pixiv::REFERER_URL,
+            Source::X => "https://x.com/",
         }
     }
 
@@ -88,19 +95,20 @@ impl Source {
             Source::Danbooru => 200,
             Source::Gelbooru | Source::Yandere => 100,
             Source::Pixiv => pixiv::PAGE_SIZE,
+            Source::X => 40,
         }
     }
 }
 
 /// 几个站点存进数据库时写成一个字符串：按固定顺序、逗号分隔，例如 `danbooru,gelbooru`。
 pub fn join_sources(sources: &[Source]) -> String {
-    Source::ALL.iter().filter(|source| sources.contains(source)).map(|source| source.as_str()).collect::<Vec<_>>().join(",")
+    Source::REMOTE.iter().filter(|source| sources.contains(source)).map(|source| source.as_str()).collect::<Vec<_>>().join(",")
 }
 
 /// 读回 [`join_sources`] 写的字符串，按固定顺序；认不出的站点跳过。
 pub fn split_sources(value: &str) -> Vec<Source> {
     let parsed: Vec<Source> = value.split(',').filter_map(Source::parse).collect();
-    Source::ALL.into_iter().filter(|source| parsed.contains(source)).collect()
+    Source::REMOTE.into_iter().filter(|source| parsed.contains(source)).collect()
 }
 
 /// 地址属于哪个已接入站点。只认 http(s)、默认端口、不带账号信息，域名按点边界匹配。
@@ -211,6 +219,10 @@ impl Sort {
             (Source::Yandere, Sort::Resolution) => "order:mpixels",
             // Pixiv 的适配器自己认这个条件（换成 order=date），不是站点的语法。
             (Source::Pixiv, Sort::Oldest) => "order:date",
+            (Source::X, _) => {
+                let site = source.site_name();
+                return Err(AppError::InvalidInput(tr!("{site} 通过媒体采集窗口使用", "Use {site} through the media capture window")));
+            }
             (Source::Gelbooru | Source::Yandere | Source::Pixiv, _) => {
                 let site = source.site_name();
                 return Err(AppError::InvalidInput(tr!("{site} 不支持这种排序", "{site} doesn't support this sort order")));
@@ -291,6 +303,7 @@ impl Post {
                 (illust, 0) => format!("#{illust}"),
                 (illust, page) => format!("#{illust} p{}", page + 1),
             },
+            Source::X => format!("#{}", x::label_id(self.id)),
             _ => format!("#{}", self.id),
         }
     }
@@ -427,6 +440,7 @@ impl Accounts {
             Source::Gelbooru => self.gelbooru.as_ref().map(|c| c.api_key.as_str()),
             Source::Yandere => None,
             Source::Pixiv => self.pixiv.as_ref().map(|c| c.session.as_str()),
+            Source::X => None,
         }
     }
 
@@ -442,6 +456,7 @@ impl Accounts {
             Source::Yandere => {}
             // Pixiv 存的「Key」是登录后的 PHPSESSID，账号的用户 id 从里面取。
             Source::Pixiv => self.pixiv = account.and_then(|(_, session)| pixiv::Credentials::from_session(&session)),
+            Source::X => {}
         }
     }
 }
@@ -495,6 +510,7 @@ pub async fn fetch(
             Page::After(id) => moebooru::search(net, format!("{query} id:>{id} order:id").trim(), 1, limit).await,
         },
         Source::Pixiv => pixiv::search(net, accounts.pixiv.as_ref(), query, page).await,
+        Source::X => Err(AppError::InvalidInput(tr!("X 通过媒体采集窗口使用", "Use X through the media capture window"))),
     }
 }
 
@@ -505,6 +521,7 @@ pub async fn count(net: &Net, accounts: &Accounts, source: Source, query: &str) 
         Source::Gelbooru => gelbooru::count(net, query, accounts.gelbooru()?).await,
         Source::Yandere => moebooru::count(net, query).await,
         Source::Pixiv => pixiv::count(net, accounts.pixiv.as_ref(), query).await,
+        Source::X => Err(AppError::InvalidInput(tr!("X 通过媒体采集窗口使用", "Use X through the media capture window"))),
     }
 }
 
@@ -533,6 +550,7 @@ pub fn build_query(source: Source, tags: &str, ratings: &[Rating]) -> String {
                 let names: Vec<&str> = selected.iter().map(|r| r.as_str()).collect();
                 parts.push(format!("rating:{}", names.join(",")));
             }
+            Source::X => {}
         }
     }
     parts.join(" ")

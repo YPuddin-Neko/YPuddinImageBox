@@ -2,7 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 import { t, type Msg } from "./i18n";
 
-export type Source = "danbooru" | "gelbooru" | "yandere" | "pixiv";
+export type Source = "danbooru" | "gelbooru" | "yandere" | "pixiv" | "x";
 export type Rating = "general" | "sensitive" | "questionable" | "explicit";
 
 export const RATINGS: Rating[] = ["general", "sensitive", "questionable", "explicit"];
@@ -21,9 +21,11 @@ export const SOURCE_LABEL: Record<Source, string> = {
   gelbooru: "Gelbooru",
   yandere: "Yande.re",
   pixiv: "Pixiv",
+  x: "X",
 };
 
-export const SOURCES = Object.keys(SOURCE_LABEL) as Source[];
+/** 可直接请求接口的来源；X 使用单独的浏览器采集窗口。 */
+export const SOURCES: Source[] = ["danbooru", "gelbooru", "yandere", "pixiv"];
 export const SOURCE_OPTIONS = SOURCES.map((value) => ({ value, label: SOURCE_LABEL[value] }));
 
 /** 几个站点的名字：全部站点时写「全部平台」，否则按固定顺序写站点名。 */
@@ -54,6 +56,7 @@ const SITE_SORTS: Record<Source, RemoteSort[]> = {
   gelbooru: ["newest", "oldest", "score"],
   yandere: ["newest", "oldest", "score", "resolution"],
   pixiv: ["newest", "oldest"],
+  x: [],
 };
 
 /** 几个站点一起搜时能合在一起排的，和 Rust 端的 `combined::can_merge` 一致。 */
@@ -185,6 +188,7 @@ const PIXIV_PAGE_FACTOR = 1000;
  */
 export function postNumber(post: Pick<Post, "source" | "id">, { grouped = false } = {}): string {
   const pixiv = post.source === "pixiv";
+  if (post.source === "x") return `x-${post.id.toString(16).padStart(16, "0")}`;
   const id = pixiv ? Math.floor(post.id / PIXIV_PAGE_FACTOR) : post.id;
   const page = pixiv ? post.id % PIXIV_PAGE_FACTOR : 0;
   const number = grouped ? id.toLocaleString("en-US") : String(id);

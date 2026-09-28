@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/remote-schema.json",
+  "identifier": "x-capture",
+  "description": "Only the X capture window may submit filtered timeline responses.",
+  "windows": ["x-capture"],
+  "local": false,
+  "remote": {
+    "urls": [
+      "https://x.com/*",
+      "https://*.x.com/*",
+      "https://twitter.com/*",
+      "https://*.twitter.com/*"
+    ]
+  },
+  "permissions": ["x:default"]
+}

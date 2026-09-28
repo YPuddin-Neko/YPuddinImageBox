@@ -57,6 +57,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
     gelbooru: "general",
     yandere: "general",
     pixiv: "artist",
+    x: "artist",
   });
   const [sort, setSort] = useState<GroupSort>("recent");
 
@@ -108,7 +109,7 @@ function EmptyLibrary({ onNavigate, title }: { onNavigate: Navigate; title: stri
   );
 }
 
-/** 首页：Danbooru、Gelbooru、自定义导入三个文件夹，封面是各自最近下载的几张。 */
+/** 首页：各来源文件夹和自定义导入占位，封面是各自最近下载的几张。 */
 function FolderShelf({
   onOpen,
   onAll,

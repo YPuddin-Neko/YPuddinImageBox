@@ -1515,7 +1515,13 @@ mod tests {
         // 每个站点一个文件夹，没下载过的站点张数为 0。
         assert_eq!(
             folders.iter().map(|f| (f.source, f.count)).collect::<Vec<_>>(),
-            [(Source::Danbooru, 4), (Source::Gelbooru, 1), (Source::Yandere, 0), (Source::Pixiv, 0)]
+            [
+                (Source::Danbooru, 4),
+                (Source::Gelbooru, 1),
+                (Source::Yandere, 0),
+                (Source::Pixiv, 0),
+                (Source::X, 0),
+            ]
         );
         let ids: Vec<u64> = folders[0].covers.iter().map(|c| c.post_id).collect();
         assert_eq!(ids, [4, 3, 2, 1]);

@@ -2,7 +2,7 @@ import appIcon from "../assets/app-icon.png";
 import { t, type Msg } from "../lib/i18n";
 import { Icon, type IconName } from "./Icon";
 
-export type View = "discover" | "library" | "subscriptions" | "downloads" | "settings";
+export type View = "discover" | "library" | "x" | "subscriptions" | "downloads" | "settings";
 
 interface Item {
   view: View;
@@ -13,6 +13,7 @@ interface Item {
 const ITEMS: Item[] = [
   { view: "discover", label: "发现", icon: "compass" },
   { view: "library", label: "图库", icon: "library" },
+  { view: "x", label: "X 媒体采集", icon: "globe" },
   { view: "subscriptions", label: "订阅::page", icon: "bell" },
   { view: "downloads", label: "下载::page", icon: "download" },
 ];

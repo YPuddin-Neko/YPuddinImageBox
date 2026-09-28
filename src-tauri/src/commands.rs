@@ -12,7 +12,7 @@ use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
 use crate::sources::{self, combined, danbooru, gelbooru, pixiv, Page, Post, Rating, SearchPage, SearchParams, Sort, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
-use crate::{keys, net, secrets, thumbs, AppState};
+use crate::{keys, net, secrets, thumbs, x_bridge, AppState};
 
 /// 瀑布流每页条数。下载任务另按站点上限（200 / 100）分页。
 const PAGE_SIZE: u32 = 40;
@@ -25,7 +25,7 @@ fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
             let level = state.settings().accounts.danbooru.as_ref().and_then(|a| a.level.clone());
             Some(filter::danbooru_tag_limit(if signed_in { level.as_deref() } else { None }))
         }
-        Source::Gelbooru | Source::Yandere | Source::Pixiv => None,
+        Source::Gelbooru | Source::Yandere | Source::Pixiv | Source::X => None,
     }
 }
 
@@ -755,6 +755,9 @@ async fn save_account(state: &AppState, source: Source, name: String, api_key: S
         Source::Yandere => {
             return Err(AppError::InvalidInput(tr!("Yande.re 不需要账号", "Yande.re doesn't need an account")))
         }
+        Source::X => {
+            return Err(AppError::InvalidInput(tr!("X 的登录在媒体采集窗口里完成", "Sign in to X in the media capture window")))
+        }
     };
 
     let snapshot = state.settings().clone();
@@ -797,6 +800,46 @@ pub async fn account_remove(app: AppHandle, state: State<'_, AppState>, source: 
 }
 
 const PIXIV_LOGIN_WINDOW: &str = "pixiv-login";
+
+fn x_page(username: &str) -> Result<url::Url, AppError> {
+    let username = username.trim().trim_start_matches('@');
+    if username.is_empty() || username.len() > 15 || !username.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return Err(AppError::InvalidInput(tr!("请输入有效的 X 用户名", "Enter a valid X username")));
+    }
+    format!("https://x.com/{username}/media")
+        .parse()
+        .map_err(|err: url::ParseError| AppError::Internal(err.to_string()))
+}
+
+/// 打开 X 媒体采集窗口。登录状态只留在这个窗口自己的 WebView Cookie 中。
+#[tauri::command]
+pub async fn x_capture_open(app: AppHandle, username: String) -> Result<(), AppError> {
+    let url = x_page(&username)?;
+    if let Some(window) = app.get_webview_window(x_bridge::WINDOW) {
+        let _ = window.set_focus();
+        window.navigate(url).map_err(|err| AppError::Internal(err.to_string()))?;
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, x_bridge::WINDOW, WebviewUrl::External(url))
+        .title(tr!("X 媒体采集", "X media capture"))
+        .inner_size(1100.0, 760.0)
+        .initialization_script(x_bridge::INIT_SCRIPT)
+        .on_navigation(|url| {
+            url.scheme() == "https"
+                && url.host_str().and_then(Source::for_host) == Some(Source::X)
+        })
+        .build()
+        .map_err(|err| AppError::Internal(err.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn x_capture_close(app: AppHandle) -> Result<(), AppError> {
+    if let Some(window) = app.get_webview_window(x_bridge::WINDOW) {
+        window.close().map_err(|err| AppError::Internal(err.to_string()))?;
+    }
+    Ok(())
+}
 
 fn pixiv_site() -> url::Url {
     url::Url::parse(pixiv::REFERER_URL).expect("固定的地址")

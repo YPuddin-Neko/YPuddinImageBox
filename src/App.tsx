@@ -10,6 +10,7 @@ import { DownloadsProvider } from "./features/downloads/DownloadsProvider";
 import { Library } from "./features/library/Library";
 import { Settings, type SettingsSection } from "./features/settings/Settings";
 import { Subscriptions } from "./features/subscriptions/Subscriptions";
+import { XCapture } from "./features/x/XCapture";
 import { dialogOpen, hasMod } from "./lib/hotkeys";
 import { useLanguage } from "./lib/i18n";
 import { VIEW_VARIANTS } from "./lib/motion";
@@ -47,7 +48,7 @@ function Shell() {
     const searchInput = () => document.querySelector<HTMLInputElement>('.view[aria-hidden="false"] .search-input');
     const onKey = (event: KeyboardEvent) => {
       if (!hasMod(event) || event.shiftKey || event.isComposing || dialogOpen()) return;
-      const pages: Record<string, View> = { "1": "discover", "2": "library", "3": "subscriptions", "4": "downloads", ",": "settings" };
+      const pages: Record<string, View> = { "1": "discover", "2": "library", "3": "x", "4": "subscriptions", "5": "downloads", ",": "settings" };
       const page = pages[event.key];
       if (page) {
         event.preventDefault();
@@ -81,6 +82,9 @@ function Shell() {
         </ViewPane>
         <ViewPane active={view === "library"}>
           <Library active={view === "library"} onNavigate={navigate} />
+        </ViewPane>
+        <ViewPane active={view === "x"}>
+          <XCapture active={view === "x"} />
         </ViewPane>
         <ViewPane active={view === "subscriptions"}>
           <Subscriptions onNavigate={navigate} />
