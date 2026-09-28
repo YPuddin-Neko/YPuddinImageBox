@@ -10,7 +10,7 @@ use crate::library::{
 };
 use crate::settings::{KeyStorage, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
-use crate::sources::{self, combined, danbooru, gelbooru, Page, Post, Rating, Scope, SearchPage, SearchParams, Sort, Source};
+use crate::sources::{self, combined, danbooru, gelbooru, Page, Post, Rating, SearchPage, SearchParams, Sort, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
 use crate::{keys, net, secrets, thumbs, AppState};
 
@@ -445,11 +445,11 @@ pub async fn saved_searches_list(state: State<'_, AppState>) -> Result<Vec<Saved
     Ok(state.library.saved_searches().await?)
 }
 
-/// 收藏的条件：和搜索一样，来源还可以是 `all`（聚合搜索）。
+/// 收藏的条件：和搜索一样，只是可以有几个站点（聚合搜索）。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedSearchParams {
-    pub source: Scope,
+    pub sources: Vec<Source>,
     #[serde(default)]
     pub tags: String,
     #[serde(default)]
@@ -464,10 +464,13 @@ pub async fn saved_search_add(
     state: State<'_, AppState>,
     params: SavedSearchParams,
 ) -> Result<Vec<SavedSearch>, AppError> {
-    for source in params.source.sources() {
-        params.sort.term(source)?;
+    if params.sources.is_empty() {
+        return Err(AppError::InvalidInput(tr!("至少选一个平台", "Choose at least one site")));
     }
-    state.library.add_saved_search(params.source, &params.tags, &params.ratings, params.sort).await?;
+    for source in &params.sources {
+        params.sort.term(*source)?;
+    }
+    state.library.add_saved_search(&params.sources, &params.tags, &params.ratings, params.sort).await?;
     Ok(state.library.saved_searches().await?)
 }
 

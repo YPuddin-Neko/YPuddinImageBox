@@ -82,48 +82,15 @@ impl Source {
     }
 }
 
-/// 搜哪里：一个站点，或者所有站点一起搜（聚合搜索）。收藏的搜索里存成站点名或 `all`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Scope {
-    Site(Source),
-    All,
+/// 几个站点存进数据库时写成一个字符串：按固定顺序、逗号分隔，例如 `danbooru,gelbooru`。
+pub fn join_sources(sources: &[Source]) -> String {
+    Source::ALL.iter().filter(|source| sources.contains(source)).map(|source| source.as_str()).collect::<Vec<_>>().join(",")
 }
 
-impl Scope {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Scope::Site(source) => source.as_str(),
-            Scope::All => "all",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Scope> {
-        if value == "all" {
-            Some(Scope::All)
-        } else {
-            Source::parse(value).map(Scope::Site)
-        }
-    }
-
-    pub fn sources(self) -> Vec<Source> {
-        match self {
-            Scope::Site(source) => vec![source],
-            Scope::All => Source::ALL.to_vec(),
-        }
-    }
-}
-
-impl Serialize for Scope {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for Scope {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = String::deserialize(deserializer)?;
-        Scope::parse(&value).ok_or_else(|| serde::de::Error::custom(format!("unknown source: {value}")))
-    }
+/// 读回 [`join_sources`] 写的字符串，按固定顺序；认不出的站点跳过。
+pub fn split_sources(value: &str) -> Vec<Source> {
+    let parsed: Vec<Source> = value.split(',').filter_map(Source::parse).collect();
+    Source::ALL.into_iter().filter(|source| parsed.contains(source)).collect()
 }
 
 /// 地址属于哪个已接入站点。只认 http(s)、默认端口、不带账号信息，域名按点边界匹配。
@@ -539,6 +506,15 @@ pub(crate) fn non_empty(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sources_join_in_fixed_order() {
+        assert_eq!(join_sources(&[Source::Gelbooru, Source::Danbooru, Source::Gelbooru]), "danbooru,gelbooru");
+        assert_eq!(join_sources(&[Source::Gelbooru]), "gelbooru");
+        assert_eq!(split_sources("gelbooru,yandere,danbooru"), [Source::Danbooru, Source::Gelbooru]);
+        assert_eq!(split_sources("danbooru"), [Source::Danbooru]);
+        assert!(split_sources("all").is_empty());
+    }
 
     #[test]
     fn query_adds_rating_per_site_syntax() {

@@ -12,7 +12,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
 use crate::i18n::{text, tr};
-use crate::sources::{timestamp, Post, PostTags, Rating, Scope, Sort, Source};
+use crate::sources::{join_sources, split_sources, timestamp, Post, PostTags, Rating, Sort, Source};
 
 const DB_FILE: &str = "library.sqlite3";
 /// 一次列表查询最多返回多少张。
@@ -45,8 +45,8 @@ pub struct LocalPost {
 #[serde(rename_all = "camelCase")]
 pub struct SavedSearch {
     pub id: i64,
-    /// 一个站点，或者 `all`（聚合搜索）。
-    pub source: Scope,
+    /// 搜哪些站点，按固定顺序；有两个以上时是聚合搜索。
+    pub sources: Vec<Source>,
     pub tags: String,
     /// 为空表示全选。
     pub ratings: Vec<Rating>,
@@ -932,9 +932,10 @@ impl Library {
         Ok(rows
             .into_iter()
             .filter_map(|(id, source, tags, ratings, sort, created_at)| {
-                Some(SavedSearch {
+                let sources = split_sources(&source);
+                (!sources.is_empty()).then(|| SavedSearch {
                     id,
-                    source: Scope::parse(&source)?,
+                    sources,
                     tags,
                     ratings: ratings.split(',').filter_map(Rating::parse).collect(),
                     sort: Sort::parse(&sort).unwrap_or_default(),
@@ -945,12 +946,18 @@ impl Library {
     }
 
     /// 收藏一个搜索条件；同样的条件已经收藏过时什么也不做。
-    pub async fn add_saved_search(&self, source: Scope, tags: &str, ratings: &[Rating], sort: Sort) -> Result<(), sqlx::Error> {
+    pub async fn add_saved_search(
+        &self,
+        sources: &[Source],
+        tags: &str,
+        ratings: &[Rating],
+        sort: Sort,
+    ) -> Result<(), sqlx::Error> {
         let (tags, ratings) = normalize_search(tags, ratings);
         sqlx::query(
             "INSERT OR IGNORE INTO saved_searches (source, tags, ratings, sort, created_at) VALUES (?, ?, ?, ?, ?)",
         )
-        .bind(source.as_str())
+        .bind(join_sources(sources))
         .bind(tags)
         .bind(ratings)
         .bind(sort.as_str())
@@ -1531,20 +1538,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn saved_all_sites_becomes_site_list() {
+        let lib = Library::in_memory().await;
+        // 上一版把「全部平台」存成 all；其中一条和已有的收藏重复。
+        for (source, tags) in [("all", "sky"), ("all", "cloud"), ("danbooru,gelbooru", "cloud")] {
+            sqlx::query("INSERT INTO saved_searches (source, tags, ratings, sort, created_at) VALUES (?, ?, '', 'newest', 0)")
+                .bind(source)
+                .bind(tags)
+                .execute(&lib.pool)
+                .await
+                .unwrap();
+        }
+        sqlx::raw_sql(include_str!("../migrations/0007_saved_search_sources.sql")).execute(&lib.pool).await.unwrap();
+        let saved = lib.saved_searches().await.unwrap();
+        assert_eq!(saved.len(), 2);
+        assert!(saved.iter().all(|item| item.sources == [Source::Danbooru, Source::Gelbooru]));
+    }
+
+    #[tokio::test]
     async fn saved_searches_dedupe_and_remove() {
         let lib = Library::in_memory().await;
-        let danbooru = Scope::Site(Source::Danbooru);
-        lib.add_saved_search(danbooru, " sky  cloud ", &[Rating::Sensitive, Rating::General], Sort::Score).await.unwrap();
+        let (d, g) = (Source::Danbooru, Source::Gelbooru);
+        lib.add_saved_search(&[d], " sky  cloud ", &[Rating::Sensitive, Rating::General], Sort::Score).await.unwrap();
         // 空格、分级顺序不同的同一个条件只存一份；全选和都不选也算同一个。
-        lib.add_saved_search(danbooru, "sky cloud", &[Rating::General, Rating::Sensitive], Sort::Score).await.unwrap();
-        lib.add_saved_search(Scope::Site(Source::Gelbooru), "", &Rating::ALL, Sort::Newest).await.unwrap();
-        lib.add_saved_search(Scope::Site(Source::Gelbooru), "", &[], Sort::Newest).await.unwrap();
-        // 聚合搜索和单个站点的同一个条件分开存。
-        lib.add_saved_search(Scope::All, "sky cloud", &[Rating::General, Rating::Sensitive], Sort::Score).await.unwrap();
+        lib.add_saved_search(&[d], "sky cloud", &[Rating::General, Rating::Sensitive], Sort::Score).await.unwrap();
+        lib.add_saved_search(&[g], "", &Rating::ALL, Sort::Newest).await.unwrap();
+        lib.add_saved_search(&[g], "", &[], Sort::Newest).await.unwrap();
+        // 几个站点一起搜的和单个站点的分开存；站点的先后不影响。
+        lib.add_saved_search(&[g, d], "sky cloud", &[Rating::General, Rating::Sensitive], Sort::Score).await.unwrap();
+        lib.add_saved_search(&[d, g], "sky cloud", &[Rating::General, Rating::Sensitive], Sort::Score).await.unwrap();
         let saved = lib.saved_searches().await.unwrap();
         assert_eq!(saved.len(), 3);
-        assert_eq!(saved[0].source, Scope::All);
-        assert_eq!((saved[2].source, saved[2].tags.as_str(), saved[2].sort), (danbooru, "sky cloud", Sort::Score));
+        assert_eq!(saved[0].sources, [d, g]);
+        assert_eq!((saved[2].sources.as_slice(), saved[2].tags.as_str(), saved[2].sort), (&[d][..], "sky cloud", Sort::Score));
         assert_eq!(saved[2].ratings, vec![Rating::General, Rating::Sensitive]);
         assert!(saved[1].ratings.is_empty());
         lib.remove_saved_search(saved[1].id).await.unwrap();

@@ -23,7 +23,6 @@ import {
   RATINGS,
   remoteSortLabel,
   remoteSorts,
-  scopeOptions,
   searchRemote,
   searchSites,
   SOURCE_LABEL,
@@ -32,7 +31,6 @@ import {
   type Post,
   type Rating,
   type RemoteSort,
-  type Scope,
   type SearchParams,
   type SiteStatus,
   type Source,
@@ -53,9 +51,9 @@ import { useDownloads } from "../downloads/context";
 import { Inspector } from "./Inspector";
 
 interface Criteria {
-  /** 一个站点，或者 all（聚合搜索）。 */
-  scope: Scope;
-  /** 聚合搜索时搜哪些平台（平台筛选）；只搜一个站点时不用。 */
+  /** 来源里勾选的站点；两个以上时是聚合搜索。 */
+  sources: Source[];
+  /** 聚合搜索时平台筛选留下的站点（来源里勾选的一部分）；只搜一个站点时不用。 */
   platforms: Source[];
   tags: string;
   ratings: Rating[];
@@ -108,10 +106,16 @@ interface SubscribeDraft {
   error: string | null;
 }
 
-const DEFAULT_CRITERIA: Criteria = { scope: "danbooru", platforms: SOURCES, tags: "", ratings: ["general"], sort: "newest" };
+const DEFAULT_CRITERIA: Criteria = {
+  sources: ["danbooru"],
+  platforms: ["danbooru"],
+  tags: "",
+  ratings: ["general"],
+  sort: "newest",
+};
 /** 与 Rust 端每页条数一致，用于卡片入场错开。 */
 const PAGE_SIZE = 40;
-/** 分级、平台是复选，连着勾几项时等停下来再搜，免得每勾一项搜一次。 */
+/** 来源、分级、平台都是复选，连着勾几项时等停下来再搜，免得每勾一项搜一次。 */
 const FILTER_DEBOUNCE_MS = 300;
 
 function countText(count: Count): string {
@@ -129,15 +133,22 @@ const siteParams = (criteria: Criteria, source: Source): SearchParams => ({
   sort: criteria.sort,
 });
 
-/** 实际搜的范围：聚合搜索只勾了一个平台时，和只搜这个站点一样。收藏按这个存，也按这个比较。 */
-const searchScope = (criteria: Criteria): Scope =>
-  criteria.scope === "all" && criteria.platforms.length === 1 ? criteria.platforms[0] : criteria.scope;
+/** 来源勾选了两个以上站点：聚合搜索，卡片上标出每张图来自哪个站点。 */
+const isCombined = (criteria: Criteria) => criteria.sources.length > 1;
+
+/** 实际要搜的站点：来源勾选了几个时，平台筛选再从里面挑。收藏按这个存，也按这个比较。 */
+function searchSources(criteria: Criteria): Source[] {
+  if (!isCombined(criteria)) return criteria.sources;
+  const picked = criteria.platforms.filter((source) => criteria.sources.includes(source));
+  return picked.length > 0 ? picked : criteria.sources;
+}
 
 /** 搜一页：只搜一个站点和聚合搜索的结果整理成同一种样子，`owned` 是这一页里已在图库中的帖子。 */
 async function searchPage(criteria: Criteria, cursor: string | null): Promise<{ results: Results; owned: string[] }> {
-  if (criteria.scope === "all") {
+  const sources = searchSources(criteria);
+  if (isCombined(criteria)) {
     const page = await searchSites({
-      sources: criteria.platforms,
+      sources,
       tags: criteria.tags,
       ratings: criteria.ratings,
       sort: criteria.sort,
@@ -148,7 +159,7 @@ async function searchPage(criteria: Criteria, cursor: string | null): Promise<{ 
       owned: page.owned.map((post) => postKey({ source: post.source, id: post.postId })),
     };
   }
-  const source = criteria.scope;
+  const source = sources[0];
   const page = await searchRemote({ ...siteParams(criteria, source), cursor });
   const site: SiteStatus = { source, query: page.query, localFilter: page.localFilter, error: null, retry: false };
   return {
@@ -238,7 +249,7 @@ function SiteCondition({ site, named }: { site: SiteCriteria; named: boolean }) 
 
 export function Discover({ active, onNavigate }: { active: boolean; onNavigate: Navigate }) {
   const { addPosts, addQuery } = useDownloads();
-  const [scope, setScope] = useState<Scope>(DEFAULT_CRITERIA.scope);
+  const [sources, setSources] = useState<Source[]>(DEFAULT_CRITERIA.sources);
   const [platforms, setPlatforms] = useState<Source[]>(DEFAULT_CRITERIA.platforms);
   const [tags, setTags] = useState(DEFAULT_CRITERIA.tags);
   const [ratings, setRatings] = useState<Rating[]>(DEFAULT_CRITERIA.ratings);
@@ -358,7 +369,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   }, [loadMore, active]);
 
   /** 搜索框和筛选行里现在的条件（输入框里的字还没提交也算）。 */
-  const formCriteria = (): Criteria => ({ scope, platforms, tags, ratings, sort });
+  const formCriteria = (): Criteria => ({ sources, platforms, tags, ratings, sort });
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -385,19 +396,22 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     void run({ ...formCriteria(), sort: next }, null);
   };
 
-  // 换站点时，新站点不支持当前排序就回到默认顺序；聚合搜索只能用各站点都支持的排序。
-  const changeScope = (next: Scope) => {
+  // 换来源时平台筛选回到全部；新选的站点不支持当前排序就回到默认顺序（几个站点一起搜时只能用都支持的排序）。
+  const changeSources = (next: Source[]) => {
     const nextSort = remoteSorts(next).some((option) => option.value === sort) ? sort : "newest";
-    setScope(next);
+    setSources(next);
+    setPlatforms(next);
     setSort(nextSort);
-    void run({ ...formCriteria(), scope: next, sort: nextSort }, null);
+    runLater({ ...formCriteria(), sources: next, platforms: next, sort: nextSort });
   };
 
   const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
+  /** 来源勾选了两个以上站点（按搜索框里现在的勾选，不等搜索结果）。 */
+  const combined = sources.length > 1;
   const firstLoad = loading && !results;
   /** 当前结果对应的收藏（按已经搜过的条件算，不看输入框里还没提交的字）。 */
   const currentSaved =
-    saved.find((item) => sameSearch(item, { ...committed.current, scope: searchScope(committed.current) })) ?? null;
+    saved.find((item) => sameSearch(item, { ...committed.current, sources: searchSources(committed.current) })) ?? null;
   const localFilter = results?.sites.find((site) => site.localFilter)?.localFilter ?? "";
 
   const toggleSaved = async () => {
@@ -409,7 +423,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         const criteria = committed.current;
         setSaved(
           await savedSearchAdd({
-            source: searchScope(criteria),
+            sources: searchSources(criteria),
             tags: criteria.tags,
             ratings: criteria.ratings,
             sort: criteria.sort,
@@ -424,13 +438,13 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   const applySaved = (item: SavedSearch) => {
     const criteria: Criteria = {
-      scope: item.source,
-      platforms: SOURCES,
+      sources: item.sources,
+      platforms: item.sources,
       tags: item.tags,
       ratings: item.ratings.length ? item.ratings : RATINGS,
       sort: item.sort,
     };
-    setScope(criteria.scope);
+    setSources(criteria.sources);
     setPlatforms(criteria.platforms);
     setTags(criteria.tags);
     setRatings(criteria.ratings);
@@ -497,7 +511,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     try {
       for (const site of bulk.sites) await addQuery(siteParams(bulk.criteria, site.source), limit);
       const title =
-        bulk.criteria.scope === "all"
+        isCombined(bulk.criteria)
           ? `${bulk.criteria.tags.trim() || t("全部帖子")} · ${sitesLabel(bulk.sites.map((site) => site.source))}`
           : bulk.sites[0]?.query || t("全部帖子");
       setToast({ message: t("已加入下载队列：{query}", { query: title }), link: "downloads" });
@@ -541,7 +555,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         title = subscriptionTitle(sub);
       }
       setSubscribing(null);
-      const label = draft.criteria.scope === "all" ? `${title} · ${sitesLabel(done)}` : title;
+      const label = isCombined(draft.criteria) ? `${title} · ${sitesLabel(done)}` : title;
       setToast({ message: t("已订阅「{title}」", { title: label }), link: "subscriptions" });
     } catch (err) {
       // 已经订阅好的平台留着，再点「订阅」时只订剩下的。
@@ -633,13 +647,15 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
       <div className="center" data-picking={picked.size > 0 || undefined}>
         <div className="topbar" data-tauri-drag-region>
           <form className="search" onSubmit={submit} role="search">
-            <Select
+            <MultiSelect
               id="search-source"
               className="search-source"
               name={t("来源")}
-              value={scope}
-              options={scopeOptions()}
-              onChange={changeScope}
+              allLabel={t("全部平台")}
+              values={sources}
+              options={SOURCE_OPTIONS}
+              sizers={[t("全部平台"), ...SOURCE_OPTIONS.map((option) => option.label)]}
+              onChange={changeSources}
             />
             <input
               id="search-tags"
@@ -692,11 +708,11 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             name={t("平台")}
             label={t("平台")}
             allLabel={t("全部")}
-            values={scope === "all" ? platforms : [scope]}
-            options={SOURCE_OPTIONS}
+            values={combined ? platforms : sources}
+            options={combined ? SOURCE_OPTIONS.filter((option) => sources.includes(option.value)) : SOURCE_OPTIONS}
             onChange={changePlatforms}
-            disabled={scope !== "all"}
-            title={scope === "all" ? undefined : t("选择「全部平台」聚合搜索时才能按平台筛选")}
+            disabled={!combined}
+            title={combined ? undefined : t("来源勾选两个以上平台（聚合搜索）时才能按平台筛选")}
           />
           <MultiSelect
             className="filter-select"
@@ -712,7 +728,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             name={t("排序")}
             label={t("排序")}
             value={sort}
-            options={remoteSorts(scope)}
+            options={remoteSorts(sources)}
             onChange={changeSort}
           />
           {results && (
@@ -868,12 +884,12 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               <dt>{t("条件")}</dt>
               <dd>
                 {bulk.sites.map((site) => (
-                  <SiteCondition key={site.source} site={site} named={bulk.criteria.scope === "all"} />
+                  <SiteCondition key={site.source} site={site} named={isCombined(bulk.criteria)} />
                 ))}
               </dd>
               <dt>{t("数量")}</dt>
               <dd>
-                {bulk.criteria.scope === "all"
+                {isCombined(bulk.criteria)
                   ? bulk.sites.map((site) => (
                       <div key={site.source} className="dialog-site">
                         <SiteName source={site.source} />
@@ -944,7 +960,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               <dt>{t("条件")}</dt>
               <dd>
                 {subscribing.sites.map((site) => (
-                  <SiteCondition key={site.source} site={site} named={subscribing.criteria.scope === "all"} />
+                  <SiteCondition key={site.source} site={site} named={isCombined(subscribing.criteria)} />
                 ))}
               </dd>
               <dt>

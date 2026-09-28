@@ -312,8 +312,16 @@ export function MultiSelect<T extends string | number>({
   options,
   onChange,
   allLabel,
+  sizers,
   ...common
-}: CommonProps & { values: T[]; options: SelectOption<T>[]; onChange: (values: T[]) => void; allLabel: string }) {
+}: CommonProps & {
+  values: T[];
+  options: SelectOption<T>[];
+  onChange: (values: T[]) => void;
+  allLabel: string;
+  /** 按钮宽度按这些文字里最宽的算，勾选变化时不跳动。 */
+  sizers?: string[];
+}) {
   const chosen = options.filter((option) => values.includes(option.value)).map((option) => option.value);
   const all = chosen.length === 0 || chosen.length === options.length;
   const effective = all ? options.map((option) => option.value) : chosen;
@@ -344,6 +352,7 @@ export function MultiSelect<T extends string | number>({
       {...common}
       multiple
       text={text}
+      sizers={sizers}
       items={[
         { key: ALL_KEY, label: allLabel, selected: all, divider: true },
         ...options.map((option) => {
