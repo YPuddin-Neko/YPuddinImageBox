@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
+use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::error::AppError;
@@ -12,6 +13,7 @@ use crate::library::{
 };
 use crate::settings::{parse_proxy_url, KeyStorage, ProxyMode, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
+use crate::sources::x::Capture;
 use crate::sources::{
     self, combined, danbooru, e621, gelbooru, kemono, moebooru, pixiv, rule34, Page, Post, Rating, SearchPage, SearchParams, Sort, Source,
 };
@@ -1127,7 +1129,13 @@ pub async fn x_capture_open(
     username: String,
     target: Option<XTarget>,
 ) -> Result<PopupOpen, AppError> {
-    let url = x_page(&username, target.unwrap_or_default())?;
+    let target = target.unwrap_or_default();
+    let url = x_page(&username, target)?;
+    x_bridge::set_capture(match target {
+        XTarget::Media => Capture::Media(username.trim().trim_start_matches('@').to_string()),
+        XTarget::Likes => Capture::Likes,
+        XTarget::Bookmarks => Capture::Bookmarks,
+    });
     if let Some(window) = app.get_webview_window(x_bridge::WINDOW) {
         let _ = window.set_focus();
         window.navigate(url).map_err(|err| AppError::Internal(err.to_string()))?;
@@ -1138,7 +1146,15 @@ pub async fn x_capture_open(
             .title(tr!("X 媒体采集", "X media capture"))
             .inner_size(1100.0, 760.0)
             .initialization_script(x_bridge::INIT_SCRIPT)
-            .on_navigation(|url| url.scheme() == "https" && url.host_str().and_then(Source::for_host) == Some(Source::X))
+            .on_navigation(x_bridge::allows_navigation)
+            // 用 Google、Apple 登录时弹出的登录窗口；不放行的话点了按钮没有反应。
+            .on_new_window(|url, _| {
+                if x_bridge::allows_popup(&url) {
+                    NewWindowResponse::Allow
+                } else {
+                    NewWindowResponse::Deny
+                }
+            })
     })
 }
 
