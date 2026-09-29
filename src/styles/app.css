@@ -418,9 +418,17 @@ button:disabled {
   scrollbar-color: var(--line-2) transparent;
 }
 
+.settings-page {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
 .settings-version {
   width: min(100%, 980px);
-  margin: 20px auto 0;
+  margin: auto auto 0;
+  padding-top: 28px;
+  padding-bottom: 4px;
   color: var(--fg-3);
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;

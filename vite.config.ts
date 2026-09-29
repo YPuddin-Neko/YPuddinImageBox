@@ -1,12 +1,24 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-expect-error type error without @types/node package
+import { execFileSync } from "node:child_process";
+// @ts-expect-error type error without @types/node package
 import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
+const buildVersion = (() => {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim() || "dev";
+  } catch {
+    return "dev";
+  }
+})();
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [react()],
+  define: {
+    __BUILD_VERSION__: JSON.stringify(buildVersion),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

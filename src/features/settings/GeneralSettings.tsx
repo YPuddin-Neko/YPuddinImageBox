@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import packageInfo from "../../../package.json";
 
 import { Icon } from "../../components/Icon";
 import { Select } from "../../components/Select";
@@ -199,7 +198,7 @@ export function GeneralSettings() {
       )}
 
       <footer className="settings-version">
-        {t("构建版本")} v{packageInfo.version}
+        {t("构建版本")} {__BUILD_VERSION__}
       </footer>
 
       <Toast message={notice} />
