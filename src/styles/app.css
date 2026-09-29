@@ -1203,7 +1203,7 @@ code {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(66, 71, 84, 0.78);
+  background: var(--viewer-scrim);
   -webkit-backdrop-filter: blur(22px) saturate(1.2);
   backdrop-filter: blur(22px) saturate(1.2);
 }
@@ -1293,7 +1293,6 @@ code {
   display: grid;
   place-items: center;
   overflow: hidden;
-  background: #080a10;
 }
 
 .image-viewer-canvas {
