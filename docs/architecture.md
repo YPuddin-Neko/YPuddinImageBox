@@ -190,6 +190,12 @@
 - 实测（不登录）：「初音ミク」全年龄搜到约 62 万个作品，每页 60 个；画师作品按新到旧；作品链接只取到这一个；一个 5 页的作品取到 5 张原图；订阅从第 6 新的作品开始找到了比它新的作品。`cargo run --example download_probe -- pixiv`：选中的 3 个作品全部存上；按条件下载 5 个，前面已有的 3 个跳过（「已在图库中」）、2 个存上；订阅检查找到比起点新的作品。多页作品每页一个文件，路径形如 `Pixiv/画师名/150229598_p1.jpg`。
 - 已完成：X 用户媒体采集。`sources/x.rs` 解析 X 页面中 `UserMedia`、`UserTweets`、`TweetDetail` 和 `TweetResultByRestId` 的 GraphQL 响应，只收集 `photo` 媒体；图片原图、预览图和缩略图都由 `pbs.twimg.com` 的 `format` / `name` 参数生成。每张媒体图转成一条 X 图库记录，用户名写入画师 tag，hashtag 写入一般 tag。采集窗口使用单独的 Tauri 内置插件权限，只允许 X 域名提交过滤后的响应，主窗口的图库、设置和文件命令不会开放给 X 页面。下载路径为 `X/用户名/媒体记录 id.扩展名`，视频暂不下载。
 - X 通过浏览器桥接而不是 Rust 直接请求 GraphQL：查询 ID 和参数由 X 网页自己发出，减少网页接口变动带来的维护；X 的页面结构、登录验证和限流变化仍可能要求更新采集器。`TwitterMediaHarvest` 的注入和响应解析思路作为参考，未直接复制其 MPL-2.0 源文件。
+- 已完成：查看器开合动画。打开时占位图（卡片里已经加载好的缩略图，按帖子尺寸适应窗口）从卡片的位置放大到窗口中央：整层图片用 `transform-origin: 0 0` 的 translate + scale，再用 `clip-path: inset(... round r)` 按卡片的比例居中裁切、加上卡片的圆角，两者都交给 WAAPI 在合成线程上跑；大图加载完后淡入盖住占位图。关闭时从当前的位置和缩放（包括放大、拖动后的）缩回原卡片；卡片露出不到一半（已滚出视口）或系统打开了减弱动态效果时只做淡入淡出。遮罩单独一层（毛玻璃 + 主题变量 `--viewer-scrim`），它的透明度动画不影响上面的图片。查看器打开时页面的快捷键停用（`dialogOpen` 把查看器也算上）。
+- 已完成：加载提示（`LoadingPill`）。发现页、图库和分组页加载时，所在区域底部正中弹出带转圈的提示，加载完退回；180 ms 内加载完的不显示，出现后至少停留 450 ms，不会一闪而过。底部有多选条或提示时停在它们上方。
+- 修复：Kemono 缩略图原来直接用原图地址，会 302 到 n1–n4 数据节点，几乎各地都连不上；改用 `img.kemono.cr/thumbnail/data`。作者的帖子列表接口直接返回数组（全站搜索是带 posts 的对象），两种都认。编号改为「服务序号 × 10¹³ + 帖子 id × 1000 + 第几张」，不同服务的同号帖子不再互相覆盖（最大值仍在 JS 的安全整数范围内），文件名是 `帖子id_p第几张`。发布时间不带时区，统一写成 UTC。Kemono 接口单独一条每秒 1 次的通道。
+- 已完成：收藏页。前端按账号拼条件（`src/lib/favorites.ts`），走和发现页一样的 `search_remote`：Danbooru `ordfav:用户名`、Gelbooru `fav:User ID`、Yande.re `vote:3:用户名 order:vote` 是站点自己的写法；e621 的 `favorites:` 换成 `/favorites.json`（按收藏时间，不带 user_id 就是自己的），Pixiv 的 `bookmarks:` / `bookmarks:private` 换成 `/ajax/user/{自己的 id}/illusts/bookmarks`（每页 48，跳过 isMasked），Kemono 的 `favorites:` 换成 `/api/v1/account/favorites?type=post`（一次返回全部，按 `faved_seq` 排序后每页 50）。这几个伪条件和 `ordfav:` 一样算作自定义排序，只按页码翻、不能订阅。Kemono 收藏的作者用 `type=artist`，点开按 `creator:服务/作者ID` 搜。X 的喜欢、书签由采集窗口放行 `Likes`、`Bookmarks` 两种时间线，事件里带上页面种类，采集页只收媒体、收藏页只收喜欢和书签。
+- 账号：Kemono 登录和 Pixiv 共用一套登录窗口（`LoginSite`），登录后读 `session` Cookie，用 `/api/v1/account` 验证并取用户名；验证不通过的 Cookie 记下来，不反复去验证。Yande.re 只存用户名（`find_user` 在 `/user.json?name=` 的模糊结果里挑同名的），没有 Key，启动时不读钥匙串。顺带修复：没设代理时打开登录窗口，也会提示「未能使用当前代理，已回退直连」。
+- 实测：Yande.re 用户 Arsy 的收藏 5349 张，按收藏先后翻两页不重复；Kemono「G4ku」一页 50 个帖子拆成 297 张图，作者 fanbox/237082 一页 203 张，缩略图按界面加载图片的方式取到。e621、Pixiv、Kemono 的收藏和 X 的喜欢、书签需要登录，只用模拟数据检查了界面。
 - 接下来：Windows 实机验证（WebView2、托盘、安装包），然后 M3（安装包和自动更新）；暂不做代码签名，训练集导出另行安排。
 
 ## 参考
