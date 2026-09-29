@@ -670,6 +670,8 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 // Pixiv 还能看画师的全部作品；几个站点一起搜时 user: 对别的站点另有意思，不提示。
                 sources.length === 1 && sources[0] === "pixiv"
                   ? t("输入 tag、user:画师 ID，或粘贴画师、作品链接")
+                  : sources.length === 1 && sources[0] === "kemono"
+                    ? t("输入关键词，或 creator:服务/作者 ID，例如 creator:patreon/123456")
                   : t("输入 tag，空格分隔，例如 scenery sky")
               }
               value={tags}

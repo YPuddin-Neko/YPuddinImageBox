@@ -46,6 +46,22 @@ const SITES: Partial<Record<Source, SiteText>> = {
     helpUrl: "https://gelbooru.com/index.php?page=account&s=options",
     helpLink: "打开 Gelbooru 设置页",
   },
+  e621: {
+    nameLabel: "用户名",
+    namePlaceholder: "e621 用户名",
+    description: "不登录也能搜索和下载公开图片。填写账号和 API Key 后，接口会使用登录身份访问。",
+    help: "登录 e621 后，在「Account」页面创建 API Key。",
+    helpUrl: "https://e621.net/account",
+    helpLink: "打开 e621 账号页",
+  },
+  rule34: {
+    nameLabel: "User ID",
+    namePlaceholder: "数字 ID",
+    description: "Rule34.xxx 的接口必须填写 User ID 和 API Key 才能搜索。",
+    help: "登录 Rule34.xxx 后，在账号设置页生成 API Access Credentials。",
+    helpUrl: "https://rule34.xxx/index.php?page=account&s=options",
+    helpLink: "打开 Rule34.xxx 设置页",
+  },
 };
 
 const keychain = () => (isMac ? t("钥匙串") : t("Windows 凭据管理器"));

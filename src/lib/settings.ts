@@ -5,7 +5,7 @@ import type { Source } from "./ipc";
 
 export interface AccountView {
   source: Source;
-  /** 用户名（Gelbooru 是 User ID，Pixiv 是账号昵称）；未登录时为 null。 */
+  /** 用户名（Gelbooru/Rule34.xxx 是 User ID，Pixiv 是账号昵称）；未登录时为 null。 */
   name: string | null;
   level: string | null;
   /** 设置里记着账号，但钥匙串里找不到 API Key。 */

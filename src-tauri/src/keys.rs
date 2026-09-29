@@ -126,6 +126,8 @@ mod tests {
             accounts: AccountNames {
                 danbooru: Some(SavedAccount { name: "sora".into(), level: None, sealed_key: None }),
                 gelbooru: Some(SavedAccount { name: "42".into(), level: None, sealed_key: None }),
+                e621: None,
+                rule34: None,
                 pixiv: None,
             },
             ..Settings::default()

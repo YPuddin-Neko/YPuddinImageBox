@@ -123,6 +123,9 @@ const GROUP_SORTS: { value: GroupSort; label: Msg }[] = [
 const SOURCE_GROUP_KINDS: Record<Source, GroupKind[]> = {
   danbooru: ["artist", "copyright", "character", "general"],
   gelbooru: ["general"],
+  e621: ["artist", "copyright", "character", "general"],
+  rule34: ["general"],
+  kemono: ["artist"],
   yandere: ["general"],
   pixiv: ["artist", "general"],
   x: ["artist", "general"],

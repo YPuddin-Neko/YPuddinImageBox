@@ -95,6 +95,10 @@ pub struct AccountNames {
     pub danbooru: Option<SavedAccount>,
     #[serde(default)]
     pub gelbooru: Option<SavedAccount>,
+    #[serde(default)]
+    pub e621: Option<SavedAccount>,
+    #[serde(default)]
+    pub rule34: Option<SavedAccount>,
     /// Pixiv 的名字是账号昵称，「Key」是登录后的 PHPSESSID。
     #[serde(default)]
     pub pixiv: Option<SavedAccount>,
@@ -105,7 +109,10 @@ impl AccountNames {
         match source {
             Source::Danbooru => self.danbooru.as_ref(),
             Source::Gelbooru => self.gelbooru.as_ref(),
+            Source::E621 => self.e621.as_ref(),
+            Source::Rule34 => self.rule34.as_ref(),
             Source::Pixiv => self.pixiv.as_ref(),
+            Source::Kemono => None,
             Source::Yandere => None,
             Source::X => None,
             Source::Custom => None,
@@ -116,7 +123,10 @@ impl AccountNames {
         match source {
             Source::Danbooru => self.danbooru.as_mut(),
             Source::Gelbooru => self.gelbooru.as_mut(),
+            Source::E621 => self.e621.as_mut(),
+            Source::Rule34 => self.rule34.as_mut(),
             Source::Pixiv => self.pixiv.as_mut(),
+            Source::Kemono => None,
             Source::Yandere => None,
             Source::X => None,
             Source::Custom => None,
@@ -127,7 +137,10 @@ impl AccountNames {
         match source {
             Source::Danbooru => self.danbooru = account,
             Source::Gelbooru => self.gelbooru = account,
+            Source::E621 => self.e621 = account,
+            Source::Rule34 => self.rule34 = account,
             Source::Pixiv => self.pixiv = account,
+            Source::Kemono => {}
             // 不用登录的站点没有账号可存。
             Source::Yandere => {}
             Source::X => {}
@@ -139,7 +152,7 @@ impl AccountNames {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedAccount {
-    /// Danbooru 是用户名，Gelbooru 是 User ID。
+    /// Danbooru/e621 是用户名，Gelbooru/Rule34.xxx 是 User ID。
     pub name: String,
     #[serde(default)]
     pub level: Option<String>,
@@ -230,6 +243,8 @@ mod tests {
             accounts: AccountNames {
                 danbooru: Some(SavedAccount { name: "sora".into(), level: Some("Gold".into()), sealed_key: None }),
                 gelbooru: Some(SavedAccount { name: "42".into(), level: None, sealed_key: Some("v1.abc".into()) }),
+                e621: None,
+                rule34: None,
                 pixiv: None,
             },
             key_storage: KeyStorage::File,

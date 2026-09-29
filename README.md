@@ -4,7 +4,7 @@
 
 <h1>YPuddinImageBox</h1>
 
-一个 Danbooru / Gelbooru / Yande.re / Pixiv 图片下载与本地图库管理工具，支持从 X 用户媒体页采集图片
+一个 Danbooru / Gelbooru / e621 / Rule34.xxx / Kemono / Yande.re / Pixiv 图片下载与本地图库管理工具，支持从 X 用户媒体页采集图片
 
 [![License](https://img.shields.io/badge/License-GPLv3-007ec6)](LICENSE)
 [![构建](https://github.com/YPuddin-Neko/YPuddinImageBox/actions/workflows/build.yml/badge.svg)](https://github.com/YPuddin-Neko/YPuddinImageBox/actions/workflows/build.yml)
@@ -19,7 +19,7 @@
 
 ## 功能介绍
 
-- **搜索**：按 tag 搜索 Danbooru、Gelbooru、Yande.re 和 Pixiv（Pixiv 还能看画师的全部作品），分级可复选，可按上传时间、分数、收藏、热度、分辨率、文件大小排序；超出账号能搜的 tag 数时，多出来的条件在本地筛选。常用的搜索条件可以收藏，点一下就能重新搜。
+- **搜索**：按 tag 搜索 Danbooru、Gelbooru、e621、Rule34.xxx、Kemono、Yande.re 和 Pixiv（Pixiv 还能看画师的全部作品），分级可复选，可按上传时间、分数、收藏、热度、分辨率、文件大小排序；超出账号能搜的 tag 数时，多出来的条件在本地筛选。常用的搜索条件可以收藏，点一下就能重新搜。
 - **X 媒体采集**：输入 X 用户名，在独立的 X 窗口里登录并打开 Media 页面，软件收集页面加载到的图片后交给下载队列；图库里单独归到 X 文件夹。视频暂不加入图库。
 - **聚合搜索**：来源可以勾选几个平台一起搜，结果按所选排序合成一列，每张图右上角标出来自哪个站点，筛选行可以按平台筛选；两个站点都有的同一张图只显示一次。
 - **下载**：点选或多选下载原图，也可以按条件下载全部结果（可按当前排序只取前 N 张）。后台队列可暂停、继续、重试，下载时校验 md5，已有的图自动跳过。
@@ -47,7 +47,7 @@
 1. 打开软件，在「发现」里输入 tag 搜索，例如 `scenery sky`。Danbooru 不登录也能用。
 2. 点图片在右侧看详情，点「下载原图」；按住 ⌘（Windows 为 Ctrl）点图片可以多选，一起下载。
 3. 想要某个条件下的全部图片，点「下载全部结果」；想以后自动收新图，点「订阅」。
-4. 下载好的图在「图库」里，进度在「下载」里。Gelbooru 需要先在「设置 → 账号」里填写 User ID 和 API Key。
+4. 下载好的图在「图库」里，进度在「下载」里。Gelbooru 和 Rule34.xxx 需要先在「设置 → 账号」里填写 User ID 和 API Key；e621 可以匿名使用，也可以填写账号提高访问权限。
 5. 要下载 X 用户的图片，打开侧栏「X 媒体采集」，输入用户名并开始采集；在弹出的 X 窗口里登录后，页面加载到的图片会出现在软件里，勾选后加入下载队列。
 
 ## 使用说明
@@ -65,6 +65,16 @@
 - 不用登录，一次能搜的 tag 数不限。它的 tag 写法和 Danbooru 不同，例如风景是 `landscape`（Danbooru 是 `scenery`），所以聚合搜索时同样的 tag 在它上面可能搜不到图。
 - 分级只有三级：安全（相当于一般和敏感）、存疑、成人；只勾「一般」时也会搜到敏感的图。排序有最新上传、最早上传、分数最高和分辨率最高。
 - 帖子里的 tag 不带分类，图库里和 Gelbooru 一样只能按一般 tag 分组。
+
+### e621、Rule34.xxx
+
+- e621 使用公开的 Danbooru 风格接口，不登录也能搜索；登录信息在「设置 → 账号」里填写用户名和 API Key。e621 的 safe / questionable / explicit 会映射到软件里的分级，species、lore 等站点分类保存在元数据 tag 中。
+- Rule34.xxx 使用官方 DAPI 接口，需要在「设置 → 账号」里填写 User ID 和 API Key；没有凭据时站点接口会拒绝请求。图片 tag 按一般 tag 保存，排序支持最新、最早和分数。
+
+### Kemono
+
+- Kemono 使用官方 API v1。输入普通关键词时搜索全站帖子；按作者搜索时写 `creator:服务/作者 ID`，例如 `creator:patreon/123456`，也可以在后面加 `tag:关键词`。
+- 帖子里的图片文件和图片附件会分别出现在结果里，视频、压缩包和其他文件不会加入图片下载队列。Kemono 的作者标识会作为画师 tag 保存，图库里可以按画师分组。
 
 ### Pixiv
 
@@ -91,7 +101,7 @@ Danbooru 一次能搜的 tag 数有限（未登录 2 个，排序也占一个）
 
 ### 账号与代理
 
-- 账号在「设置 → 账号」里填写，保存前先访问一次站点验证。Danbooru 不填也能用，Gelbooru 必须填写，Yande.re 不用账号，Pixiv 不登录也能用（R-18 作品要登录，见上面的 Pixiv 一节）。
+- 账号在「设置 → 账号」里填写，保存前先访问一次站点验证。Danbooru、e621 不填也能用，Gelbooru、Rule34.xxx 必须填写，Yande.re、Kemono 不用账号，Pixiv 不登录也能用（R-18 作品要登录，见上面的 Pixiv 一节）。
 - API Key 的保存方式由用户选：系统钥匙串（macOS 钥匙串 / Windows 凭据管理器，默认），或加密后存在 `settings.json` 里（XChaCha20-Poly1305，密钥由本机设备标识和随机盐派生，文件复制到别的电脑解不开）。切换时已保存的 Key 一起搬过去。Pixiv 的登录状态和 API Key 存在同一个地方。
 - 代理在「设置 → 网络」里选：跟随系统、不使用代理或手动填写（http / https / socks5），保存后立即生效。
 

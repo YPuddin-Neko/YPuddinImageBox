@@ -11,7 +11,7 @@ use crate::library::{
 };
 use crate::settings::{parse_proxy_url, KeyStorage, ProxyMode, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
-use crate::sources::{self, combined, danbooru, gelbooru, pixiv, Page, Post, Rating, SearchPage, SearchParams, Sort, Source};
+use crate::sources::{self, combined, danbooru, e621, gelbooru, pixiv, rule34, Page, Post, Rating, SearchPage, SearchParams, Sort, Source};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
 use crate::{keys, net, secrets, thumbs, x_bridge, AppState};
 
@@ -26,7 +26,7 @@ fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
             let level = state.settings().accounts.danbooru.as_ref().and_then(|a| a.level.clone());
             Some(filter::danbooru_tag_limit(if signed_in { level.as_deref() } else { None }))
         }
-        Source::Gelbooru | Source::Yandere | Source::Pixiv | Source::X | Source::Custom => None,
+        Source::Gelbooru | Source::E621 | Source::Rule34 | Source::Kemono | Source::Yandere | Source::Pixiv | Source::X | Source::Custom => None,
     }
 }
 
@@ -793,6 +793,8 @@ fn accounts_info_of(state: &AppState) -> AccountsInfo {
         accounts: vec![
             view(Source::Danbooru, &settings.accounts.danbooru, accounts.danbooru.is_some()),
             view(Source::Gelbooru, &settings.accounts.gelbooru, accounts.gelbooru.is_some()),
+            view(Source::E621, &settings.accounts.e621, accounts.e621.is_some()),
+            view(Source::Rule34, &settings.accounts.rule34, accounts.rule34.is_some()),
             view(Source::Pixiv, &settings.accounts.pixiv, accounts.pixiv.is_some()),
         ],
         key_storage: settings.key_storage,
@@ -826,11 +828,13 @@ pub async fn account_save(
 async fn save_account(state: &AppState, source: Source, name: String, api_key: String) -> Result<AccountsInfo, AppError> {
     let name = name.trim().to_string();
     let api_key = api_key.trim().to_string();
-    if name.is_empty() && matches!(source, Source::Danbooru | Source::Gelbooru) {
+    if name.is_empty() && matches!(source, Source::Danbooru | Source::Gelbooru | Source::E621 | Source::Rule34) {
         return Err(AppError::InvalidInput(if source == Source::Danbooru {
             tr!("请填写用户名", "Enter your username")
-        } else {
+        } else if matches!(source, Source::Gelbooru | Source::Rule34) {
             tr!("请填写 User ID", "Enter your User ID")
+        } else {
+            tr!("请填写用户名", "Enter your username")
         }));
     }
     if api_key.is_empty() {
@@ -851,6 +855,16 @@ async fn save_account(state: &AppState, source: Source, name: String, api_key: S
             gelbooru::verify(&state.net, &creds).await?;
             (name, None, api_key)
         }
+        Source::E621 => {
+            let creds = e621::Credentials { username: name.clone(), api_key: api_key.clone() };
+            e621::verify(&state.net, &creds).await?;
+            (name, None, api_key)
+        }
+        Source::Rule34 => {
+            let creds = rule34::Credentials { user_id: name.clone(), api_key: api_key.clone() };
+            rule34::verify(&state.net, &creds).await?;
+            (name, None, api_key)
+        }
         Source::Pixiv => {
             let creds = pixiv::Credentials::from_session(&api_key).ok_or_else(|| {
                 AppError::InvalidInput(tr!(
@@ -863,6 +877,9 @@ async fn save_account(state: &AppState, source: Source, name: String, api_key: S
         }
         Source::Yandere => {
             return Err(AppError::InvalidInput(tr!("Yande.re 不需要账号", "Yande.re doesn't need an account")))
+        }
+        Source::Kemono => {
+            return Err(AppError::InvalidInput(tr!("Kemono 不需要账号", "Kemono doesn't need an account")))
         }
         Source::X => {
             return Err(AppError::InvalidInput(tr!("X 的登录在媒体采集窗口里完成", "Sign in to X in the media capture window")))

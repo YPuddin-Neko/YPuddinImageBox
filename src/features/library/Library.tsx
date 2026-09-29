@@ -59,6 +59,9 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
   const [kinds, setKinds] = useState<Record<Source, GroupKind>>({
     danbooru: "artist",
     gelbooru: "general",
+    e621: "artist",
+    rule34: "general",
+    kemono: "artist",
     yandere: "general",
     pixiv: "artist",
     x: "artist",

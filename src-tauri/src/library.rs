@@ -1518,6 +1518,9 @@ mod tests {
             [
                 (Source::Danbooru, 4),
                 (Source::Gelbooru, 1),
+                (Source::E621, 0),
+                (Source::Rule34, 0),
+                (Source::Kemono, 0),
                 (Source::Yandere, 0),
                 (Source::Pixiv, 0),
                 (Source::X, 0),

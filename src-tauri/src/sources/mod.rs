@@ -2,10 +2,13 @@
 
 pub mod combined;
 pub mod danbooru;
+pub mod e621;
 pub mod filter;
 pub mod gelbooru;
+pub mod kemono;
 pub mod moebooru;
 pub mod pixiv;
+pub mod rule34;
 pub mod timestamp;
 pub mod x;
 
@@ -23,6 +26,9 @@ use crate::net::Net;
 pub enum Source {
     Danbooru,
     Gelbooru,
+    E621,
+    Rule34,
+    Kemono,
     Yandere,
     Pixiv,
     X,
@@ -30,14 +36,35 @@ pub enum Source {
 }
 
 impl Source {
-    pub const ALL: [Source; 6] = [Source::Danbooru, Source::Gelbooru, Source::Yandere, Source::Pixiv, Source::X, Source::Custom];
-    pub const REMOTE: [Source; 4] = [Source::Danbooru, Source::Gelbooru, Source::Yandere, Source::Pixiv];
+    pub const ALL: [Source; 9] = [
+        Source::Danbooru,
+        Source::Gelbooru,
+        Source::E621,
+        Source::Rule34,
+        Source::Kemono,
+        Source::Yandere,
+        Source::Pixiv,
+        Source::X,
+        Source::Custom,
+    ];
+    pub const REMOTE: [Source; 7] = [
+        Source::Danbooru,
+        Source::Gelbooru,
+        Source::E621,
+        Source::Rule34,
+        Source::Kemono,
+        Source::Yandere,
+        Source::Pixiv,
+    ];
 
     /// 数据库、文件夹名和图片路由里用的小写名称。
     pub fn as_str(self) -> &'static str {
         match self {
             Source::Danbooru => "danbooru",
             Source::Gelbooru => "gelbooru",
+            Source::E621 => "e621",
+            Source::Rule34 => "rule34",
+            Source::Kemono => "kemono",
             Source::Yandere => "yandere",
             Source::Pixiv => "pixiv",
             Source::X => "x",
@@ -53,6 +80,9 @@ impl Source {
         match self {
             Source::Danbooru => "Danbooru",
             Source::Gelbooru => "Gelbooru",
+            Source::E621 => "e621",
+            Source::Rule34 => "Rule34.xxx",
+            Source::Kemono => "Kemono",
             Source::Yandere => "Yande.re",
             Source::Pixiv => "Pixiv",
             Source::X => "X",
@@ -65,6 +95,9 @@ impl Source {
         match self {
             Source::Danbooru => &["donmai.us"],
             Source::Gelbooru => &["gelbooru.com"],
+            Source::E621 => &["e621.net"],
+            Source::Rule34 => &["rule34.xxx"],
+            Source::Kemono => &["kemono.cr"],
             Source::Yandere => &["yande.re"],
             // 网页和接口在 pixiv.net，图片在 i.pximg.net。
             Source::Pixiv => &["pixiv.net", "pximg.net"],
@@ -77,6 +110,9 @@ impl Source {
         match self {
             Source::Danbooru => "https://danbooru.donmai.us/",
             Source::Gelbooru => "https://gelbooru.com/",
+            Source::E621 => "https://e621.net/",
+            Source::Rule34 => "https://rule34.xxx/",
+            Source::Kemono => "https://kemono.cr/",
             Source::Yandere => "https://yande.re/",
             Source::Pixiv => pixiv::REFERER_URL,
             Source::X => "https://x.com/",
@@ -99,6 +135,9 @@ impl Source {
         match self {
             Source::Danbooru => 200,
             Source::Gelbooru | Source::Yandere => 100,
+            Source::E621 => 320,
+            Source::Rule34 => 100,
+            Source::Kemono => 50,
             Source::Pixiv => pixiv::PAGE_SIZE,
             Source::X => 40,
             Source::Custom => 40,
@@ -218,13 +257,25 @@ impl Sort {
             (Source::Danbooru, Sort::Popular) => "order:rank",
             (Source::Danbooru, Sort::Resolution) => "order:mpixels",
             (Source::Danbooru, Sort::Filesize) => "order:filesize",
+            (Source::E621, Sort::Oldest) => "order:id",
+            (Source::E621, Sort::Score) => "order:score",
+            (Source::E621, Sort::Favorites) => "order:favcount",
+            (Source::E621, Sort::Popular) => "order:rank",
+            (Source::E621, Sort::Resolution) => "order:mpixels",
+            (Source::E621, Sort::Filesize) => "order:filesize",
             (Source::Gelbooru, Sort::Oldest) => "sort:id:asc",
             (Source::Gelbooru, Sort::Score) => "sort:score:desc",
+            (Source::Rule34, Sort::Oldest) => "sort:id:asc",
+            (Source::Rule34, Sort::Score) => "sort:score:desc",
             (Source::Yandere, Sort::Oldest) => "order:id",
             (Source::Yandere, Sort::Score) => "order:score",
             (Source::Yandere, Sort::Resolution) => "order:mpixels",
             // Pixiv 的适配器自己认这个条件（换成 order=date），不是站点的语法。
             (Source::Pixiv, Sort::Oldest) => "order:date",
+            (Source::Kemono, _) => {
+                let site = source.site_name();
+                return Err(AppError::InvalidInput(tr!("{site} 只支持按最新上传排序", "{site} only supports sorting by newest")));
+            }
             (Source::X, _) => {
                 let site = source.site_name();
                 return Err(AppError::InvalidInput(tr!("{site} 通过媒体采集窗口使用", "Use {site} through the media capture window")));
@@ -232,7 +283,7 @@ impl Sort {
             (Source::Custom, _) => {
                 return Err(AppError::InvalidInput(tr!("自定义导入不能用于站点搜索", "Custom imports can't be used for site searches")));
             }
-            (Source::Gelbooru | Source::Yandere | Source::Pixiv, _) => {
+            (Source::Gelbooru | Source::Rule34 | Source::Yandere | Source::Pixiv, _) => {
                 let site = source.site_name();
                 return Err(AppError::InvalidInput(tr!("{site} 不支持这种排序", "{site} doesn't support this sort order")));
             }
@@ -410,7 +461,7 @@ impl Page {
 
     /// 取完这一页后的下一页。`bounds` 是这一页里帖子 id 的（最小值，最大值）。
     pub fn next(&self, source: Source, query: &str, bounds: Option<(u64, u64)>) -> Page {
-        let by_id = matches!(source, Source::Danbooru | Source::Yandere) && !has_custom_order(query);
+        let by_id = matches!(source, Source::Danbooru | Source::E621 | Source::Yandere) && !has_custom_order(query);
         match (self, bounds) {
             (Page::After(_), Some((_, max))) => Page::After(max),
             (Page::Number(_) | Page::Before(_), Some((min, _))) if by_id => Page::Before(min),
@@ -434,6 +485,8 @@ pub fn has_custom_order(query: &str) -> bool {
 pub struct Accounts {
     pub danbooru: Option<danbooru::Credentials>,
     pub gelbooru: Option<gelbooru::Credentials>,
+    pub e621: Option<e621::Credentials>,
+    pub rule34: Option<rule34::Credentials>,
     /// 不登录也能用，登录后才能看 R-18 作品。
     pub pixiv: Option<pixiv::Credentials>,
 }
@@ -443,10 +496,17 @@ impl Accounts {
         self.gelbooru.as_ref().ok_or(AppError::CredentialsMissing("Gelbooru"))
     }
 
+    fn rule34(&self) -> Result<&rule34::Credentials, AppError> {
+        self.rule34.as_ref().ok_or(AppError::CredentialsMissing("Rule34.xxx"))
+    }
+
     pub fn api_key(&self, source: Source) -> Option<&str> {
         match source {
             Source::Danbooru => self.danbooru.as_ref().map(|c| c.api_key.as_str()),
             Source::Gelbooru => self.gelbooru.as_ref().map(|c| c.api_key.as_str()),
+            Source::E621 => self.e621.as_ref().map(|c| c.api_key.as_str()),
+            Source::Rule34 => self.rule34.as_ref().map(|c| c.api_key.as_str()),
+            Source::Kemono => None,
             Source::Yandere => None,
             Source::Pixiv => self.pixiv.as_ref().map(|c| c.session.as_str()),
             Source::X => None,
@@ -463,6 +523,13 @@ impl Accounts {
             Source::Gelbooru => {
                 self.gelbooru = account.map(|(user_id, api_key)| gelbooru::Credentials { user_id, api_key })
             }
+            Source::E621 => {
+                self.e621 = account.map(|(username, api_key)| e621::Credentials { username, api_key })
+            }
+            Source::Rule34 => {
+                self.rule34 = account.map(|(user_id, api_key)| rule34::Credentials { user_id, api_key })
+            }
+            Source::Kemono => {}
             Source::Yandere => {}
             // Pixiv 存的「Key」是登录后的 PHPSESSID，账号的用户 id 从里面取。
             Source::Pixiv => self.pixiv = account.and_then(|(_, session)| pixiv::Credentials::from_session(&session)),
@@ -514,6 +581,19 @@ pub async fn fetch(
                 Page::Before(_) => gelbooru::search(net, query, 1, limit, creds).await,
             }
         }
+        Source::E621 => e621::search(net, query, page, limit, accounts.e621.as_ref()).await,
+        Source::Rule34 => {
+            let creds = accounts.rule34()?;
+            match page {
+                Page::Number(n) => rule34::search(net, query, *n, limit, creds).await,
+                Page::After(id) => {
+                    let query = format!("{query} id:>{id} sort:id:asc");
+                    rule34::search(net, query.trim(), 1, limit, creds).await
+                }
+                Page::Before(_) => rule34::search(net, query, 1, limit, creds).await,
+            }
+        }
+        Source::Kemono => kemono::search(net, query, page, limit).await,
         // Yande.re 用 id 条件翻页：默认从新到旧，id:< 接着往旧的方向翻；找新图时 id:> 加按 id 升序。
         Source::Yandere => match page {
             Page::Number(n) => moebooru::search(net, query, *n, limit).await,
@@ -531,6 +611,9 @@ pub async fn count(net: &Net, accounts: &Accounts, source: Source, query: &str) 
     match source {
         Source::Danbooru => danbooru::count(net, query, accounts.danbooru.as_ref()).await,
         Source::Gelbooru => gelbooru::count(net, query, accounts.gelbooru()?).await,
+        Source::E621 => e621::count(net, query, accounts.e621.as_ref()).await,
+        Source::Rule34 => rule34::count(net, query, accounts.rule34()?).await,
+        Source::Kemono => kemono::count(net, query).await,
         Source::Yandere => moebooru::count(net, query).await,
         Source::Pixiv => pixiv::count(net, accounts.pixiv.as_ref(), query).await,
         Source::X => Err(AppError::InvalidInput(tr!("X 通过媒体采集窗口使用", "Use X through the media capture window"))),
@@ -557,6 +640,16 @@ pub fn build_query(source: Source, tags: &str, ratings: &[Rating]) -> String {
                     selected.iter().map(|r| format!("rating:{}", r.as_str())).collect();
                 parts.push(format!("{{{}}}", alternatives.join(" ~ ")));
             }
+            Source::E621 => parts.extend(e621::rating_terms(&selected)),
+            Source::Rule34 => {
+                if selected.len() == 1 {
+                    parts.push(format!("rating:{}", selected[0].as_str()));
+                } else {
+                    let alternatives: Vec<String> = selected.iter().map(|r| format!("rating:{}", r.as_str())).collect();
+                    parts.push(format!("{{{}}}", alternatives.join(" ~ ")));
+                }
+            }
+            Source::Kemono => {}
             Source::Yandere => parts.extend(moebooru::rating_term(&selected)),
             // Pixiv 的适配器自己认这个条件：换成搜索的 mode，再在本地按分级筛。
             Source::Pixiv => {
@@ -603,6 +696,9 @@ mod tests {
     fn query_adds_rating_per_site_syntax() {
         let ratings = [Rating::General, Rating::Sensitive];
         assert_eq!(build_query(Source::Danbooru, " 1girl  scenery ", &ratings), "1girl scenery rating:g,s");
+        assert_eq!(build_query(Source::E621, "anthro", &[Rating::General]), "anthro rating:s");
+        assert_eq!(build_query(Source::Rule34, "character", &[Rating::Explicit]), "character rating:explicit");
+        assert_eq!(build_query(Source::Kemono, "creator:patreon/123", &[Rating::General]), "creator:patreon/123");
         assert_eq!(
             build_query(Source::Gelbooru, "scenery", &ratings),
             "scenery {rating:general ~ rating:sensitive}"
@@ -625,6 +721,7 @@ mod tests {
 
         let first = Page::Number(1);
         assert_eq!(first.next(Source::Danbooru, "scenery rating:g", Some((500, 900))), Page::Before(500));
+        assert_eq!(first.next(Source::E621, "scenery rating:s", Some((500, 900))), Page::Before(500));
         assert_eq!(first.next(Source::Danbooru, "scenery order:score", Some((500, 900))), Page::Number(2));
         assert_eq!(first.next(Source::Gelbooru, "scenery", Some((500, 900))), Page::Number(2));
         // 订阅往新的方向走：下一页从这一页最大的 id 之后开始。
@@ -656,6 +753,9 @@ mod tests {
     fn url_source_requires_known_host() {
         let url = |s: &str| Url::parse(s).unwrap();
         assert_eq!(source_for_url(&url("https://cdn.donmai.us/original/a.png")), Some(Source::Danbooru));
+        assert_eq!(source_for_url(&url("https://static1.e621.net/data/a.jpg")), Some(Source::E621));
+        assert_eq!(source_for_url(&url("https://us.rule34.xxx/images/a.jpg")), Some(Source::Rule34));
+        assert_eq!(source_for_url(&url("https://kemono.cr/data/a.jpg")), Some(Source::Kemono));
         assert_eq!(source_for_url(&url("https://user:pw@cdn.donmai.us/a.png")), None);
         assert_eq!(source_for_url(&url("https://cdn.donmai.us:8443/a.png")), None);
         assert_eq!(source_for_url(&url("file:///etc/passwd")), None);
@@ -665,6 +765,7 @@ mod tests {
     fn host_matching_respects_dot_boundary() {
         assert_eq!(Source::for_host("cdn.donmai.us"), Some(Source::Danbooru));
         assert_eq!(Source::for_host("img4.gelbooru.com."), Some(Source::Gelbooru));
+        assert_eq!(Source::for_host("n4.kemono.cr"), Some(Source::Kemono));
         assert_eq!(Source::for_host("evildonmai.us"), None);
         assert_eq!(Source::for_host("donmai.us.example.com"), None);
     }

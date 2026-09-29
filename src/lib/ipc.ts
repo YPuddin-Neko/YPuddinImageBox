@@ -2,7 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 import { t, type Msg } from "./i18n";
 
-export type Source = "danbooru" | "gelbooru" | "yandere" | "pixiv" | "x" | "custom";
+export type Source = "danbooru" | "gelbooru" | "e621" | "rule34" | "kemono" | "yandere" | "pixiv" | "x" | "custom";
 export type Rating = "general" | "sensitive" | "questionable" | "explicit";
 
 export const RATINGS: Rating[] = ["general", "sensitive", "questionable", "explicit"];
@@ -19,6 +19,9 @@ export const ratingLabel = (rating: Rating) => t(RATING_LABEL[rating]);
 export const SOURCE_LABEL: Record<Source, string> = {
   danbooru: "Danbooru",
   gelbooru: "Gelbooru",
+  e621: "e621",
+  rule34: "Rule34.xxx",
+  kemono: "Kemono",
   yandere: "Yande.re",
   pixiv: "Pixiv",
   x: "X",
@@ -26,7 +29,7 @@ export const SOURCE_LABEL: Record<Source, string> = {
 };
 
 /** 可直接请求接口的来源；X 使用单独的浏览器采集窗口。 */
-export const SOURCES: Source[] = ["danbooru", "gelbooru", "yandere", "pixiv"];
+export const SOURCES: Source[] = ["danbooru", "gelbooru", "e621", "rule34", "kemono", "yandere", "pixiv"];
 export const SOURCE_OPTIONS = SOURCES.map((value) => ({ value, label: SOURCE_LABEL[value] }));
 
 /** 几个站点的名字：全部站点时写「全部平台」，否则按固定顺序写站点名。 */
@@ -55,6 +58,9 @@ const REMOTE_SORTS: { value: RemoteSort; label: Msg; hint?: Msg }[] = [
 const SITE_SORTS: Record<Source, RemoteSort[]> = {
   danbooru: ["newest", "oldest", "score", "favorites", "popular", "resolution", "filesize"],
   gelbooru: ["newest", "oldest", "score"],
+  e621: ["newest", "oldest", "score", "favorites", "popular", "resolution", "filesize"],
+  rule34: ["newest", "oldest", "score"],
+  kemono: ["newest"],
   yandere: ["newest", "oldest", "score", "resolution"],
   pixiv: ["newest", "oldest"],
   x: [],
