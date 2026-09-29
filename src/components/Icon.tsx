@@ -46,6 +46,7 @@ const PATHS = {
   pause: <path d="M9 6.5v11M15 6.5v11" />,
   play: <path d="M8.5 5.8v12.4l9.5-6.2z" />,
   close: <path d="m6.5 6.5 11 11M17.5 6.5l-11 11" />,
+  plus: <path d="M12 5.5v13M5.5 12h13" />,
   zoomIn: (
     <>
       <circle cx="10.5" cy="10.5" r="5.5" />

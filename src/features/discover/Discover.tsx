@@ -7,6 +7,7 @@ import { PostGrid, visibleCard } from "../../components/PostGrid";
 import type { View } from "../../components/Rail";
 import { MenuButton, MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
+import { appendTag, cleanTag, TagInput } from "../../components/TagInput";
 import { Toast } from "../../components/Toast";
 import { usePicker } from "../../components/usePicker";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
@@ -259,6 +260,8 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [sources, setSources] = useState<Source[]>(DEFAULT_CRITERIA.sources);
   const [platforms, setPlatforms] = useState<Source[]>(DEFAULT_CRITERIA.platforms);
   const [tags, setTags] = useState(DEFAULT_CRITERIA.tags);
+  /** 刚从详情里点进搜索框的 tag，胶囊闪一下。 */
+  const [flash, setFlash] = useState<{ tag: string; at: number } | null>(null);
   const [ratings, setRatings] = useState<Rating[]>(DEFAULT_CRITERIA.ratings);
   const [sort, setSort] = useState<RemoteSort>(DEFAULT_CRITERIA.sort);
   const [results, setResults] = useState<Results | null>(null);
@@ -665,10 +668,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               sizers={[t("全部平台"), ...SOURCE_OPTIONS.map((option) => option.label)]}
               onChange={changeSources}
             />
-            <input
+            <TagInput
               id="search-tags"
-              className="search-input"
-              aria-label={t("搜索 tag")}
+              label={t("搜索 tag")}
+              flash={flash}
               placeholder={
                 // Pixiv 还能看画师的全部作品；几个站点一起搜时 user: 对别的站点另有意思，不提示。
                 sources.length === 1 && sources[0] === "pixiv"
@@ -678,9 +681,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                   : t("输入 tag，空格分隔，例如 scenery sky")
               }
               value={tags}
-              onChange={(event) => setTags(event.target.value)}
-              spellCheck={false}
-              autoComplete="off"
+              onChange={setTags}
             />
             <MenuButton
               className="search-bookmark"
@@ -885,6 +886,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         key={selectedKey ?? "none"}
         post={selectedPost}
         primaryAction={primaryAction}
+        onTag={(tag) => {
+          setTags((prev) => appendTag(prev, tag));
+          setFlash({ tag: cleanTag(tag), at: Date.now() });
+        }}
       />
 
       <ImageViewer

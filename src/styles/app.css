@@ -277,6 +277,130 @@ button:disabled {
   color: var(--fg-3);
 }
 
+/* 搜索框里的 tag：一个 tag 一个胶囊，一行放不下时换行，搜索框跟着变高，左右的按钮留在第一行。 */
+.search:has(.tag-input) {
+  height: auto;
+  min-height: 46px;
+  align-items: flex-start;
+  padding-block: 5px;
+}
+
+.tag-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 0;
+  cursor: text;
+}
+
+.tag-input .search-input {
+  flex: 1 1 80px;
+  min-width: 80px;
+  height: 24px;
+}
+
+/* 颜色和详情里的一般 tag 一样；排除的 tag、user:、order: 这类条件换个颜色。 */
+.tag-chip,
+.tag-chip-edit {
+  --ink: var(--tag-general);
+  height: 24px;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--ink) 42%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.tag-chip[data-kind="exclude"],
+.tag-chip-edit[data-kind="exclude"] {
+  --ink: var(--err);
+}
+
+.tag-chip[data-kind="qualifier"],
+.tag-chip-edit[data-kind="qualifier"] {
+  --ink: var(--tag-meta);
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 3px 0 9px;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.tag-chip[data-flash] {
+  animation: tag-flash 0.8s ease-out;
+}
+
+@keyframes tag-flash {
+  from {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--ink) 45%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+.tag-chip-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tag-chip-remove {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink) 55%, var(--fg-3));
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.tag-chip-remove:hover {
+  background: color-mix(in srgb, var(--ink) 22%, transparent);
+  color: var(--fg-1);
+}
+
+.tag-chip-edit {
+  min-width: 48px;
+  padding: 0 9px;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.tag-add {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line-2);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-3);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.tag-add:hover {
+  background: var(--chip);
+  color: var(--fg-1);
+}
+
 /* 搜索框里的收藏按钮：和搜索按钮同样大小，已收藏时图标填满并用强调色。 */
 .search-bookmark {
   width: 34px;
@@ -1211,6 +1335,26 @@ code {
   font-weight: 700;
   user-select: text;
   -webkit-user-select: text;
+}
+
+/* 旁边有搜索框时，详情里的 tag 点一下就加进搜索框（不搜索）。 */
+.tags li:has(> .tag-pick) {
+  padding: 0;
+}
+
+.tag-pick {
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  transition: background-color 0.15s ease;
+}
+
+.tag-pick:hover {
+  background: color-mix(in srgb, currentColor 16%, transparent);
 }
 
 .tag-artist li {

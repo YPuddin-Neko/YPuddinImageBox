@@ -35,9 +35,11 @@ interface InspectorProps {
   primaryAction?: ReactNode;
   /** 预览图下方的提醒，例如文件已经不见了。 */
   notice?: string;
+  /** 旁边有搜索框时：点 tag 把它加进搜索框（不搜索）。 */
+  onTag?: (tag: string) => void;
 }
 
-export function Inspector({ post, emptyText, localPath, primaryAction, notice }: InspectorProps) {
+export function Inspector({ post, emptyText, localPath, primaryAction, notice, onTag }: InspectorProps) {
   const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
 
   if (!post) {
@@ -124,7 +126,15 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice }:
               <h3>{t(label)}</h3>
               <ul className={`tags tag-${key}`}>
                 {post.tags[key].map((tag) => (
-                  <li key={tag}>{tag}</li>
+                  <li key={tag}>
+                    {onTag ? (
+                      <button type="button" className="tag-pick" title={t("加到搜索框")} onClick={() => onTag(tag)}>
+                        {tag}
+                      </button>
+                    ) : (
+                      tag
+                    )}
+                  </li>
                 ))}
               </ul>
             </section>

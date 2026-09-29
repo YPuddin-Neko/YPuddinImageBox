@@ -8,6 +8,7 @@ import { LoadingPill } from "../../components/LoadingPill";
 import { PostGrid, visibleCard } from "../../components/PostGrid";
 import { MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
+import { appendTag, cleanTag, TagInput } from "../../components/TagInput";
 import { Toast, useToast } from "../../components/Toast";
 import { usePicker } from "../../components/usePicker";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
@@ -69,6 +70,8 @@ export function LibraryGrid({
   onBack: () => void;
 }) {
   const [tags, setTags] = useState("");
+  /** 刚从详情里点进筛选框的 tag，胶囊闪一下。 */
+  const [flash, setFlash] = useState<{ tag: string; at: number } | null>(null);
   const [ratings, setRatings] = useState<Rating[]>([]);
   const [sort, setSort] = useState<LibrarySort>(EMPTY_FILTER.sort);
   const [listing, setListing] = useState<Listing | null>(null);
@@ -296,14 +299,12 @@ export function LibraryGrid({
               <Icon name="back" size={15} />
               <span>{scope.title}</span>
             </button>
-            <input
-              className="search-input"
-              aria-label={t("按 tag 筛选")}
+            <TagInput
+              label={t("按 tag 筛选")}
               placeholder={t("在这里按 tag 筛选，空格分隔，-tag 表示排除")}
               value={tags}
-              onChange={(event) => setTags(event.target.value)}
-              spellCheck={false}
-              autoComplete="off"
+              onChange={setTags}
+              flash={flash}
             />
             <button type="submit" className="search-go" aria-label={t("筛选")}>
               <Icon name="search" size={17} />
@@ -410,6 +411,10 @@ export function LibraryGrid({
       <Inspector
         key={selectedPost ? postKey(selectedPost) : "none"}
         post={selectedPost}
+        onTag={(tag) => {
+          setTags((prev) => appendTag(prev, tag));
+          setFlash({ tag: cleanTag(tag), at: Date.now() });
+        }}
         localPath={selectedPost?.path}
         notice={selectedPost?.missing ? t("文件不在记录的位置，可能已被移动或删除。可以重新下载到图片位置。") : undefined}
         primaryAction={
