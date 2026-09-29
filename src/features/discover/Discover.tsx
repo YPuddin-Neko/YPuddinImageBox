@@ -121,10 +121,12 @@ const PAGE_SIZE = 40;
 /** 来源、分级、平台都是复选，连着勾几项时等停下来再搜，免得每勾一项搜一次。 */
 const FILTER_DEBOUNCE_MS = 300;
 
-function countText(count: Count): string {
+function countText(count: Count, source?: Source): string {
   if (count === "loading") return t("正在统计…");
   if (count === "failed") return t("暂时无法统计，可以直接开始");
   if (count === null) return t("站点没有给出总数（条件较复杂时会这样），可以直接开始");
+  // Kemono 统计的是帖子数，一个帖子可能有好几张图。
+  if (source === "kemono") return t("约 {n} 个帖子", { n: formatCount(count) });
   return t("约 {n} 张", { n: formatCount(count) });
 }
 
@@ -928,10 +930,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                   ? bulk.sites.map((site) => (
                       <div key={site.source} className="dialog-site">
                         <SiteName source={site.source} />
-                        {countText(site.count)}
+                        {countText(site.count, site.source)}
                       </div>
                     ))
-                  : countText(bulk.sites[0]?.count ?? null)}
+                  : countText(bulk.sites[0]?.count ?? null, bulk.sites[0]?.source)}
               </dd>
               <dt>
                 <label htmlFor="bulk-max">{t("上限")}</label>

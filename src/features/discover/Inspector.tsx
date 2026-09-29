@@ -17,9 +17,12 @@ const TAG_GROUPS: { key: keyof PostTags; label: Msg }[] = [
   { key: "meta", label: "元" },
 ];
 
+/** 不带时区的时间按 UTC 读（和 Rust 端一致）；按本地时间读的话，东八区会早一天。 */
+const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+
 function formatDate(value: string | null): string {
   if (!value) return "—";
-  const date = new Date(value);
+  const date = new Date(NAIVE_ISO.test(value) ? `${value}Z` : value);
   return Number.isNaN(date.getTime()) ? value : date.toISOString().slice(0, 10);
 }
 
@@ -87,8 +90,8 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice }:
           </div>
           <div>
             <dt>{t("分数")}</dt>
-            {/* Pixiv 的作品列表不给分数。 */}
-            <dd>{post.source === "pixiv" ? "—" : post.score}</dd>
+            {/* Pixiv 的作品列表、Kemono 的帖子不给分数。 */}
+            <dd>{post.source === "pixiv" || post.source === "kemono" ? "—" : post.score}</dd>
           </div>
           <div>
             <dt>{t("收藏")}</dt>

@@ -189,16 +189,21 @@ export const goldOnly = (post: Post) =>
 
 /** Pixiv 的帖子 id 是「作品 id × 1000 + 页码」（和 Rust 端的 `pixiv::post_id` 一致）。 */
 const PIXIV_PAGE_FACTOR = 1000;
+/** Kemono 的帖子 id 是「服务序号 × 10¹³ + 帖子 id × 1000 + 第几张」（和 Rust 端的 `kemono::split_id` 一致）。 */
+const KEMONO_SERVICE_FACTOR = 10_000_000_000_000;
 
 /**
  * 界面上显示的编号（前面的 # 由文案自己写），和 Rust 端的 `Post::label` 一致：
- * Pixiv 显示作品 id，第二页起再写页码。`grouped` 时数字带千位分隔（详情面板的标题用）。
+ * Pixiv 显示作品 id、Kemono 显示帖子 id，第二页（张）起再写页码。`grouped` 时数字带千位分隔（详情面板的标题用）。
  */
 export function postNumber(post: Pick<Post, "source" | "id">, { grouped = false } = {}): string {
-  const pixiv = post.source === "pixiv";
   if (post.source === "x") return `x-${post.id.toString(16).padStart(16, "0")}`;
-  const id = pixiv ? Math.floor(post.id / PIXIV_PAGE_FACTOR) : post.id;
-  const page = pixiv ? post.id % PIXIV_PAGE_FACTOR : 0;
+  const [id, page] =
+    post.source === "pixiv"
+      ? [Math.floor(post.id / PIXIV_PAGE_FACTOR), post.id % PIXIV_PAGE_FACTOR]
+      : post.source === "kemono"
+        ? [Math.floor((post.id % KEMONO_SERVICE_FACTOR) / 1000), post.id % 1000]
+        : [post.id, 0];
   const number = grouped ? id.toLocaleString("en-US") : String(id);
   return page === 0 ? number : `${number} p${page + 1}`;
 }

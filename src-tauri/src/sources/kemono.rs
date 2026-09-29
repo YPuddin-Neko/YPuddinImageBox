@@ -3,11 +3,13 @@
 //! 搜索框支持两种形式：普通文本使用全站 `/v1/posts` 搜索；指定作者使用
 //! `creator:服务/作者ID`，例如 `creator:patreon/123456`。每个帖子里的图片文件和附件
 //! 会分别变成一张可预览、可下载的图片，视频、压缩包和其他文件会跳过。
+//!
+//! 接口不给图片尺寸，宽高记为 1 × 1 表示未知。
 
 use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::Deserialize;
 
-use super::{Page, Post, PostTags, Source};
+use super::{timestamp, Page, Post, PostTags, Source};
 use crate::error::AppError;
 use crate::i18n::tr;
 use crate::net::{user_agent, Net};
@@ -15,6 +17,12 @@ use crate::net::{user_agent, Net};
 const BASE: &str = "https://kemono.cr";
 const SITE: &str = "Kemono";
 const PAGE_SIZE: u32 = 50;
+/// 预览用的缩略图，长边不超过 800。原图地址会跳转到 n1–n4 数据节点，那几台经常连不上，图也太大。
+const THUMB_BASE: &str = "https://img.kemono.cr/thumbnail/data";
+/// 编号 = 服务序号 × 10¹³ + 帖子 id × 1000 + 第几张。各服务的帖子 id 各自编号，不加服务会撞号；
+/// 界面和文件名只显示帖子 id 和第几张。
+const SERVICE_FACTOR: u64 = 10_000_000_000_000;
+const MAX_FILES: usize = 1000;
 const SERVICES: [&str; 10] = [
     "patreon",
     "fanbox",
@@ -87,11 +95,11 @@ pub async fn search(net: &Net, query: &str, page: &Page, _limit: u32) -> Result<
     parse(&body)
 }
 
+/// 帖子数，不是图片数：一个帖子可能有好几张图。
 pub async fn count(net: &Net, query: &str) -> Result<Option<u64>, AppError> {
     let query = parse_query(query)?;
     let body = request(net, &query, 0).await?;
-    let page: PageEnvelope = serde_json::from_slice(&body).map_err(|e| AppError::Parse { site: SITE, detail: e.to_string() })?;
-    Ok(page.true_count.or(Some(page.count as u64)))
+    Ok(listing(&body)?.1)
 }
 
 async fn request(net: &Net, query: &Query, offset: u32) -> Result<Vec<u8>, AppError> {
@@ -112,7 +120,7 @@ async fn request(net: &Net, query: &Query, offset: u32) -> Result<Vec<u8>, AppEr
         .query(&params)
         .header(ACCEPT, "text/css")
         .header(USER_AGENT, user_agent(None));
-    let response = net.api.send(request).await?;
+    let response = net.kemono.send(request).await?;
     let status = response.status();
     let body = response.bytes().await?;
     if !status.is_success() {
@@ -171,11 +179,25 @@ fn split_creator(value: &str) -> Result<(String, String), AppError> {
     Ok((service, creator.trim().to_string()))
 }
 
+/// 全站搜索返回 `{count, true_count, posts}`，作者的帖子列表直接返回数组（没有总数）。
+fn listing(body: &[u8]) -> Result<(Vec<RawPost>, Option<u64>), AppError> {
+    let parse_error = |e: serde_json::Error| AppError::Parse { site: SITE, detail: e.to_string() };
+    if body.trim_ascii_start().first() == Some(&b'[') {
+        return Ok((serde_json::from_slice(body).map_err(parse_error)?, None));
+    }
+    let page: PageEnvelope = serde_json::from_slice(body).map_err(parse_error)?;
+    Ok((page.posts, page.true_count.or(Some(page.count as u64))))
+}
+
 pub fn parse(body: &[u8]) -> Result<(Vec<Post>, usize), AppError> {
-    let page: PageEnvelope = serde_json::from_slice(body).map_err(|e| AppError::Parse { site: SITE, detail: e.to_string() })?;
-    let count = page.posts.len();
-    let posts = page.posts.into_iter().flat_map(normalize).collect();
-    Ok((posts, count))
+    let (posts, _) = listing(body)?;
+    let count = posts.len();
+    Ok((posts.into_iter().flat_map(normalize).collect(), count))
+}
+
+/// 编号里的帖子 id 和第几张（从 0 开始）。
+pub fn split_id(id: u64) -> (u64, u64) {
+    (id % SERVICE_FACTOR / 1000, id % 1000)
 }
 
 fn normalize(raw: RawPost) -> Vec<Post> {
@@ -190,6 +212,14 @@ fn normalize(raw: RawPost) -> Vec<Post> {
     files.extend(raw.attachments);
     let mut seen = std::collections::HashSet::new();
     let creator_tag = format!("{}:{}", raw.service, raw.user);
+    let slot = SERVICES.iter().position(|service| *service == raw.service).map_or(0, |index| index as u64 + 1);
+    // 接口给的是不带时区的 UTC 时间。写成带 Z 的格式，不然界面会当成本地时间读，东八区会早一天。
+    let created_at = raw
+        .published
+        .as_deref()
+        .and_then(timestamp::parse)
+        .map(|ms| timestamp::iso_utc(ms.div_euclid(1000)))
+        .or_else(|| raw.published.clone());
     files
         .into_iter()
         .filter_map(|file| {
@@ -199,15 +229,16 @@ fn normalize(raw: RawPost) -> Vec<Post> {
             if !IMAGE_EXTS.contains(&ext.as_str()) || !seen.insert(url.clone()) {
                 return None;
             }
-            Some((url, ext))
+            let thumb = thumb_url(&path).unwrap_or_else(|| url.clone());
+            Some((url, thumb, ext))
         })
+        .take(MAX_FILES)
         .enumerate()
-        .filter_map(|(index, (url, ext))| {
-            let id = post_id.checked_mul(1000)?.checked_add(index as u64);
-            let id = id?;
+        .filter_map(|(index, (url, thumb, ext))| {
+            let id = post_id.checked_mul(1000)?.checked_add(index as u64).filter(|id| *id < SERVICE_FACTOR)?;
             Some(Post {
                 source: Source::Kemono,
-                id,
+                id: slot * SERVICE_FACTOR + id,
                 md5: None,
                 width: 1,
                 height: 1,
@@ -216,10 +247,10 @@ fn normalize(raw: RawPost) -> Vec<Post> {
                 fav_count: None,
                 file_ext: ext,
                 file_size: None,
-                file_url: Some(url.clone()),
-                sample_url: Some(url.clone()),
-                thumb_url: Some(url),
-                created_at: raw.published.clone(),
+                file_url: Some(url),
+                sample_url: Some(thumb.clone()),
+                thumb_url: Some(thumb),
+                created_at: created_at.clone(),
                 post_url: format!("{BASE}/{}/user/{}/post/{}#file-{}", raw.service, raw.user, raw.id, index + 1),
                 tags: PostTags { artist: vec![creator_tag.clone()], ..PostTags::default() },
                 pages: None,
@@ -233,6 +264,10 @@ fn file_url(path: &str) -> Option<String> {
         return Some(path.to_string());
     }
     path.strip_prefix('/').map(|path| format!("{BASE}/data/{path}"))
+}
+
+fn thumb_url(path: &str) -> Option<String> {
+    path.strip_prefix('/').map(|path| format!("{THUMB_BASE}/{path}"))
 }
 
 fn extension(value: Option<&str>) -> Option<String> {
@@ -255,9 +290,29 @@ mod tests {
         let (posts, count) = parse(BODY).unwrap();
         assert_eq!(count, 2);
         assert_eq!(posts.len(), 1);
-        assert_eq!(posts[0].id, 123_000);
+        assert_eq!(split_id(posts[0].id), (123, 0));
         assert_eq!(posts[0].file_url.as_deref(), Some("https://kemono.cr/data/aa/bb/one.jpg"));
+        assert_eq!(posts[0].thumb_url.as_deref(), Some("https://img.kemono.cr/thumbnail/data/aa/bb/one.jpg"));
+        assert_eq!(posts[0].sample_url, posts[0].thumb_url);
+        assert_eq!(posts[0].created_at.as_deref(), Some("2026-09-28T00:00:00Z"));
         assert_eq!(posts[0].tags.artist, vec!["patreon:456"]);
+    }
+
+    #[test]
+    fn parses_creator_listing_returned_as_array() {
+        let body = br#"[{"id":"7","user":"9","service":"fanbox","published":"2022-12-11T07:36:10","file":{"name":"a.png","path":"/cc/dd/a.png"},"attachments":[{"name":"b.jpg","path":"/cc/dd/b.jpg"}]}]"#;
+        let (posts, count) = parse(body).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(posts.iter().map(|post| split_id(post.id)).collect::<Vec<_>>(), vec![(7, 0), (7, 1)]);
+        assert_eq!(posts[0].created_at.as_deref(), Some("2022-12-11T07:36:10Z"));
+    }
+
+    #[test]
+    fn same_post_id_on_different_services_gets_different_ids() {
+        let body = br#"[{"id":"7","user":"9","service":"fanbox","file":{"path":"/a/b/x.jpg"}},{"id":"7","user":"9","service":"fantia","file":{"path":"/a/b/y.jpg"}}]"#;
+        let (posts, _) = parse(body).unwrap();
+        assert_ne!(posts[0].id, posts[1].id);
+        assert_eq!(split_id(posts[0].id), split_id(posts[1].id));
     }
 
     #[test]
@@ -268,5 +323,34 @@ mod tests {
         assert_eq!(query.tag.as_deref(), Some("illustration"));
         assert_eq!(query.text, "summer");
         assert!(parse_query("creator:unknown/456").is_err());
+    }
+
+    /// 真实网络：全站搜索和作者帖子列表（两种返回格式）都能解析；缩略图照界面加载图片的方式
+    /// （域名白名单、Referer、预览通道）直接取到图片，不会跳转到连不上的数据节点。
+    #[tokio::test]
+    #[ignore = "需要网络，手动运行"]
+    async fn searches_kemono() {
+        use reqwest::header::REFERER;
+        let net = Net::new(&crate::settings::ProxySettings::default()).unwrap();
+        let (posts, fetched) = search(&net, "G4ku", &Page::Number(1), 50).await.unwrap();
+        assert!(fetched > 0 && !posts.is_empty());
+        assert!(posts.iter().all(|p| p.thumb_url.as_deref().is_some_and(|url| url.starts_with(THUMB_BASE))));
+        assert!(posts.iter().all(|p| p.created_at.as_deref().is_some_and(|time| time.ends_with('Z'))));
+        let total = count(&net, "G4ku").await.unwrap();
+        println!("G4ku：{} 个帖子里 {} 张图，接口总数 {total:?}", fetched, posts.len());
+        assert!(total.is_some());
+
+        let (creator, fetched) = search(&net, "creator:fanbox/237082", &Page::Number(1), 50).await.unwrap();
+        println!("fanbox/237082：{fetched} 个帖子里 {} 张图", creator.len());
+        assert!(!creator.is_empty());
+        assert_eq!(count(&net, "creator:fanbox/237082").await.unwrap(), None);
+
+        let thumb = url::Url::parse(posts[0].thumb_url.as_deref().unwrap()).unwrap();
+        assert_eq!(super::super::source_for_url(&thumb), Some(Source::Kemono));
+        let request = net.client().get(thumb.clone()).header(REFERER, Source::Kemono.referer());
+        let response = net.preview.send(request).await.unwrap();
+        assert!(response.status().is_success(), "{} {}", response.status(), thumb);
+        let bytes = response.bytes().await.unwrap();
+        assert!(crate::protocol::sniff(&bytes).is_some(), "{thumb} 返回的不是图片");
     }
 }

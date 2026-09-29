@@ -113,6 +113,7 @@
   "暂时无法统计，可以直接开始": "Couldn't get a count right now. You can start anyway.",
   "站点没有给出总数（条件较复杂时会这样），可以直接开始": "The site didn't report a total (this happens with complex searches). You can start anyway.",
   "约 {n} 张": "About {n} {n|image|images}",
+  "约 {n} 个帖子": "About {n} {n|post|posts}",
   "张，留空表示全部下载": "images; leave empty to download all",
   "张，按「{sort}」取排在前面的，留空表示全部下载": "images, the top ones by “{sort}”; leave empty to download all",
   "已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。": "Images already in your library are skipped. Downloads run in the background, and you can pause or cancel them anytime in Downloads.",

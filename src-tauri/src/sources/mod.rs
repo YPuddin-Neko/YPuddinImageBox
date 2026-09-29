@@ -363,6 +363,10 @@ impl Post {
                 (illust, 0) => format!("#{illust}"),
                 (illust, page) => format!("#{illust} p{}", page + 1),
             },
+            Source::Kemono => match kemono::split_id(self.id) {
+                (post, 0) => format!("#{post}"),
+                (post, index) => format!("#{post} p{}", index + 1),
+            },
             Source::X => format!("#{}", x::label_id(self.id)),
             _ => format!("#{}", self.id),
         }

@@ -23,7 +23,7 @@ use crate::library::{now_ms, ItemStatus, JobInfo, JobItem, JobKind, JobStatus, L
 use crate::net::Net;
 use crate::protocol::sniff;
 use crate::sources::filter::LocalFilter;
-use crate::sources::{self, pixiv, AccountStore, Page, Post, Source};
+use crate::sources::{self, kemono, pixiv, AccountStore, Page, Post, Source};
 use crate::storage::{Storage, StorageKind};
 use crate::thumbs;
 
@@ -633,7 +633,7 @@ fn image_ext(post: &Post) -> Option<String> {
 }
 
 /// 保存位置：`图片位置/站点/画师/帖子id.扩展名`；没有画师 tag 时直接放在站点目录下。
-/// Pixiv 的文件名和原图一样是「作品id_p页码」。
+/// Pixiv 的文件名和原图一样是「作品id_p页码」，Kemono 是「帖子id_p第几张」。
 pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
     let mut dir = root.join(post.source.site_name());
     if let Some(artist) = post.tags.artist.first() {
@@ -643,6 +643,10 @@ pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
         Source::Pixiv => {
             let (illust, page) = pixiv::split_id(post.id);
             format!("{illust}_p{page}")
+        }
+        Source::Kemono => {
+            let (id, index) = kemono::split_id(post.id);
+            format!("{id}_p{index}")
         }
         _ => post.id.to_string(),
     };

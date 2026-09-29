@@ -119,6 +119,8 @@ pub struct Net {
     /// Pixiv 的接口：1 次/秒，最多 2 个并发。Pixiv 对频繁请求限得很严，单独一条通道，
     /// 被限速时不拖慢其他站点。
     pub pixiv: Lane,
+    /// Kemono 的接口：1 次/秒，最多 2 个并发。请求快了会被站点返回 429。
+    pub kemono: Lane,
 }
 
 impl Net {
@@ -129,6 +131,7 @@ impl Net {
             preview: Lane::new("预览", 10.0, 6),
             file: Lane::new("下载", 5.0, 4),
             pixiv: Lane::new("Pixiv", 1.0, 2),
+            kemono: Lane::new("Kemono", 1.0, 2),
         })
     }
 
