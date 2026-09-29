@@ -913,6 +913,13 @@ pub async fn account_remove(app: AppHandle, state: State<'_, AppState>, source: 
 
 const PIXIV_LOGIN_WINDOW: &str = "pixiv-login";
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PixivLoginOpen {
+    pub proxy_applied: bool,
+    pub proxy_fallback: bool,
+}
+
 fn webview_proxy(proxy: &ProxySettings) -> Result<Option<url::Url>, AppError> {
     if proxy.mode != ProxyMode::Manual {
         return Ok(None);
@@ -989,24 +996,29 @@ fn forget_pixiv_cookies(app: &AppHandle) {
 /// 打开 Pixiv 的登录页。账号密码只在 Pixiv 自己的页面里输入，这个窗口没有调用软件功能的权限；
 /// 登录成功后由 [`pixiv_login_check`] 从窗口的 Cookie 里取出登录状态。
 #[tauri::command]
-pub async fn pixiv_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
+pub async fn pixiv_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<PixivLoginOpen, AppError> {
     if let Some(window) = app.get_webview_window(PIXIV_LOGIN_WINDOW) {
         let _ = window.set_focus();
-        return Ok(());
+        return Ok(PixivLoginOpen { proxy_applied: false, proxy_fallback: false });
     }
     let url = "https://accounts.pixiv.net/login?return_to=https%3A%2F%2Fwww.pixiv.net%2F&source=pc&view_type=page";
-    let url = url.parse().map_err(|err: url::ParseError| AppError::Internal(err.to_string()))?;
+    let url: url::Url = url.parse().map_err(|err: url::ParseError| AppError::Internal(err.to_string()))?;
     let proxy = webview_proxy(&state.settings().proxy)?;
-    let mut builder = WebviewWindowBuilder::new(&app, PIXIV_LOGIN_WINDOW, WebviewUrl::External(url))
-        .title(tr!("登录 Pixiv", "Sign in to Pixiv"))
-        .inner_size(480.0, 720.0);
+    let make_builder = || {
+        WebviewWindowBuilder::new(&app, PIXIV_LOGIN_WINDOW, WebviewUrl::External(url.clone()))
+            .title(tr!("登录 Pixiv", "Sign in to Pixiv"))
+            .inner_size(480.0, 720.0)
+    };
     if let Some(proxy) = proxy {
-        builder = builder.proxy_url(proxy);
+        match make_builder().proxy_url(proxy).build() {
+            Ok(_) => return Ok(PixivLoginOpen { proxy_applied: true, proxy_fallback: false }),
+            Err(err) => log::warn!("Pixiv 登录窗口使用代理失败，回退到直连：{err}"),
+        }
     }
-    builder
+    make_builder()
         .build()
         .map_err(|err| AppError::Internal(err.to_string()))?;
-    Ok(())
+    Ok(PixivLoginOpen { proxy_applied: false, proxy_fallback: true })
 }
 
 /// 登录窗口现在的情况。

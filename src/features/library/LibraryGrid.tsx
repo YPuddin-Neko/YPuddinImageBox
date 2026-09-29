@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEve
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { Dialog } from "../../components/Dialog";
+import { ImageViewer } from "../../components/ImageViewer";
 import { Icon } from "../../components/Icon";
 import { PostGrid } from "../../components/PostGrid";
 import { MultiSelect, Select } from "../../components/Select";
@@ -82,6 +83,7 @@ export function LibraryGrid({
   const [busy, setBusy] = useState(false);
   /** 这次打开软件后点过「重新下载」的图。 */
   const [requeued, setRequeued] = useState<Set<string>>(() => new Set());
+  const [viewerPost, setViewerPost] = useState<LocalPost | null>(null);
   const [notice, setNotice] = useToast();
   const { addPosts } = useDownloads();
   const committed = useRef<Filter>(EMPTY_FILTER);
@@ -435,6 +437,18 @@ export function LibraryGrid({
             </>
           )
         }
+        onView={selectedPost ? () => setViewerPost(selectedPost) : undefined}
+      />
+
+      <ImageViewer
+        post={viewerPost}
+        posts={posts}
+        useSample
+        onClose={() => setViewerPost(null)}
+        onChange={(post) => {
+          setSelected(postKey(post));
+          setViewerPost(post as LocalPost);
+        }}
       />
 
       <Dialog

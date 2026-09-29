@@ -50,6 +50,7 @@ import {
 import { intervalOptions, subscriptionCreate, subscriptionPreview, subscriptionTitle } from "../../lib/subscriptions";
 import { useDownloads } from "../downloads/context";
 import { Inspector } from "./Inspector";
+import { ImageViewer } from "../../components/ImageViewer";
 
 interface Criteria {
   /** 来源里勾选的站点；两个以上时是聚合搜索。 */
@@ -268,6 +269,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [queued, setQueued] = useState<Set<string>>(() => new Set());
   const [bulk, setBulk] = useState<Bulk | null>(null);
   const [subscribing, setSubscribing] = useState<SubscribeDraft | null>(null);
+  const [viewerPost, setViewerPost] = useState<Post | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<SavedSearch[]>([]);
@@ -869,7 +871,22 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         />
       </div>
 
-      <Inspector key={selectedKey ?? "none"} post={selectedPost} primaryAction={primaryAction} />
+      <Inspector
+        key={selectedKey ?? "none"}
+        post={selectedPost}
+        primaryAction={primaryAction}
+        onView={selectedPost ? () => setViewerPost(selectedPost) : undefined}
+      />
+
+      <ImageViewer
+        post={viewerPost}
+        posts={posts}
+        onClose={() => setViewerPost(null)}
+        onChange={(post) => {
+          setSelected(postKey(post));
+          setViewerPost(post);
+        }}
+      />
 
       <Dialog
         open={bulk !== null}

@@ -40,7 +40,12 @@ export const accountKeyStorage = (storage: KeyStorage) => invoke<AccountsInfo>("
 export type PixivLogin = { status: "waiting" } | { status: "closed" } | { status: "signedIn"; info: AccountsInfo };
 
 /** 打开 Pixiv 的登录页；已经开着时切到前面。 */
-export const pixivLoginOpen = () => invoke<void>("pixiv_login_open");
+export interface PixivLoginOpen {
+  proxyApplied: boolean;
+  proxyFallback: boolean;
+}
+
+export const pixivLoginOpen = () => invoke<PixivLoginOpen>("pixiv_login_open");
 export const pixivLoginCheck = () => invoke<PixivLogin>("pixiv_login_check");
 
 export const proxyInfo = () => invoke<ProxySettings>("proxy_info");

@@ -259,9 +259,12 @@ function PixivCard({
   const openLogin = async () => {
     setError(null);
     try {
-      await pixivLoginOpen();
+      const result = await pixivLoginOpen();
       setWaiting(true);
       setRound((count) => count + 1);
+      if (result.proxyFallback) {
+        onNotice(t("登录窗口未能使用当前代理，已回退直连"));
+      }
     } catch (err) {
       setError(errorMessage(err));
     }

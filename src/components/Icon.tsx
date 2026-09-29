@@ -46,6 +46,20 @@ const PATHS = {
   pause: <path d="M9 6.5v11M15 6.5v11" />,
   play: <path d="M8.5 5.8v12.4l9.5-6.2z" />,
   close: <path d="m6.5 6.5 11 11M17.5 6.5l-11 11" />,
+  zoomIn: (
+    <>
+      <circle cx="10.5" cy="10.5" r="5.5" />
+      <path d="M15 15 20 20M10.5 8v5M8 10.5h5" />
+    </>
+  ),
+  zoomOut: (
+    <>
+      <circle cx="10.5" cy="10.5" r="5.5" />
+      <path d="M15 15 20 20M8 10.5h5" />
+    </>
+  ),
+  chevronLeft: <path d="m14.5 5.5-6.5 6.5 6.5 6.5" />,
+  chevronRight: <path d="m9.5 5.5 6.5 6.5-6.5 6.5" />,
   trash: <path d="M5 7h14M10 7V5h4v2M7 7l1 12.5h8L17 7" />,
   bell: <path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2h-14zM10 20.5a2.2 2.2 0 0 0 4 0" />,
   bookmark: <path d="M7 4.5h10a.5.5 0 0 1 .5.5v14.5L12 16l-5.5 3.5V5a.5.5 0 0 1 .5-.5z" />,
