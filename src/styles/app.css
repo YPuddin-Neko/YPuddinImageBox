@@ -1299,8 +1299,9 @@ code {
 
 .image-viewer-load {
   position: absolute;
-  right: 18px;
+  left: 50%;
   bottom: 18px;
+  right: auto;
   z-index: 3;
   display: inline-flex;
   align-items: center;
@@ -1313,6 +1314,13 @@ code {
   color: var(--fg-2);
   font-size: 12px;
   font-weight: 700;
+  opacity: 0;
+  transform: translate(-50%, 22px);
+  animation: image-viewer-load-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.image-viewer-load.is-leaving {
+  animation: image-viewer-load-out 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
 }
 
 .image-viewer-load.is-failed {
@@ -1331,6 +1339,24 @@ code {
 @keyframes image-viewer-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes image-viewer-load-in {
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes image-viewer-load-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, 22px);
   }
 }
 

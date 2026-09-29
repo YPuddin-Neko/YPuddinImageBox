@@ -15,13 +15,14 @@ interface ImageViewerProps {
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
+type LoadPhase = "loading" | "leaving" | "failed" | null;
 
 export function ImageViewer({ post, posts, onClose, onChange, useSample = false }: ImageViewerProps) {
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [loadPhase, setLoadPhase] = useState<LoadPhase>(null);
   const drag = useRef<{ pointerId: number; x: number; y: number; startX: number; startY: number } | null>(null);
+  const loadTimer = useRef<number | undefined>(undefined);
   const index = post ? posts.findIndex((item) => item.source === post.source && item.id === post.id) : -1;
   const src = post ? imageSrc(useSample ? post.sampleUrl ?? post.thumbUrl : post.fileUrl ?? post.sampleUrl ?? post.thumbUrl) : undefined;
 
@@ -32,9 +33,18 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
   }, [post?.source, post?.id]);
 
   useEffect(() => {
-    setLoading(Boolean(src));
-    setFailed(!src);
+    window.clearTimeout(loadTimer.current);
+    setLoadPhase(src ? "loading" : "failed");
+    return () => window.clearTimeout(loadTimer.current);
   }, [src]);
+
+  const finishLoading = (failed: boolean) => {
+    setLoadPhase(failed ? "failed" : "leaving");
+    if (!failed) {
+      window.clearTimeout(loadTimer.current);
+      loadTimer.current = window.setTimeout(() => setLoadPhase(null), 220);
+    }
+  };
 
   useEffect(() => {
     if (!post) return;
@@ -109,7 +119,7 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
             </button>
           )}
           <img
-            className={`image-viewer-image is-draggable${loading ? " is-loading" : ""}`}
+            className={`image-viewer-image is-draggable${loadPhase === "loading" ? " is-loading" : ""}`}
             src={src}
             alt={`#${postNumber(post)}`}
             draggable={false}
@@ -119,12 +129,10 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
             onPointerUp={pointerUp}
             onPointerCancel={pointerUp}
             onLoad={() => {
-              setLoading(false);
-              setFailed(false);
+              finishLoading(false);
             }}
             onError={() => {
-              setLoading(false);
-              setFailed(true);
+              finishLoading(true);
             }}
           />
           {index >= 0 && index < posts.length - 1 && (
@@ -132,10 +140,10 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
               <Icon name="chevronRight" size={24} />
             </button>
           )}
-          {(loading || failed) && (
-            <div className={`image-viewer-load${failed ? " is-failed" : ""}`} role="status">
-              {!failed && <span className="image-viewer-spinner" aria-hidden="true" />}
-              <span>{failed ? t("图片加载失败") : t("正在加载…")}</span>
+          {loadPhase && (
+            <div className={`image-viewer-load${loadPhase === "leaving" ? " is-leaving" : ""}${loadPhase === "failed" ? " is-failed" : ""}`} role="status">
+              {loadPhase === "loading" && <span className="image-viewer-spinner" aria-hidden="true" />}
+              <span>{loadPhase === "failed" ? t("图片加载失败") : t("正在加载…")}</span>
             </div>
           )}
         </div>
