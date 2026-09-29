@@ -266,6 +266,17 @@ pub async fn count_remote(state: State<'_, AppState>, params: SearchParams) -> R
     sources::count(&state.net, &state.accounts.get(), params.source, &query).await
 }
 
+/// 查看器要显示的原图地址。Pixiv 的搜索结果和收藏里只有作品页，原图要按页再查一次（和下载时一样）；
+/// 其他站点就是帖子里的 file_url。没有原图时返回 `None`。
+#[tauri::command]
+pub async fn original_url(state: State<'_, AppState>, post: Post) -> Result<Option<String>, AppError> {
+    if post.source != Source::Pixiv || !post.file_ext.is_empty() {
+        return Ok(post.file_url);
+    }
+    let pages = pixiv::pages(&state.net, state.accounts.get().pixiv.as_ref(), &post).await?;
+    Ok(pages.into_iter().find(|page| page.id == post.id).and_then(|page| page.file_url))
+}
+
 /// 下载选中的图。来自几个站点时（聚合搜索）每个站点各建一个任务。
 #[tauri::command]
 pub async fn download_posts(state: State<'_, AppState>, posts: Vec<Post>) -> Result<Vec<JobInfo>, AppError> {

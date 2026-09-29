@@ -219,6 +219,24 @@ export function imageSrc(url: string | null | undefined): string | undefined {
   return url ? convertFileSrc(url, "ibx") : undefined;
 }
 
+/** 查看器里的原图：同样经 ibx:// 加载，但不写进缓存（原图常有几十 MB），大小上限也放宽。 */
+export function originalSrc(url: string | null | undefined): string | undefined {
+  return url ? convertFileSrc(`full/${url}`, "ibx") : undefined;
+}
+
+/** 查看器要显示的原图地址：Pixiv 的作品要按页查一次，其他站点就是 fileUrl。没有原图时为 null。 */
+export const originalUrl = (post: Post) => invoke<string | null>("original_url", { post });
+
+/** 查看器能显示的格式，和下载时认作图片的扩展名一致。 */
+const IMAGE_EXTS = ["jpg", "jpeg", "png", "gif", "webp", "avif"];
+
+/** 原图是不是图片：视频、Ugoira 压缩包之类的查看器显示不了。没有扩展名时看地址。 */
+export function originalIsImage(post: Pick<Post, "fileExt" | "fileUrl">): boolean {
+  const name = (post.fileUrl ?? "").split(/[?#]/)[0].split("/").pop() ?? "";
+  const ext = post.fileExt || (name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "");
+  return IMAGE_EXTS.includes(ext.toLowerCase());
+}
+
 /** Rust 端错误的类别，例如 credentials_missing、bad_credentials。 */
 export function errorCode(error: unknown): string | null {
   if (error && typeof error === "object" && "code" in error) {

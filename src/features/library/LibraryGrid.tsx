@@ -449,7 +449,7 @@ export function LibraryGrid({
       <ImageViewer
         post={viewerPost}
         posts={posts}
-        useSample
+        local
         onClose={() => setViewerPost(null)}
         cardOf={(post) => visibleCard(center.current, post)}
         onChange={(post) => {

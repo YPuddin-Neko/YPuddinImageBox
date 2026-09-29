@@ -5,6 +5,7 @@ fn main() {
                 "search_remote",
                 "search_sites",
                 "count_remote",
+                "original_url",
                 "download_posts",
                 "download_query",
                 "list_jobs",

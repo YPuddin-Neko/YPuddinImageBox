@@ -417,6 +417,7 @@ pub fn run() {
             commands::search_remote,
             commands::search_sites,
             commands::count_remote,
+            commands::original_url,
             commands::download_posts,
             commands::download_query,
             commands::list_jobs,

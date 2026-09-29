@@ -5,6 +5,7 @@ permissions = [
   "allow-search-remote",
   "allow-search-sites",
   "allow-count-remote",
+  "allow-original-url",
   "allow-download-posts",
   "allow-download-query",
   "allow-list-jobs",

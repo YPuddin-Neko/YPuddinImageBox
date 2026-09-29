@@ -30,16 +30,21 @@ function useSettled(on: boolean): boolean {
 
 interface LoadingPillProps {
   loading: boolean;
+  /** 转圈时的文字，默认「正在加载…」。 */
+  label?: string;
   /** 加载失败的说明：立即出现并停住，不再转圈。 */
   failed?: string | null;
+  /** 不算失败的说明（例如站点没有原图）：和失败一样停住，文字是普通颜色。 */
+  note?: string | null;
 }
 
 /** 加载提示：从所在区域的底边弹出，加载完成后退回底边以下。放在哪个容器里、离底边多高由样式决定。 */
-export function LoadingPill({ loading, failed = null }: LoadingPillProps) {
+export function LoadingPill({ loading, label, failed = null, note = null }: LoadingPillProps) {
   const settled = useSettled(loading);
+  const message = failed ?? note;
   return (
     <AnimatePresence>
-      {(settled || failed) && (
+      {(settled || message) && (
         <motion.div
           className="loading-pill"
           data-failed={failed ? true : undefined}
@@ -48,8 +53,8 @@ export function LoadingPill({ loading, failed = null }: LoadingPillProps) {
           animate={{ opacity: 1, y: 0, transition: ENTER }}
           exit={{ opacity: 0, y: TRAVEL, transition: EXIT }}
         >
-          {!failed && <span className="spinner" aria-hidden="true" />}
-          <span>{failed ?? t("正在加载…")}</span>
+          {!message && <span className="spinner" aria-hidden="true" />}
+          <span>{message ?? label ?? t("正在加载…")}</span>
         </motion.div>
       )}
     </AnimatePresence>

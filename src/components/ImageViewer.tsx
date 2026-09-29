@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { AnimatePresence, useAnimate, usePresence, useReducedMotionConfig } from "motion/react";
 
-import { t } from "../lib/i18n";
-import { hasSize, imageSrc, postKey, postNumber, type Post } from "../lib/ipc";
+import { t, type Msg } from "../lib/i18n";
+import { goldOnly, hasSize, imageSrc, originalIsImage, originalSrc, originalUrl, postKey, postNumber, type Post } from "../lib/ipc";
 import { EASE_OUT } from "../lib/motion";
 import { Icon } from "./Icon";
 import { LoadingPill } from "./LoadingPill";
@@ -12,8 +12,8 @@ interface ImageViewerProps {
   posts: Post[];
   onClose: () => void;
   onChange: (post: Post) => void;
-  /** 图库记录优先使用本地 sampleUrl，避免放大时再次访问远程图床。 */
-  useSample?: boolean;
+  /** 图库里的记录：sampleUrl 就是本地的原图文件，直接显示它，不再从站点下载原图。 */
+  local?: boolean;
   /** 这张图在瀑布流里的卡片，看不见时为 null。打开时图片从卡片放大出来，关闭时缩回卡片。 */
   cardOf?: (post: Post) => HTMLElement | null;
 }
@@ -37,6 +37,7 @@ interface View {
   y: number;
 }
 
+/** 缩放倍数都相对原图的尺寸。很大的图适配窗口时比 MIN_ZOOM 还小，这时以适配的倍数为下限。 */
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 4;
 /** 工具栏按钮每次缩放的步长。 */
@@ -49,7 +50,39 @@ const FADE_OUT = { duration: 0.18, ease: [0.4, 0, 1, 1] as const };
 /** 不位移、不裁切：打开动画的终点、关闭动画的起点。 */
 const IDENTITY = { transform: "translate(0px, 0px) scale(1)", clipPath: "inset(0px 0px 0px 0px round 0px)" };
 
-const clampZoom = (zoom: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+const clampZoom = (zoom: number, fit: number) => Math.min(MAX_ZOOM, Math.max(Math.min(MIN_ZOOM, fit), zoom));
+
+/** 没有原图可显示的原因。 */
+type Missing = "gold" | "none" | "video";
+
+const MISSING_NOTE: Record<Missing, Msg> = {
+  gold: "原图需要 Gold 账号，显示的是缩小图",
+  none: "站点没有开放原图，显示的是缩小图",
+  video: "原图是视频或动图，显示的是缩小图",
+};
+
+/** 查看器要加载的图：站点的缩小图先显示，原图加载完后盖上去。 */
+interface Sources {
+  /** 站点没有缩小图时（例如 Kemono）就是缩略图；和原图是同一张时没有。 */
+  preview?: string;
+  full?: string;
+  /** 原图地址还在查（Pixiv）。 */
+  pending?: boolean;
+  missing?: Missing;
+}
+
+/** `original` 是原图地址：还在查时是 undefined，查询出错时是 false（和原图加载失败一样处理）。 */
+function sourcesOf(post: Post, local: boolean, original: string | null | false | undefined): Sources {
+  if (local) return { full: imageSrc(post.sampleUrl ?? post.thumbUrl) };
+  const sample = post.sampleUrl ?? post.thumbUrl;
+  const preview = sample && sample !== original ? imageSrc(sample) : undefined;
+  if (post.fileExt && !originalIsImage(post)) return { preview, missing: "video" };
+  if (original === undefined) return { preview, pending: true };
+  if (original === false) return { preview };
+  if (!original) return { preview, missing: goldOnly(post) ? "gold" : "none" };
+  if (!originalIsImage({ fileExt: post.fileExt, fileUrl: original })) return { preview, missing: "video" };
+  return { preview, full: originalSrc(original) };
+}
 
 function rectOf(element: Element): Rect {
   const rect = element.getBoundingClientRect();
@@ -57,7 +90,7 @@ function rectOf(element: Element): Rect {
 }
 
 /** 能完整放进可用区域的倍数，最多放大到 MAX_ZOOM。 */
-const fitScale = (size: Size, area: Size) => clampZoom(Math.min(area.w / size.w, area.h / size.h));
+const fitScale = (size: Size, area: Size) => Math.min(MAX_ZOOM, area.w / size.w, area.h / size.h);
 
 /**
  * 让 `box` 这一层里 `from` 那块区域看起来和 `to` 一样：等比缩放到盖满 `to`，按 `to` 的比例居中裁切，
@@ -91,7 +124,7 @@ export function ImageViewer({ post, ...props }: ImageViewerProps) {
   return <AnimatePresence>{post && <Viewer key="viewer" post={post} {...props} />}</AnimatePresence>;
 }
 
-function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: ViewerProps) {
+function Viewer({ post, posts, onClose, onChange, local = false, cardOf }: ViewerProps) {
   const [present, safeToRemove] = usePresence();
   const [scope, animate] = useAnimate<HTMLDivElement>();
   const reduced = useReducedMotionConfig() ?? false;
@@ -99,7 +132,6 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
   const morphRef = useRef<HTMLDivElement>(null);
   const placeholderRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const imageRef = useRef<HTMLImageElement>(null);
   const drag = useRef<{ pointerId: number; x: number; y: number; from: View } | null>(null);
   const opened = useRef(false);
   /** 打开的放大动画还在播：这时关闭只淡出，不飞回卡片。 */
@@ -110,8 +142,15 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
   const [view, setView] = useState<View>({ zoom: 1, x: 0, y: 0 });
   /** 工具栏缩放和适应窗口时平滑过渡；滚轮和拖动跟手，不加过渡。 */
   const [smooth, setSmooth] = useState(false);
-  const [loaded, setLoaded] = useState<string | null>(null);
-  const [failed, setFailed] = useState<string | null>(null);
+  /** 每张图的加载结果：加载完是它的像素尺寸，失败是 "failed"。按地址记，翻回看过的图时直接按它适配。 */
+  const [loads, setLoads] = useState<Record<string, Size | "failed">>({});
+  /** 当前这张帖子里已经能显示的图。翻页后图片元素是新的，要等它加载完（或挂上去就是完整的）才算。 */
+  const [live, setLive] = useState<{ key: string; srcs: string[] }>({ key: "", srcs: [] });
+  /** Pixiv 作品查到的原图地址，按帖子记；查不到是 null，出错是 false。 */
+  const [originals, setOriginals] = useState<Record<string, string | null | false>>({});
+  const requested = useRef(new Set<string>());
+  /** 已经按窗口适配过的帖子。第一张图（缩小图或原图）加载完时适配一次，之后换成原图不再重置缩放。 */
+  const fitted = useRef<string | null>(null);
   // 帖子没有尺寸信息时按缩略图的比例占位；打开时卡片里的缩略图已经加载好了。
   const [thumbSize, setThumbSize] = useState<(Size & { key: string }) | null>(() => {
     const img = cardOf?.(post)?.querySelector("img");
@@ -119,14 +158,40 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
   });
 
   const index = posts.findIndex((item) => item.source === post.source && item.id === post.id);
-  const src = imageSrc(useSample ? (post.sampleUrl ?? post.thumbUrl) : (post.fileUrl ?? post.sampleUrl ?? post.thumbUrl));
+  const lookup = !local && post.source === "pixiv" && !post.fileExt;
+  const sources = sourcesOf(post, local, lookup ? originals[key] : post.fileUrl);
+  const { preview, full } = sources;
   const thumb = imageSrc(post.thumbUrl);
-  const ready = !!src && loaded === src;
-  const broken = !src || failed === src;
-  const size = hasSize(post) ? { w: post.width, h: post.height } : thumbSize?.key === key ? thumbSize : null;
-  const placeholder = area && size ? { w: size.w * fitScale(size, area), h: size.h * fitScale(size, area) } : null;
+  const naturalOf = (src: string | undefined) => {
+    const result = src ? loads[src] : undefined;
+    return result && result !== "failed" ? result : null;
+  };
+  const failedOf = (src: string) => loads[src] === "failed";
+  const previewSize = naturalOf(preview);
+  const fullSize = naturalOf(full);
+  const shown = live.key === key ? live.srcs : [];
+  const previewShown = !!preview && shown.includes(preview);
+  const fullShown = !!full && shown.includes(full);
+  /** 缩略图以外的图已经显示出来了。 */
+  const ready = previewShown || fullShown;
+  const loading = !fullShown && (!!sources.pending || (!!full && !failedOf(full)) || (!!preview && !previewShown && !failedOf(preview)));
+  // 按原图的尺寸排版，缩放倍数相对原图；站点没给尺寸时按已经加载出来的最大的那张，都没有时按缩略图的比例占位。
+  const size = hasSize(post) ? { w: post.width, h: post.height } : (fullSize ?? previewSize ?? (thumbSize?.key === key ? thumbSize : null));
+  const fitZoom = size && area ? fitScale(size, area) : 1;
+  const placeholder = area && size ? { w: size.w * fitZoom, h: size.h * fitZoom } : null;
   const readyRef = useRef(ready);
   readyRef.current = ready;
+  const fitRef = useRef(fitZoom);
+  fitRef.current = fitZoom;
+
+  // 底部提示：加载中转圈；原图拿不到时说明原因，一直显示到关闭或翻页。
+  let failed: string | null = null;
+  let note: string | null = null;
+  if (!loading) {
+    if (sources.missing && (ready || !preview)) note = t(MISSING_NOTE[sources.missing]);
+    else if (!ready) failed = t("图片加载失败");
+    else if (!fullShown) failed = t("原图加载失败，显示的是缩小图");
+  }
 
   // 可用区域随窗口大小变化。
   useLayoutEffect(() => {
@@ -211,6 +276,59 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
     void Promise.all(running).then(() => safeToRemove?.());
   }, [present]);
 
+  // Pixiv 的作品先按页查到原图地址。
+  useEffect(() => {
+    if (!lookup || requested.current.has(key)) return;
+    requested.current.add(key);
+    originalUrl(post).then(
+      (url) => setOriginals((prev) => ({ ...prev, [key]: url })),
+      () => setOriginals((prev) => ({ ...prev, [key]: false })),
+    );
+  }, [key, lookup]);
+
+  // 尺寸已经知道（站点给了，或者这张看过）就在绘制前适配好：翻页时不先按上一张的缩放闪一下。
+  // 刚打开时要等量到可用区域。
+  useLayoutEffect(() => {
+    if (fitted.current === key || !area || !(hasSize(post) || fullSize || previewSize) || !size) return;
+    fitted.current = key;
+    setSmooth(false);
+    setView({ zoom: fitScale(size, area), x: 0, y: 0 });
+  }, [key, area]);
+
+  /**
+   * 一张图加载完。这个帖子还没适配过窗口就适配；站点没给尺寸的帖子第一次换成原图时，
+   * 按两张图的宽度比例调小倍数，屏幕上的大小不变。
+   */
+  const onLoaded = (src: string, image: HTMLImageElement) => {
+    const natural = { w: image.naturalWidth, h: image.naturalHeight };
+    if (!natural.w || !natural.h) return;
+    const known = naturalOf(src);
+    if (!known) setLoads((prev) => ({ ...prev, [src]: natural }));
+    setLive((prev) => {
+      if (prev.key !== key) return { key, srcs: [src] };
+      return prev.srcs.includes(src) ? prev : { key, srcs: [...prev.srcs, src] };
+    });
+    if (fitted.current !== key && area) {
+      fitted.current = key;
+      setSmooth(false);
+      setView({ zoom: fitScale(hasSize(post) ? { w: post.width, h: post.height } : (fullSize ?? natural), area), x: 0, y: 0 });
+    } else if (!hasSize(post) && src === full && !known && previewSize) {
+      const k = previewSize.w / natural.w;
+      setSmooth(false);
+      setView((prev) => ({ ...prev, zoom: prev.zoom * k }));
+    }
+  };
+
+  // 缓存里的图挂上去就是完整的，load 事件却要晚一拍：绘制前先标记好，翻回看过的图时不先闪一下占位图。
+  useLayoutEffect(() => {
+    canvasRef.current?.querySelectorAll("img").forEach((image) => {
+      const src = image.getAttribute("src");
+      if (src && image.complete && image.naturalWidth && !shown.includes(src)) onLoaded(src, image);
+    });
+  });
+
+  const onFailed = (src: string) => setLoads((prev) => ({ ...prev, [src]: "failed" }));
+
   // 打开时焦点移进查看器，关闭后回到原来的位置。
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -227,21 +345,17 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
     if (present) onClose();
   };
 
-  const fitView = (image: HTMLImageElement | null): View | null =>
-    image?.naturalWidth && area ? { zoom: fitScale({ w: image.naturalWidth, h: image.naturalHeight }, area), x: 0, y: 0 } : null;
-
   const fit = () => {
-    const next = fitView(imageRef.current);
-    if (!next) return;
+    if (!size || !area) return;
     setSmooth(true);
-    setView(next);
+    setView({ zoom: fitScale(size, area), x: 0, y: 0 });
   };
 
   /** 工具栏缩放：以可用区域中心为准，按步长取整。 */
   const step = (direction: 1 | -1) => {
     setSmooth(true);
     setView((prev) => {
-      const zoom = clampZoom(Math.round((prev.zoom + direction * ZOOM_STEP) * 4) / 4);
+      const zoom = clampZoom(Math.round((prev.zoom + direction * ZOOM_STEP) * 4) / 4, fitZoom);
       const k = zoom / prev.zoom;
       return { zoom, x: prev.x * k, y: prev.y * k };
     });
@@ -275,7 +389,7 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
       const factor = Math.exp(-event.deltaY * (event.ctrlKey ? 0.01 : 0.002));
       setSmooth(false);
       setView((prev) => {
-        const zoom = clampZoom(prev.zoom * factor);
+        const zoom = clampZoom(prev.zoom * factor, fitRef.current);
         const k = zoom / prev.zoom;
         return { zoom, x: point.x - k * (point.x - prev.x), y: point.y - k * (point.y - prev.y) };
       });
@@ -284,13 +398,13 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
     return () => stage.removeEventListener("wheel", onWheel);
   }, []);
 
-  const pointerDown = (event: PointerEvent<HTMLImageElement>) => {
+  const pointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, from: view };
     setSmooth(false);
   };
-  const pointerMove = (event: PointerEvent<HTMLImageElement>) => {
+  const pointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const current = drag.current;
     if (!current || current.pointerId !== event.pointerId) return;
     const { from } = current;
@@ -310,7 +424,7 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
       <div className="image-viewer-scrim" aria-hidden="true" />
       <div ref={stageRef} className="image-viewer-stage" onMouseDown={stageDown}>
         <div ref={morphRef} className="image-viewer-morph">
-          {/* 大图加载完之前先放大显示缩略图，加载完后大图淡入盖住它。 */}
+          {/* 缩小图或原图加载完之前先放大显示缩略图，加载完后淡入盖住它。 */}
           <div
             ref={placeholderRef}
             className="image-viewer-placeholder"
@@ -331,33 +445,42 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
               />
             )}
           </div>
-          {src && (
+          {(preview || full) && (
             <div
               ref={canvasRef}
               className="image-viewer-canvas"
               data-ready={ready || undefined}
               data-smooth={smooth || undefined}
-              style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
+              style={{ width: size?.w, height: size?.h, transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
+              onPointerDown={pointerDown}
+              onPointerMove={pointerMove}
+              onPointerUp={pointerUp}
+              onPointerCancel={pointerUp}
             >
-              <img
-                key={src}
-                ref={imageRef}
-                className="image-viewer-image"
-                src={src}
-                alt={`#${postNumber(post)}`}
-                draggable={false}
-                onPointerDown={pointerDown}
-                onPointerMove={pointerMove}
-                onPointerUp={pointerUp}
-                onPointerCancel={pointerUp}
-                onLoad={(event) => {
-                  const next = fitView(event.currentTarget);
-                  if (next) setView(next);
-                  setSmooth(false);
-                  setLoaded(src);
-                }}
-                onError={() => setFailed(src)}
-              />
+              {preview && (
+                <img
+                  key={preview}
+                  className="image-viewer-image"
+                  data-covered={fullShown || undefined}
+                  src={preview}
+                  alt={full ? "" : `#${postNumber(post)}`}
+                  draggable={false}
+                  onLoad={(event) => onLoaded(preview, event.currentTarget)}
+                  onError={() => onFailed(preview)}
+                />
+              )}
+              {full && (
+                <img
+                  key={full}
+                  className="image-viewer-image is-full"
+                  data-ready={fullShown || undefined}
+                  src={full}
+                  alt={`#${postNumber(post)}`}
+                  draggable={false}
+                  onLoad={(event) => onLoaded(full, event.currentTarget)}
+                  onError={() => onFailed(full)}
+                />
+              )}
             </div>
           )}
         </div>
@@ -374,7 +497,12 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
         </button>
       )}
 
-      <LoadingPill loading={present && !ready && !broken} failed={present && broken ? t("图片加载失败") : null} />
+      <LoadingPill
+        loading={present && loading}
+        label={ready ? t("正在加载原图…") : undefined}
+        failed={present ? failed : null}
+        note={present ? note : null}
+      />
 
       <div className="image-viewer-toolbar">
         <span className="image-viewer-title">

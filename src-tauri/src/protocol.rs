@@ -2,6 +2,8 @@
 //!
 //! - 远程图：界面不直接请求站点图床，这样代理、UA、Referer、限速和域名白名单只在一处生效；
 //!   加载过的图缓存在「缓存」位置下的 remote 目录（14 天）。
+//! - 查看器里的原图：`full/{完整地址}`。照样先查缓存，但不写进去（原图常有几十 MB，缓存会很快膨胀），
+//!   大小上限和超时也放宽一些。
 //! - 图库里的图：`local/thumb/{来源}/{帖子id}` 和 `local/file/{来源}/{帖子id}`，
 //!   只能读到图库登记过的文件；缩略图不存在时现场生成。
 //!
@@ -22,6 +24,9 @@ use crate::storage::StorageKind;
 use crate::{thumbs, AppState};
 
 const MAX_BYTES: usize = 32 * 1024 * 1024;
+const MAX_FULL_BYTES: usize = 64 * 1024 * 1024;
+/// 原图可能很大，不按客户端默认的 60 秒超时算。
+const FULL_TIMEOUT: Duration = Duration::from_secs(180);
 const CACHE_TTL: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 
 type Failure = (StatusCode, String);
@@ -57,7 +62,10 @@ async fn load<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<(Vec<u8>, &'
     if let Some(route) = raw.strip_prefix("local/") {
         return load_local(app, route).await;
     }
-    let url = Url::parse(&raw).map_err(|_| (StatusCode::BAD_REQUEST, "图片地址无效".to_string()))?;
+    let (raw, full) = raw.strip_prefix("full/").map_or((&*raw, false), |rest| (rest, true));
+    let limit = if full { MAX_FULL_BYTES } else { MAX_BYTES };
+    let too_large = || (StatusCode::PAYLOAD_TOO_LARGE, format!("图片超过 {} MB", limit >> 20));
+    let url = Url::parse(raw).map_err(|_| (StatusCode::BAD_REQUEST, "图片地址无效".to_string()))?;
     let source =
         sources::source_for_url(&url).ok_or((StatusCode::FORBIDDEN, "只能加载已接入站点的图片".to_string()))?;
 
@@ -70,24 +78,27 @@ async fn load<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<(Vec<u8>, &'
     }
 
     let state = app.state::<AppState>();
-    let request = state.net.client().get(url.clone()).header(REFERER, source.referer());
+    let mut request = state.net.client().get(url.clone()).header(REFERER, source.referer());
+    if full {
+        request = request.timeout(FULL_TIMEOUT);
+    }
     let mut response = state.net.preview.send(request).await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
     if !response.status().is_success() {
         return Err((StatusCode::BAD_GATEWAY, format!("{} 返回 HTTP {}", source.site_name(), response.status().as_u16())));
     }
-    if response.content_length().is_some_and(|len| len as usize > MAX_BYTES) {
-        return Err((StatusCode::PAYLOAD_TOO_LARGE, "图片超过 32 MB".to_string()));
+    if response.content_length().is_some_and(|len| len as usize > limit) {
+        return Err(too_large());
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))? {
         bytes.extend_from_slice(&chunk);
-        if bytes.len() > MAX_BYTES {
-            return Err((StatusCode::PAYLOAD_TOO_LARGE, "图片超过 32 MB".to_string()));
+        if bytes.len() > limit {
+            return Err(too_large());
         }
     }
     // 以文件内容判断格式，不信任上游的 Content-Type。
     let mime = sniff(&bytes).ok_or((StatusCode::BAD_GATEWAY, "不是支持的图片格式".to_string()))?;
-    if let Some(path) = cache {
+    if let Some(path) = cache.filter(|_| !full) {
         write_atomic(&path, &bytes).await;
     }
     Ok((bytes, mime))
