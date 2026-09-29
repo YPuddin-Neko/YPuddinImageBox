@@ -71,7 +71,7 @@
 ### e621、Rule34.xxx
 
 - e621 使用公开的 Danbooru 风格接口，不登录也能搜索；登录信息在「设置 → 账号」里填写用户名和 API Key。e621 的 safe / questionable / explicit 会映射到软件里的分级，species、lore 等站点分类保存在元数据 tag 中。
-- Rule34.xxx 使用官方 DAPI 接口，需要在「设置 → 账号」里填写 User ID 和 API Key；没有凭据时站点接口会拒绝请求。图片 tag 按一般 tag 保存，排序支持最新、最早和分数。
+- Rule34.xxx 使用官方 DAPI 接口，需要在「设置 → 账号」里填写 User ID 和 API Key；没有凭据时站点接口会拒绝请求。站点设置页给的是一整串 `&api_key=…&user_id=…`，整串粘贴到任意一栏即可（Gelbooru 也一样）。图片 tag 按一般 tag 保存，排序支持最新、最早和分数。
 
 ### Kemono
 

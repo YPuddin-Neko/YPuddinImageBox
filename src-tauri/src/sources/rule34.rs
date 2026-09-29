@@ -64,6 +64,7 @@ struct RawPost {
     sample_url: Option<String>,
     preview_url: Option<String>,
     image: Option<String>,
+    #[serde(default, deserialize_with = "lenient_string")]
     directory: Option<String>,
     #[serde(default, deserialize_with = "lenient_u64")]
     file_size: Option<u64>,
@@ -77,6 +78,15 @@ fn lenient_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error>
     Ok(match Value::deserialize(d)? {
         Value::Number(n) => n.as_u64(),
         Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    })
+}
+
+/// 文本字段有时是数字：`directory` 实际给的是 2109 这样的数字。
+fn lenient_string<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::String(s) => Some(s),
+        Value::Number(n) => Some(n.to_string()),
         _ => None,
     })
 }
@@ -206,6 +216,19 @@ mod tests {
         assert_eq!(posts[0].rating, Some(Rating::Explicit));
         assert_eq!(posts[0].tags.general, vec!["1girl", "scenery", "sky"]);
         assert_eq!(posts[0].sample_url, posts[0].file_url);
+    }
+
+    /// 2026-09-29 接口实际返回的样子：数字字段都是数字，directory 也是，没有 created_at。
+    const LIVE: &[u8] = br#"[{"preview_url":"https:\/\/api-cdn.rule34.xxx\/thumbnails\/2109\/thumbnail_5fe8.jpg","sample_url":"https:\/\/api-cdn.rule34.xxx\/images\/2109\/5fe8.png","file_url":"","directory":2109,"hash":"5fe824fd15219985983e75e1cbb87964","width":832,"height":1216,"id":18891869,"image":"5fe8.png","change":1790686543,"owner":"someone","parent_id":0,"rating":"explicit","sample":false,"sample_height":0,"sample_width":0,"score":1,"tags":"1girl solo","source":"","status":"active","has_notes":false,"comment_count":0}]"#;
+
+    #[test]
+    fn parses_numeric_directory() {
+        let (posts, count) = parse(LIVE).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!((posts[0].id, posts[0].width, posts[0].height), (18891869, 832, 1216));
+        // 没给 file_url 时按 directory 和 image 拼出原图地址。
+        assert_eq!(posts[0].file_url.as_deref(), Some("https://rule34.xxx/images/2109/5fe8.png"));
+        assert_eq!(posts[0].file_ext, "png");
     }
 
     #[test]

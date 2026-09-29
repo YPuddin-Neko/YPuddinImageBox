@@ -842,9 +842,29 @@ pub async fn account_save(
     save_account(&state, source, name, api_key).await
 }
 
+/// Gelbooru 和 Rule34.xxx 的设置页把凭据给成一整串 `&api_key=…&user_id=…`，粘贴到哪一栏都认，拆成 User ID 和 API Key。
+/// 整串里没有 user_id 时用另一栏填的。
+fn pasted_credentials(name: &str, api_key: &str) -> Option<(String, String)> {
+    let pasted = [api_key, name].into_iter().find(|value| value.contains("api_key="))?;
+    let (mut user_id, mut key) = (None, None);
+    for (field, value) in url::form_urlencoded::parse(pasted.trim_start_matches(['&', '?']).as_bytes()) {
+        match &*field {
+            "api_key" => key = Some(value.trim().to_string()),
+            "user_id" => user_id = Some(value.trim().to_string()),
+            _ => {}
+        }
+    }
+    let user_id = user_id.or_else(|| (pasted != name).then(|| name.to_string())).filter(|id| !id.is_empty())?;
+    Some((user_id, key.filter(|key| !key.is_empty())?))
+}
+
 async fn save_account(state: &AppState, source: Source, name: String, api_key: String) -> Result<AccountsInfo, AppError> {
     let name = name.trim().to_string();
     let api_key = api_key.trim().to_string();
+    let (name, api_key) = match source {
+        Source::Gelbooru | Source::Rule34 => pasted_credentials(&name, &api_key).unwrap_or((name, api_key)),
+        _ => (name, api_key),
+    };
     if name.is_empty() && matches!(source, Source::Danbooru | Source::Gelbooru | Source::E621 | Source::Rule34 | Source::Yandere) {
         return Err(AppError::InvalidInput(if matches!(source, Source::Danbooru | Source::Yandere) {
             tr!("请填写用户名", "Enter your username")
@@ -1369,6 +1389,21 @@ mod tests {
     use crate::settings::Settings;
     use crate::sources::AccountStore;
     use crate::storage::{Defaults, Storage};
+
+    #[test]
+    fn splits_pasted_credentials() {
+        let key = "0123456789abcdef";
+        let whole = format!("&api_key={key}&user_id=1234567");
+        // 整串粘贴在 API Key 一栏、User ID 一栏，或两栏都是同一串
+        assert_eq!(pasted_credentials("", &whole), Some(("1234567".into(), key.into())));
+        assert_eq!(pasted_credentials(&whole, ""), Some(("1234567".into(), key.into())));
+        assert_eq!(pasted_credentials(&whole, &whole), Some(("1234567".into(), key.into())));
+        // 整串里只有 api_key 时，用另一栏填的 User ID
+        assert_eq!(pasted_credentials("42", &format!("api_key={key}")), Some(("42".into(), key.into())));
+        // 分开填写的不动
+        assert_eq!(pasted_credentials("1234567", key), None);
+        assert_eq!(pasted_credentials("", &format!("api_key={key}")), None);
+    }
 
     async fn state(dir: &std::path::Path) -> AppState {
         let net = Arc::new(Net::new(&ProxySettings::default()).unwrap());
