@@ -1205,39 +1205,37 @@ code {
   height: 100%;
   display: flex;
   flex-direction: column;
+  align-items: center;
   overflow: visible;
   background: transparent;
 }
 
 .image-viewer-toolbar {
-  position: absolute;
-  top: 20px;
-  left: 24px;
-  right: 24px;
+  order: 2;
+  flex: none;
   z-index: 10;
-  height: auto;
+  height: 46px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0;
-  border: 0;
-  pointer-events: none;
+  gap: 10px;
+  margin: 0 0 20px;
+  padding: 6px 8px 6px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--fg-1) 6%);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
 }
 
 .image-viewer-title {
-  max-width: min(52vw, 620px);
+  max-width: min(34vw, 460px);
   overflow: hidden;
-  padding: 9px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 999px;
-  background: rgba(18, 21, 30, 0.78);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
   color: var(--fg-1);
   font-size: 13px;
   font-weight: 800;
   white-space: nowrap;
   text-overflow: ellipsis;
-  pointer-events: auto;
 }
 
 .image-viewer-title small {
@@ -1250,7 +1248,6 @@ code {
   display: flex;
   align-items: center;
   gap: 4px;
-  pointer-events: auto;
 }
 
 .viewer-btn,
@@ -1259,10 +1256,9 @@ code {
   display: grid;
   place-items: center;
   padding: 0 8px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 0;
   border-radius: 999px;
-  background: rgba(18, 21, 30, 0.78);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  background: transparent;
   color: var(--fg-2);
 }
 
@@ -1280,6 +1276,7 @@ code {
 }
 
 .image-viewer-stage {
+  order: 1;
   position: relative;
   flex: 1;
   width: 100%;
