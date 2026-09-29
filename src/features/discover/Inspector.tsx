@@ -32,11 +32,9 @@ interface InspectorProps {
   primaryAction?: ReactNode;
   /** 预览图下方的提醒，例如文件已经不见了。 */
   notice?: string;
-  /** 打开大图查看器。 */
-  onView?: () => void;
 }
 
-export function Inspector({ post, emptyText, localPath, primaryAction, notice, onView }: InspectorProps) {
+export function Inspector({ post, emptyText, localPath, primaryAction, notice }: InspectorProps) {
   const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
 
   if (!post) {
@@ -69,11 +67,6 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice, o
               loading="eager"
               fit="contain"
             />
-            {onView && (
-              <button type="button" className="insp-view" onClick={onView} aria-label={t("放大查看")} title={t("放大查看")}>
-                <Icon name="zoomIn" size={15} />
-              </button>
-            )}
           </div>
           <figcaption className="insp-res">
             {post.width} × {post.height}

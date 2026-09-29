@@ -51,6 +51,8 @@ interface PostGridProps<T extends Post> {
   posts: T[];
   selected: string | null;
   onSelect: (post: T, event: MouseEvent) => void;
+  /** 图片卡片右下角的放大查看按钮。 */
+  onView?: (post: T, event: MouseEvent) => void;
   /** 与每页条数一致，用于卡片入场错开。 */
   pageSize: number;
   /** 已在图库中的帖子，卡片右上角标「已下载」。 */
@@ -72,6 +74,7 @@ export function PostGrid<T extends Post>({
   posts,
   selected,
   onSelect,
+  onView,
   pageSize,
   owned,
   missing,
@@ -221,6 +224,17 @@ export function PostGrid<T extends Post>({
                 onClick={(event) => onPick(post, event)}
               >
                 <Icon name="check" size={13} />
+              </button>
+            )}
+            {onView && (
+              <button
+                type="button"
+                className="card-view"
+                aria-label={t("放大查看")}
+                title={t("放大查看")}
+                onClick={(event) => onView(post, event)}
+              >
+                <Icon name="zoomIn" size={14} />
               </button>
             )}
             {(state || showSource || !!post.pages) && (

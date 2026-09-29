@@ -378,6 +378,10 @@ export function LibraryGrid({
             posts={posts}
             selected={selected}
             onSelect={selectCard}
+            onView={(post) => {
+              setSelected(postKey(post));
+              setViewerPost(post);
+            }}
             pageSize={PAGE_SIZE}
             missing={missing}
             picked={picked}
@@ -437,7 +441,6 @@ export function LibraryGrid({
             </>
           )
         }
-        onView={selectedPost ? () => setViewerPost(selectedPost) : undefined}
       />
 
       <ImageViewer

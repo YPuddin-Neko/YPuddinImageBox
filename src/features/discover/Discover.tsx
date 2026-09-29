@@ -832,6 +832,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             posts={posts}
             selected={selectedKey}
             onSelect={selectCard}
+            onView={(post) => {
+              setSelected(postKey(post));
+              setViewerPost(post);
+            }}
             pageSize={PAGE_SIZE}
             owned={owned}
             picked={picked}
@@ -877,7 +881,6 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         key={selectedKey ?? "none"}
         post={selectedPost}
         primaryAction={primaryAction}
-        onView={selectedPost ? () => setViewerPost(selectedPost) : undefined}
       />
 
       <ImageViewer
