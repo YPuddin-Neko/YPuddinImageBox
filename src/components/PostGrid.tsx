@@ -20,6 +20,17 @@ function cardRatio(post: Post): number {
   return Math.min(2.4, Math.max(0.42, post.width / post.height));
 }
 
+/** 瀑布流里这张图的卡片，至少露出一半时才返回。查看器打开时从这里放大出来，关闭时缩回这里。 */
+export function visibleCard(scope: HTMLElement | null, post: Post): HTMLElement | null {
+  const card = scope?.querySelector<HTMLElement>(`.card[data-key="${CSS.escape(postKey(post))}"]`);
+  const scroller = card?.closest(".scroll");
+  if (!card || !scroller) return null;
+  const a = card.getBoundingClientRect();
+  const b = scroller.getBoundingClientRect();
+  const shown = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+  return shown * 2 >= a.width * a.height ? card : null;
+}
+
 interface Box {
   x: number;
   y: number;
@@ -193,6 +204,7 @@ export function PostGrid<T extends Post>({
           <motion.div
             key={key}
             className="card"
+            data-key={key}
             style={{ left: box.x, top: box.y, width: layout.columnWidth, height: box.height }}
             data-selected={key === selected || undefined}
             data-picked={isPicked || undefined}

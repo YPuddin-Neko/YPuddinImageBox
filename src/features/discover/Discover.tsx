@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEve
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { LoadingPill } from "../../components/LoadingPill";
-import { PostGrid } from "../../components/PostGrid";
+import { PostGrid, visibleCard } from "../../components/PostGrid";
 import type { View } from "../../components/Rail";
 import { MenuButton, MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
@@ -278,6 +278,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const requestId = useRef(0);
   const filterTimer = useRef(0);
   const sentinel = useRef<HTMLDivElement>(null);
+  const center = useRef<HTMLDivElement>(null);
 
   const posts = results?.posts ?? [];
   const { picked, pickedPosts, toggle: togglePick, clear: clearPicks, pickAll } = usePicker(posts);
@@ -649,7 +650,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   return (
     <div className="discover">
-      <div className="center" data-picking={picked.size > 0 || undefined}>
+      <div ref={center} className="center" data-picking={picked.size > 0 || undefined}>
         <div className="topbar" data-tauri-drag-region>
           <form className="search" onSubmit={submit} role="search">
             <MultiSelect
@@ -889,6 +890,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         posts={posts}
         useSample
         onClose={() => setViewerPost(null)}
+        cardOf={(post) => visibleCard(center.current, post)}
         onChange={(post) => {
           setSelected(postKey(post));
           setViewerPost(post);

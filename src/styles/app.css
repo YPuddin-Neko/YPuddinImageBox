@@ -1257,44 +1257,122 @@ code {
   font-size: 12px;
 }
 
-.image-viewer-backdrop {
+/* ---------- 图片查看器 ---------- */
+
+/* 整个窗口铺一层灰色毛玻璃，图片悬浮在上面，工具栏浮在底部正中。 */
+.image-viewer {
+  /* 底部留给工具栏的高度：工具栏 46px、离底边 20px，再隔 12px。 */
+  --viewer-dock: 78px;
   position: fixed;
   z-index: 40;
   inset: 0;
-  display: grid;
-  place-items: center;
+  outline: none;
+}
+
+.image-viewer-scrim {
+  position: absolute;
+  inset: 0;
   background: var(--viewer-scrim);
   -webkit-backdrop-filter: blur(22px) saturate(1.2);
   backdrop-filter: blur(22px) saturate(1.2);
 }
 
-.image-viewer {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  overflow: visible;
-  background: transparent;
+.image-viewer-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
 }
 
+/* 图片和占位图在同一层：打开、关闭时整层在卡片和查看器之间变换。放大后图片可以移到工具栏底下。 */
+.image-viewer-morph {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding-bottom: var(--viewer-dock);
+  transform-origin: 0 0;
+}
+
+.image-viewer-placeholder,
+.image-viewer-canvas {
+  grid-area: 1 / 1;
+}
+
+.image-viewer-placeholder img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* 没有尺寸信息、缩略图也还没加载完：先按缩略图本身的大小显示。 */
+.image-viewer-placeholder:not([data-sized]) img {
+  width: auto;
+  height: auto;
+}
+
+/* 大图淡入盖住占位图之后再隐藏占位图。 */
+.image-viewer-placeholder[data-hidden] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0s linear 0.2s;
+}
+
+.image-viewer-canvas {
+  line-height: 0;
+  opacity: 0;
+  transform-origin: center;
+}
+
+.image-viewer-canvas[data-ready] {
+  opacity: 1;
+  transition: opacity 0.18s ease;
+}
+
+.image-viewer-canvas[data-ready][data-smooth] {
+  transition: opacity 0.18s ease, transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.image-viewer-image {
+  display: block;
+  max-width: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  cursor: grab;
+}
+
+.image-viewer-image:active {
+  cursor: grabbing;
+}
+
+/* 工具栏和左右翻页按钮用同一种面板。 */
+.image-viewer-toolbar,
+.viewer-nav {
+  border: 1px solid var(--line-2);
+  background: color-mix(in srgb, var(--panel) 94%, var(--fg-1) 6%);
+  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+
+/* 位移交给 Motion，居中用 margin。 */
 .image-viewer-toolbar {
-  order: 2;
-  flex: none;
-  z-index: 10;
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  width: max-content;
+  max-width: calc(100% - 40px);
   height: 46px;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0 0 20px;
   padding: 6px 8px 6px 14px;
-  border: 1px solid var(--line-2);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--panel) 94%, var(--fg-1) 6%);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.28);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
 }
 
 .image-viewer-title {
@@ -1344,130 +1422,18 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
-.image-viewer-stage {
-  order: 1;
-  position: relative;
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-}
-
-.image-viewer-canvas {
-  position: relative;
-  display: inline-block;
-  line-height: 0;
-  transform-origin: center;
-}
-
-.image-viewer-canvas.is-loading {
-  min-width: 180px;
-  min-height: 80px;
-}
-
-.image-viewer-image {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: none;
-  max-height: none;
-  object-fit: contain;
-  user-select: none;
-  -webkit-user-drag: none;
-  transform-origin: center;
-  transition: transform 0.14s ease;
-}
-
-.image-viewer-image.is-draggable {
-  cursor: grab;
-  transition: none;
-}
-
-.image-viewer-image.is-draggable:active {
-  cursor: grabbing;
-}
-
-.image-viewer-image.is-loading {
-  opacity: 0;
-}
-
-.image-viewer-load {
-  position: absolute;
-  left: 50%;
-  bottom: 18px;
-  z-index: 3;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 0 11px;
-  border: 1px solid var(--line-2);
-  border-radius: 9px;
-  background: rgba(20, 23, 34, 0.84);
-  color: var(--fg-2);
-  font-size: 12px;
-  font-weight: 700;
-  opacity: 0;
-  transform: translate(-50%, 22px) scale(var(--viewer-inverse-zoom, 1));
-  animation: image-viewer-load-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-}
-
-.image-viewer-load.is-leaving {
-  animation: image-viewer-load-out 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-}
-
-.image-viewer-load.is-failed {
-  color: var(--err);
-}
-
-.image-viewer-spinner {
-  width: 13px;
-  height: 13px;
-  border: 2px solid var(--line-2);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: image-viewer-spin 0.75s linear infinite;
-}
-
-@keyframes image-viewer-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes image-viewer-load-in {
-  to {
-    opacity: 1;
-    transform: translate(-50%, 0) scale(var(--viewer-inverse-zoom, 1));
-  }
-}
-
-@keyframes image-viewer-load-out {
-  from {
-    opacity: 1;
-    transform: translate(-50%, 0) scale(var(--viewer-inverse-zoom, 1));
-  }
-  to {
-    opacity: 0;
-    transform: translate(-50%, 22px) scale(var(--viewer-inverse-zoom, 1));
-  }
-}
-
+/* 竖直方向对准图片的中线（可用区域不含底部工具栏）。 */
 .viewer-nav {
   position: absolute;
   z-index: 2;
-  top: 50%;
+  top: calc((100% - var(--viewer-dock)) / 2);
   width: 42px;
   height: 64px;
+  margin-top: -32px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--line-2);
   border-radius: 12px;
-  background: rgba(20, 23, 34, 0.78);
   color: var(--fg-1);
-  transform: translateY(-50%);
 }
 
 .viewer-nav:hover {
@@ -1480,6 +1446,12 @@ code {
 
 .viewer-nav.next {
   right: 16px;
+}
+
+/* 加载提示在工具栏上方，收回时藏到工具栏后面。 */
+.image-viewer .loading-pill {
+  z-index: 2;
+  bottom: var(--viewer-dock);
 }
 
 /* ---------- 设置 ---------- */

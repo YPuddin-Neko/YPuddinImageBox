@@ -5,7 +5,7 @@ import { Dialog } from "../../components/Dialog";
 import { ImageViewer } from "../../components/ImageViewer";
 import { Icon } from "../../components/Icon";
 import { LoadingPill } from "../../components/LoadingPill";
-import { PostGrid } from "../../components/PostGrid";
+import { PostGrid, visibleCard } from "../../components/PostGrid";
 import { MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
 import { Toast, useToast } from "../../components/Toast";
@@ -91,6 +91,7 @@ export function LibraryGrid({
   const requestId = useRef(0);
   const refreshTimer = useRef(0);
   const sentinel = useRef<HTMLDivElement>(null);
+  const center = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async (filter: Filter, offset: number) => {
     const id = ++requestId.current;
@@ -288,7 +289,7 @@ export function LibraryGrid({
 
   return (
     <div className="discover">
-      <div className="center" data-picking={picked.size > 0 || undefined}>
+      <div ref={center} className="center" data-picking={picked.size > 0 || undefined}>
         <div className="topbar" data-tauri-drag-region>
           <form className="search" onSubmit={submit} role="search">
             <button type="button" className="search-back" onClick={onBack} title={t("返回上一层")}>
@@ -450,6 +451,7 @@ export function LibraryGrid({
         posts={posts}
         useSample
         onClose={() => setViewerPost(null)}
+        cardOf={(post) => visibleCard(center.current, post)}
         onChange={(post) => {
           setSelected(postKey(post));
           setViewerPost(post as LocalPost);
