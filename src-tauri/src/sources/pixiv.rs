@@ -9,7 +9,7 @@
 //! 帖子 id 是「作品 id × 1000 + 页码」：搜索结果里一个作品一张卡片（第 0 页），图库里每一页各存一条。
 //! 查询串里除了用户输入的词，还有程序自己加的 `rating:` 和 `order:date`（见 `build_query` 和 `Sort::term`）。
 
-use reqwest::header::{ACCEPT, COOKIE, REFERER};
+use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, COOKIE, REFERER, USER_AGENT};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
@@ -18,11 +18,15 @@ use url::Url;
 use super::{Page, Post, PostTags, Rating, Source};
 use crate::error::AppError;
 use crate::i18n::{self, tr, Language};
-use crate::net::Net;
+use crate::net::{self, Net};
 
 const BASE: &str = "https://www.pixiv.net";
 const SITE: &str = "Pixiv";
 pub const REFERER_URL: &str = "https://www.pixiv.net/";
+/// 带着登录 Cookie、User-Agent 又不像浏览器的请求，Pixiv 前面的 Cloudflare 会拦下来给验证页（HTTP 403），
+/// 所以接口请求都用浏览器的 User-Agent。版本号隔一段时间跟着 Chrome 更新。
+const BROWSER_UA: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
 /// 搜索每页的作品数（站点固定）；画师作品每次也取这么多。
 pub const PAGE_SIZE: u32 = 60;
 /// 一个作品最多 200 页，帖子 id 按 1000 拆成作品 id 和页码。
@@ -209,6 +213,13 @@ fn lang() -> &'static str {
     }
 }
 
+fn accept_language() -> &'static str {
+    match i18n::current() {
+        Language::Zh => "zh-CN,zh;q=0.9,en;q=0.8",
+        Language::En => "en-US,en;q=0.9",
+    }
+}
+
 fn api_url(path: &[&str], params: &[(&str, String)]) -> Url {
     let mut url = Url::parse(BASE).expect("固定的地址");
     url.path_segments_mut().expect("固定的地址").extend(path);
@@ -217,12 +228,23 @@ fn api_url(path: &[&str], params: &[(&str, String)]) -> Url {
 }
 
 async fn get<T: DeserializeOwned>(net: &Net, credentials: Option<&Credentials>, url: Url) -> Result<T, AppError> {
-    let mut request = net.client().get(url).header(REFERER, REFERER_URL).header(ACCEPT, "application/json");
+    let mut request = net
+        .client()
+        .get(url)
+        .header(USER_AGENT, BROWSER_UA)
+        .header(ACCEPT_LANGUAGE, accept_language())
+        .header(REFERER, REFERER_URL)
+        .header(ACCEPT, "application/json");
     if let Some(credentials) = credentials {
         request = request.header(COOKIE, format!("PHPSESSID={}", credentials.session));
     }
     let response = net.pixiv.send(request).await?;
     let status = response.status();
+    if net::challenged(&response) {
+        let ray = response.headers().get("cf-ray").and_then(|value| value.to_str().ok()).unwrap_or("-");
+        log::warn!("Pixiv 的请求被 Cloudflare 拦下：HTTP {}，cf-ray {ray}", status.as_u16());
+        return Err(AppError::Challenged(SITE));
+    }
     let bytes = response.bytes().await?;
     // 出错时站点也会给 JSON 说明（例如作品已删除），有说明就显示说明。
     let envelope = serde_json::from_slice::<Envelope>(&bytes);
@@ -230,6 +252,9 @@ async fn get<T: DeserializeOwned>(net: &Net, credentials: Option<&Credentials>, 
         return Err(AppError::Upstream { site: SITE, message: message.clone() });
     }
     if !status.is_success() {
+        // 不是站点的 JSON 说明（例如代理或防火墙给的网页），记下开头一段，方便查是谁拦的。
+        let head = String::from_utf8_lossy(&bytes[..bytes.len().min(160)]).into_owned();
+        log::warn!("Pixiv 返回 HTTP {}：{}", status.as_u16(), head.split_whitespace().collect::<Vec<_>>().join(" "));
         return Err(AppError::Http { site: SITE, status: status.as_u16() });
     }
     let parse = |e: serde_json::Error| AppError::Parse { site: SITE, detail: e.to_string() };

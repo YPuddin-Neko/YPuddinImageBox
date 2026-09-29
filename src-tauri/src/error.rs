@@ -19,6 +19,8 @@ pub enum AppError {
     /// 用户填写的内容不对，消息直接给用户看。
     InvalidInput(String),
     BadCredentials { site: &'static str },
+    /// 站点前面的 Cloudflare 要求浏览器验证，拦下了请求。
+    Challenged(&'static str),
     Keychain(String),
     Internal(String),
 }
@@ -56,6 +58,10 @@ impl std::fmt::Display for AppError {
             AppError::BadCredentials { site } => {
                 tr!("{site} 的账号或 API Key 不对", "The {site} account or API key is incorrect")
             }
+            AppError::Challenged(site) => tr!(
+                "{site} 的 Cloudflare 拦下了这次请求，稍后再试，或者换一个代理节点",
+                "{site}'s Cloudflare blocked this request. Try again later or switch to another proxy node"
+            ),
             AppError::Keychain(detail) if cfg!(target_os = "windows") => {
                 tr!("读写 Windows 凭据管理器失败：{detail}", "Couldn't access Windows Credential Manager: {detail}")
             }
@@ -70,7 +76,7 @@ impl std::fmt::Display for AppError {
 impl AppError {
     /// 网络或站点临时出了问题，过一会儿再试可能就好了；账号、条件不对的错误再试也没用。
     pub fn is_transient(&self) -> bool {
-        matches!(self, AppError::Network(_) | AppError::Http { .. } | AppError::Parse { .. })
+        matches!(self, AppError::Network(_) | AppError::Http { .. } | AppError::Parse { .. } | AppError::Challenged(_))
     }
 
     fn code(&self) -> &'static str {
@@ -86,6 +92,7 @@ impl AppError {
             AppError::Database(_) => "database",
             AppError::InvalidInput(_) => "invalid_input",
             AppError::BadCredentials { .. } => "bad_credentials",
+            AppError::Challenged(_) => "challenged",
             AppError::Keychain(_) => "keychain",
             AppError::Internal(_) => "internal",
         }

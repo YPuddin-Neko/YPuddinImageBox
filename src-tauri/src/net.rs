@@ -148,6 +148,11 @@ impl Net {
     }
 }
 
+/// Cloudflare 的验证页（managed challenge）：响应头带 `cf-mitigated: challenge`，状态通常是 403。
+pub fn challenged(response: &Response) -> bool {
+    response.headers().get("cf-mitigated").is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"challenge"))
+}
+
 /// 「跟随系统」时 reqwest 读取系统代理设置和 HTTP(S)_PROXY 环境变量；手动设置了代理就只用它。
 pub fn build_client(proxy: &ProxySettings) -> Result<reqwest::Client, AppError> {
     let builder = reqwest::Client::builder()
