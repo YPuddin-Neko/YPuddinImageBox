@@ -607,7 +607,13 @@ impl Downloader {
                 Err(err) => return Ok(Outcome::Failed(err.to_string())),
             }
         }
-        self.library.save_post(post, &target, now_ms()).await?;
+        // 站点没给尺寸（Kemono、部分 X 图片记为 1 × 1）：按下载好的文件补上，图库里的比例才对。
+        let sized = if post.width <= 1 || post.height <= 1 {
+            image_size(target.clone()).await.map(|(width, height)| Post { width, height, ..post.clone() })
+        } else {
+            None
+        };
+        self.library.save_post(sized.as_ref().unwrap_or(post), &target, now_ms()).await?;
         drop(gate);
 
         // 缩略图生成失败不影响下载结果，浏览图库时会再生成。
@@ -615,6 +621,14 @@ impl Downloader {
         let _ = thumbs::generate(target, thumbs::path(&cache, post.source, post.id)).await;
         Ok(Outcome::Saved)
     }
+}
+
+/// 只读文件头得到宽高，不解码整张图。
+async fn image_size(path: PathBuf) -> Option<(u32, u32)> {
+    tokio::task::spawn_blocking(move || image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.into_dimensions().ok())
+        .await
+        .ok()
+        .flatten()
 }
 
 async fn exists(path: &Path) -> bool {

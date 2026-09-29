@@ -6,7 +6,7 @@ import { Icon } from "../../components/Icon";
 import { ShimmerImage } from "../../components/ShimmerImage";
 import { formatBytes } from "../../lib/format";
 import { t, type Msg } from "../../lib/i18n";
-import { imageSrc, postNumber, ratingLabel, SOURCE_LABEL, type Post, type PostTags } from "../../lib/ipc";
+import { hasSize, imageSrc, postNumber, ratingLabel, SOURCE_LABEL, type Post, type PostTags } from "../../lib/ipc";
 import { PANEL_ENTER } from "../../lib/motion";
 
 const TAG_GROUPS: { key: keyof PostTags; label: Msg }[] = [
@@ -72,9 +72,13 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice }:
             />
           </div>
           <figcaption className="insp-res">
-            {post.width} × {post.height}
-            {post.fileExt ? ` · ${post.fileExt.toUpperCase()}` : ""}
-            {post.pages ? ` · ${t("{n} 页", { n: post.pages })}` : ""}
+            {[
+              hasSize(post) ? `${post.width} × ${post.height}` : null,
+              post.fileExt ? post.fileExt.toUpperCase() : null,
+              post.pages ? t("{n} 页", { n: post.pages }) : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "—"}
           </figcaption>
         </figure>
         {notice && <p className="insp-notice">{notice}</p>}

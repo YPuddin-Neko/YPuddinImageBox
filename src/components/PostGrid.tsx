@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent 
 import { motion } from "motion/react";
 
 import { t } from "../lib/i18n";
-import { imageSrc, postKey, postNumber, SOURCE_LABEL, type Post } from "../lib/ipc";
+import { hasSize, imageSrc, postKey, postNumber, SOURCE_LABEL, type Post } from "../lib/ipc";
 import { cardEnter } from "../lib/motion";
 import { Icon } from "./Icon";
 import { ShimmerImage } from "./ShimmerImage";
@@ -15,8 +15,9 @@ const OVERSCAN = 900;
 /** 可见范围按这个步长取整，滚动时不必每一帧都重新渲染。 */
 const STEP = 300;
 
-/** 极端长宽比的图在瀑布流里按限定比例占位，图片本身居中裁切。 */
+/** 极端长宽比的图在瀑布流里按限定比例占位，图片本身居中裁切。没有尺寸信息时按竖图常见的 4:5。 */
 function cardRatio(post: Post): number {
+  if (!hasSize(post)) return 0.8;
   return Math.min(2.4, Math.max(0.42, post.width / post.height));
 }
 
@@ -218,9 +219,11 @@ export function PostGrid<T extends Post>({
               className="card-hit"
               aria-pressed={key === selected}
               aria-label={
-                post.pages
-                  ? t("#{id}，{width} × {height}，{n} 页", { ...about, n: post.pages })
-                  : t("#{id}，{width} × {height}", about)
+                !hasSize(post)
+                  ? `#${about.id}`
+                  : post.pages
+                    ? t("#{id}，{width} × {height}，{n} 页", { ...about, n: post.pages })
+                    : t("#{id}，{width} × {height}", about)
               }
               onClick={(event) => onSelect(post, event)}
             >

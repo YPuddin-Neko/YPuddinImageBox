@@ -4,7 +4,7 @@
 //! `creator:服务/作者ID`，例如 `creator:patreon/123456`。每个帖子里的图片文件和附件
 //! 会分别变成一张可预览、可下载的图片，视频、压缩包和其他文件会跳过。
 //!
-//! 接口不给图片尺寸，宽高记为 1 × 1 表示未知。
+//! 接口不给图片尺寸，宽高记为 1 × 1 表示未知，下载后按文件补上。
 
 use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::Deserialize;

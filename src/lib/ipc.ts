@@ -208,6 +208,9 @@ export function postNumber(post: Pick<Post, "source" | "id">, { grouped = false 
   return page === 0 ? number : `${number} p${page + 1}`;
 }
 
+/** 站点没给尺寸的帖子（Kemono、部分 X 图片）宽高记为 1 × 1。 */
+export const hasSize = (post: Pick<Post, "width" | "height">) => post.width > 1 && post.height > 1;
+
 /** 帖子在界面上的唯一键。 */
 export const postKey = (post: Pick<Post, "source" | "id">) => `${post.source}-${post.id}`;
 

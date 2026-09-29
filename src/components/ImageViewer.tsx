@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type Poi
 import { AnimatePresence, useAnimate, usePresence, useReducedMotionConfig } from "motion/react";
 
 import { t } from "../lib/i18n";
-import { imageSrc, postKey, postNumber, type Post } from "../lib/ipc";
+import { hasSize, imageSrc, postKey, postNumber, type Post } from "../lib/ipc";
 import { EASE_OUT } from "../lib/motion";
 import { Icon } from "./Icon";
 import { LoadingPill } from "./LoadingPill";
@@ -123,7 +123,7 @@ function Viewer({ post, posts, onClose, onChange, useSample = false, cardOf }: V
   const thumb = imageSrc(post.thumbUrl);
   const ready = !!src && loaded === src;
   const broken = !src || failed === src;
-  const size = post.width > 1 && post.height > 1 ? { w: post.width, h: post.height } : thumbSize?.key === key ? thumbSize : null;
+  const size = hasSize(post) ? { w: post.width, h: post.height } : thumbSize?.key === key ? thumbSize : null;
   const placeholder = area && size ? { w: size.w * fitScale(size, area), h: size.h * fitScale(size, area) } : null;
   const readyRef = useRef(ready);
   readyRef.current = ready;
