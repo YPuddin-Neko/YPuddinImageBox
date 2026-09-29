@@ -372,7 +372,7 @@ fn import_id(md5: &str) -> u64 {
     if id == 0 { 1 } else { id }
 }
 
-fn import_files(paths: Vec<PathBuf>, root: PathBuf) -> Result<(Vec<ImportedFile>, u32), AppError> {
+fn import_files(paths: Vec<PathBuf>, root: PathBuf, classify: bool) -> Result<(Vec<ImportedFile>, u32), AppError> {
     let mut imported = Vec::new();
     let mut skipped = 0;
     for source in paths {
@@ -402,7 +402,7 @@ fn import_files(paths: Vec<PathBuf>, root: PathBuf) -> Result<(Vec<ImportedFile>
         let ext = source.extension().and_then(|ext| ext.to_str()).unwrap_or("jpg").to_ascii_lowercase();
         let target = root
             .join(Source::Custom.site_name())
-            .join(crate::downloader::safe_name(&parent))
+            .join(if classify { crate::downloader::safe_name(&parent) } else { String::new() })
             .join(crate::downloader::safe_name(&file_name));
         if source != target {
             if let Some(parent) = target.parent() { std::fs::create_dir_all(parent).map_err(|err| AppError::Internal(err.to_string()))?; }
@@ -425,7 +425,10 @@ fn import_files(paths: Vec<PathBuf>, root: PathBuf) -> Result<(Vec<ImportedFile>
                 thumb_url: None,
                 created_at: None,
                 post_url: format!("file://{}", source.to_string_lossy()),
-                tags: sources::PostTags { artist: vec![parent], ..sources::PostTags::default() },
+                tags: sources::PostTags {
+                    artist: classify.then_some(parent).into_iter().collect(),
+                    ..sources::PostTags::default()
+                },
                 pages: None,
             },
             path: target,
@@ -435,12 +438,17 @@ fn import_files(paths: Vec<PathBuf>, root: PathBuf) -> Result<(Vec<ImportedFile>
 }
 
 #[tauri::command]
-pub async fn library_import(app: AppHandle, state: State<'_, AppState>, paths: Vec<String>) -> Result<ImportOutcome, AppError> {
+pub async fn library_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+    classify: bool,
+) -> Result<ImportOutcome, AppError> {
     if paths.is_empty() {
         return Err(AppError::InvalidInput(tr!("没有选择图片", "No images selected")));
     }
     let root = state.storage().path(StorageKind::Images);
-    let (files, skipped) = blocking(move || import_files(paths.into_iter().map(PathBuf::from).collect(), root)).await?;
+    let (files, skipped) = blocking(move || import_files(paths.into_iter().map(PathBuf::from).collect(), root, classify)).await?;
     let mut imported = 0;
     for file in files {
         let id = file.post.id;
@@ -1218,7 +1226,7 @@ mod tests {
         let source = source_dir.join("sample.png");
         RgbImage::from_pixel(12, 8, Rgb([20, 40, 60])).save(&source).unwrap();
         let target_root = root.path().join("images");
-        let (files, skipped) = import_files(vec![source], target_root.clone()).unwrap();
+        let (files, skipped) = import_files(vec![source], target_root.clone(), true).unwrap();
         assert_eq!(skipped, 0);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].post.source, Source::Custom);

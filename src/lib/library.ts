@@ -146,7 +146,7 @@ export function groupTotal(kind: GroupKind, total: number): string {
 }
 
 export const libraryFolders = () => invoke<Folder[]>("library_folders");
-export const libraryImport = (paths: string[]) => invoke<ImportOutcome>("library_import", { paths });
+export const libraryImport = (paths: string[], classify: boolean) => invoke<ImportOutcome>("library_import", { paths, classify });
 export const libraryGroups = (query: { source: Source; kind: GroupKind; sort: GroupSort; offset: number; limit: number }) =>
   invoke<GroupPage>("library_groups", { query });
 

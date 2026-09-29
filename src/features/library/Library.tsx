@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { FanStack } from "../../components/FanStack";
+import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { Toast, useToast } from "../../components/Toast";
 import { Select } from "../../components/Select";
@@ -126,6 +127,8 @@ function FolderShelf({
   const [folders, setFolders] = useState<Folder[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useToast();
+  const [pendingImport, setPendingImport] = useState<string[] | null>(null);
+  const [classifyImport, setClassifyImport] = useState(true);
 
   const load = useCallback(() => {
     libraryFolders().then(
@@ -150,7 +153,18 @@ function FolderShelf({
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
-      const result = await libraryImport(paths);
+      setPendingImport(paths);
+      return;
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!pendingImport) return;
+    try {
+      const result = await libraryImport(pendingImport, classifyImport);
+      setPendingImport(null);
       setNotice(
         result.skipped > 0
           ? t("已导入 {n} 张，跳过 {skipped} 个文件", { n: formatCount(result.imported), skipped: formatCount(result.skipped) })
@@ -226,6 +240,36 @@ function FolderShelf({
 
       {folders && total === 0 && !error && <EmptyLibrary onNavigate={onNavigate} title={t("图库里还没有图片")} />}
       <Toast message={notice} />
+      <Dialog
+        open={pendingImport !== null}
+        title={t("导入图片")}
+        onClose={() => setPendingImport(null)}
+        initialFocus="last"
+        actions={
+          <>
+            <button type="button" className="btn ghost" onClick={() => setPendingImport(null)}>
+              {t("取消")}
+            </button>
+            <button type="button" className="btn primary" onClick={() => void confirmImport()}>
+              {t("开始导入")}
+            </button>
+          </>
+        }
+      >
+        <p className="dialog-copy">{t("可以按所选图片原来的上一级文件夹创建画师或分类，也可以全部放在自定义导入根目录。")}</p>
+        <div className="options" role="radiogroup" aria-label={t("导入分类方式")}>
+          <label className="option" data-checked={classifyImport || undefined}>
+            <input type="radio" name="import-classify" checked={classifyImport} onChange={() => setClassifyImport(true)} />
+            <span className="option-title">{t("按原文件夹分类")}</span>
+            <span className="option-desc">{t("上一级文件夹作为画师或分类 ID")}</span>
+          </label>
+          <label className="option" data-checked={!classifyImport || undefined}>
+            <input type="radio" name="import-classify" checked={!classifyImport} onChange={() => setClassifyImport(false)} />
+            <span className="option-title">{t("不创建分类")}</span>
+            <span className="option-desc">{t("所有图片直接放在自定义导入目录")}</span>
+          </label>
+        </div>
+      </Dialog>
     </div>
   );
 }
