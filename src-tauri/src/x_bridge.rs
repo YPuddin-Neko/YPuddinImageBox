@@ -76,10 +76,17 @@ pub async fn bridge_response<R: Runtime>(
             "Only the X capture window can submit responses"
         )));
     }
+    let query = payload.path.rsplit('/').next().unwrap_or_default();
     let capture = CAPTURE.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    let Some(capture) = capture.filter(|capture| capture.accepts(&payload.page)) else { return Ok(()) };
-    let posts = sources::x::parse_posts(&payload.body, Some(&capture))?;
-    log::debug!("X 采集：{} 收到 {} 张图（{}）", payload.page, posts.len(), payload.path.rsplit('/').next().unwrap_or_default());
+    let Some(capture) = capture.filter(|capture| capture.accepts(&payload.page)) else {
+        log::debug!("X 采集：{} 不是这次要采的页面，跳过 {query}", payload.page);
+        return Ok(());
+    };
+    // X 的网页常改，收到了什么、解析出几张都记进日志，采不到图时看日志就知道是哪一步没对上。
+    let posts = sources::x::parse_posts(&payload.body, Some(&capture)).inspect_err(|err| {
+        log::warn!("X 采集：{} 的 {query} 解析失败：{err}", payload.page);
+    })?;
+    log::info!("X 采集：{} 的 {query} 里有 {} 张图", payload.page, posts.len());
     if !posts.is_empty() {
         app.emit("x-posts", PostsPayload { posts, kind: capture.kind() })
             .map_err(|err| AppError::Internal(err.to_string()))?;
