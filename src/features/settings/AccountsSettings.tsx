@@ -20,7 +20,7 @@ import {
   type AccountView,
   type KeyStorage,
   type LoginCheck,
-  type LoginOpen,
+  type PopupOpen,
 } from "../../lib/settings";
 
 interface SiteText {
@@ -230,7 +230,7 @@ interface LoginText {
   /** 保存登录状态的 Cookie。 */
   cookie: string;
   browserUrl: string;
-  open: () => Promise<LoginOpen>;
+  open: () => Promise<PopupOpen>;
   check: () => Promise<LoginCheck>;
 }
 

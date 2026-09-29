@@ -997,12 +997,50 @@ impl LoginSite {
     }
 }
 
+/// 打开弹出窗口（登录、X 采集）的结果。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LoginOpen {
+pub struct PopupOpen {
     pub proxy_applied: bool,
-    /// 设了代理但登录窗口用不上，改为直连。
+    /// 设了代理但窗口用不上，改为直连。
     pub proxy_fallback: bool,
+}
+
+/// 弹出的站点窗口（Pixiv、Kemono 登录，X 采集）使用「设置 → 网络」里的代理，代理用不上时退回直连。
+///
+/// Windows 的 WebView2 把代理写在浏览器进程的启动参数里，同一个数据目录只能有一套启动参数；主窗口不带代理、
+/// 占着默认目录，带代理的窗口在那里建不起来，所以弹出窗口各用自己的数据目录。macOS 的代理设在每个窗口
+/// 自己的数据存储上，不用分目录。
+fn open_popup<F>(app: &AppHandle, state: &AppState, label: &str, url: url::Url, configure: F) -> Result<PopupOpen, AppError>
+where
+    F: for<'b> Fn(WebviewWindowBuilder<'b, tauri::Wry, AppHandle>) -> WebviewWindowBuilder<'b, tauri::Wry, AppHandle>,
+{
+    let proxy = webview_proxy(&state.settings().proxy)?;
+    let build = |proxy: Option<url::Url>| -> Result<(), AppError> {
+        let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url.clone()));
+        #[cfg(windows)]
+        let builder = {
+            let dir = app.path().app_local_data_dir().map_err(|err| AppError::Internal(err.to_string()))?;
+            builder.data_directory(dir.join("webviews").join(label))
+        };
+        let mut builder = configure(builder);
+        if let Some(proxy) = proxy {
+            builder = builder.proxy_url(proxy);
+        }
+        builder.build().map(|_| ()).map_err(|err| AppError::Internal(err.to_string()))
+    };
+    let Some(proxy) = proxy else {
+        build(None)?;
+        return Ok(PopupOpen { proxy_applied: false, proxy_fallback: false });
+    };
+    match build(Some(proxy)) {
+        Ok(()) => Ok(PopupOpen { proxy_applied: true, proxy_fallback: false }),
+        Err(err) => {
+            log::warn!("{label} 窗口使用代理失败，回退到直连：{err}");
+            build(None)?;
+            Ok(PopupOpen { proxy_applied: false, proxy_fallback: true })
+        }
+    }
 }
 
 fn webview_proxy(proxy: &ProxySettings) -> Result<Option<url::Url>, AppError> {
@@ -1052,24 +1090,25 @@ fn x_page(username: &str, target: XTarget) -> Result<url::Url, AppError> {
 
 /// 打开 X 媒体采集窗口。登录状态只留在这个窗口自己的 WebView Cookie 中。
 #[tauri::command]
-pub async fn x_capture_open(app: AppHandle, username: String, target: Option<XTarget>) -> Result<(), AppError> {
+pub async fn x_capture_open(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    username: String,
+    target: Option<XTarget>,
+) -> Result<PopupOpen, AppError> {
     let url = x_page(&username, target.unwrap_or_default())?;
     if let Some(window) = app.get_webview_window(x_bridge::WINDOW) {
         let _ = window.set_focus();
         window.navigate(url).map_err(|err| AppError::Internal(err.to_string()))?;
-        return Ok(());
+        return Ok(PopupOpen { proxy_applied: false, proxy_fallback: false });
     }
-    WebviewWindowBuilder::new(&app, x_bridge::WINDOW, WebviewUrl::External(url))
-        .title(tr!("X 媒体采集", "X media capture"))
-        .inner_size(1100.0, 760.0)
-        .initialization_script(x_bridge::INIT_SCRIPT)
-        .on_navigation(|url| {
-            url.scheme() == "https"
-                && url.host_str().and_then(Source::for_host) == Some(Source::X)
-        })
-        .build()
-        .map_err(|err| AppError::Internal(err.to_string()))?;
-    Ok(())
+    open_popup(&app, &state, x_bridge::WINDOW, url, |builder| {
+        builder
+            .title(tr!("X 媒体采集", "X media capture"))
+            .inner_size(1100.0, 760.0)
+            .initialization_script(x_bridge::INIT_SCRIPT)
+            .on_navigation(|url| url.scheme() == "https" && url.host_str().and_then(Source::for_host) == Some(Source::X))
+    })
 }
 
 #[tauri::command]
@@ -1088,29 +1127,18 @@ fn forget_login_cookies(app: &AppHandle, login: &LoginSite) {
     }
 }
 
-async fn open_login(app: &AppHandle, state: &AppState, login: LoginSite) -> Result<LoginOpen, AppError> {
+async fn open_login(app: &AppHandle, state: &AppState, login: LoginSite) -> Result<PopupOpen, AppError> {
     if let Some(window) = app.get_webview_window(login.window) {
         let _ = window.set_focus();
-        return Ok(LoginOpen { proxy_applied: false, proxy_fallback: false });
+        return Ok(PopupOpen { proxy_applied: false, proxy_fallback: false });
     }
     let url: url::Url = login.login_url.parse().map_err(|err: url::ParseError| AppError::Internal(err.to_string()))?;
     let title = match login.source {
         Source::Kemono => tr!("登录 Kemono", "Sign in to Kemono"),
         _ => tr!("登录 Pixiv", "Sign in to Pixiv"),
     };
-    let proxy = webview_proxy(&state.settings().proxy)?;
-    let had_proxy = proxy.is_some();
-    let make_builder = || {
-        WebviewWindowBuilder::new(app, login.window, WebviewUrl::External(url.clone())).title(title.clone()).inner_size(480.0, 720.0)
-    };
-    if let Some(proxy) = proxy {
-        match make_builder().proxy_url(proxy).build() {
-            Ok(_) => return Ok(LoginOpen { proxy_applied: true, proxy_fallback: false }),
-            Err(err) => log::warn!("{} 登录窗口使用代理失败，回退到直连：{err}", login.source.site_name()),
-        }
-    }
-    make_builder().build().map_err(|err| AppError::Internal(err.to_string()))?;
-    Ok(LoginOpen { proxy_applied: false, proxy_fallback: had_proxy })
+    // 登录窗口不留 Cookie：登录状态由软件保存，退出登录后再打开就是干净的登录页。
+    open_popup(app, state, login.window, url, |builder| builder.title(title.clone()).inner_size(480.0, 720.0).incognito(true))
 }
 
 /// 登录窗口现在的情况。
@@ -1159,7 +1187,7 @@ async fn check_login(app: &AppHandle, state: &AppState, login: LoginSite) -> Res
 }
 
 #[tauri::command]
-pub async fn pixiv_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<LoginOpen, AppError> {
+pub async fn pixiv_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<PopupOpen, AppError> {
     open_login(&app, &state, LoginSite::PIXIV).await
 }
 
@@ -1169,7 +1197,7 @@ pub async fn pixiv_login_check(app: AppHandle, state: State<'_, AppState>) -> Re
 }
 
 #[tauri::command]
-pub async fn kemono_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<LoginOpen, AppError> {
+pub async fn kemono_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<PopupOpen, AppError> {
     open_login(&app, &state, LoginSite::KEMONO).await
 }
 
@@ -1223,9 +1251,9 @@ pub fn proxy_save(app: AppHandle, state: State<'_, AppState>, proxy: ProxySettin
     proxy.validate()?;
     state.net.apply_proxy(&proxy)?;
     state.update_settings(|settings| settings.proxy = proxy.clone())?;
-    // WebView 的代理只能在创建窗口时设置；让下一次登录使用新代理。
-    for login in [LoginSite::PIXIV, LoginSite::KEMONO] {
-        if let Some(window) = app.get_webview_window(login.window) {
+    // WebView 的代理只能在创建窗口时设置；关掉弹出窗口，下次打开时用新代理。
+    for label in [LoginSite::PIXIV.window, LoginSite::KEMONO.window, x_bridge::WINDOW] {
+        if let Some(window) = app.get_webview_window(label) {
             let _ = window.close();
         }
     }

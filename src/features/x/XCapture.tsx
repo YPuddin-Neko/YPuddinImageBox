@@ -43,9 +43,13 @@ export function XCapture({ active }: { active: boolean }) {
       setPosts([]);
       clearPicks();
       setSelected(null);
-      await xCaptureOpen(username);
+      const result = await xCaptureOpen(username);
       setOpened(true);
-      setNotice(t("X 媒体窗口已打开，页面滚动时会自动收集图片"));
+      setNotice(
+        result.proxyFallback
+          ? t("采集窗口未能使用当前代理，已回退直连")
+          : t("X 媒体窗口已打开，页面滚动时会自动收集图片"),
+      );
     } catch (error) {
       setNotice(errorMessage(error));
     }

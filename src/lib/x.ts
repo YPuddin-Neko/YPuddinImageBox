@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { Post } from "./ipc";
+import type { PopupOpen } from "./settings";
 
 /** 采集窗口打开的页面：用户的媒体，或自己的喜欢、书签（收藏页用）。 */
 export type XTarget = "media" | "likes" | "bookmarks";
@@ -13,5 +14,5 @@ export interface XPostsPayload {
 
 /** 书签页只有自己能看，不用填用户名。 */
 export const xCaptureOpen = (username: string, target: XTarget = "media") =>
-  invoke<void>("x_capture_open", { username, target });
+  invoke<PopupOpen>("x_capture_open", { username, target });
 export const xCaptureClose = () => invoke<void>("x_capture_close");

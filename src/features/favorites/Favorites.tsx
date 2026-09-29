@@ -288,9 +288,13 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const openX = async (event?: FormEvent) => {
     event?.preventDefault();
     try {
-      await xCaptureOpen(xHandle, xKind);
+      const result = await xCaptureOpen(xHandle, xKind);
       if (xKind === "likes") remember(X_HANDLE_KEY, xHandle.trim());
-      setToast({ message: t("采集窗口已打开，页面滚动时会自动收集图片") });
+      setToast({
+        message: result.proxyFallback
+          ? t("采集窗口未能使用当前代理，已回退直连")
+          : t("采集窗口已打开，页面滚动时会自动收集图片"),
+      });
     } catch (err) {
       setToast({ message: errorMessage(err) });
     }

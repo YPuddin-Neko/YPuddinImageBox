@@ -167,6 +167,7 @@
   "书签不用填用户名": "Bookmarks don't need a username",
   "打开采集窗口": "Open capture window",
   "采集窗口已打开，页面滚动时会自动收集图片": "Capture window opened. Images are collected as the page scrolls.",
+  "采集窗口未能使用当前代理，已回退直连": "The capture window couldn't use the current proxy and switched to a direct connection.",
   "在采集窗口里打开你的喜欢": "Open your likes in the capture window",
   "在采集窗口里打开你的书签": "Open your bookmarks in the capture window",
   "窗口里登录 X 后，页面滚动时会自动收集图片，视频暂不收集。": "After you sign in to X in that window, images are collected as the page scrolls. Videos aren't collected yet.",

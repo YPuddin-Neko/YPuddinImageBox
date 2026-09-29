@@ -39,16 +39,16 @@ export const accountKeyStorage = (storage: KeyStorage) => invoke<AccountsInfo>("
 /** 登录窗口（Pixiv、Kemono）的情况：还在等、被关掉了，或者已经登录（账号已保存）。 */
 export type LoginCheck = { status: "waiting" } | { status: "closed" } | { status: "signedIn"; info: AccountsInfo };
 
-/** 打开站点的登录页；已经开着时切到前面。 */
-export interface LoginOpen {
+/** 打开弹出窗口（登录页、X 采集）的结果；已经开着时切到前面。 */
+export interface PopupOpen {
   proxyApplied: boolean;
-  /** 设了代理但登录窗口用不上，改为直连。 */
+  /** 设了代理但窗口用不上，改为直连。 */
   proxyFallback: boolean;
 }
 
-export const pixivLoginOpen = () => invoke<LoginOpen>("pixiv_login_open");
+export const pixivLoginOpen = () => invoke<PopupOpen>("pixiv_login_open");
 export const pixivLoginCheck = () => invoke<LoginCheck>("pixiv_login_check");
-export const kemonoLoginOpen = () => invoke<LoginOpen>("kemono_login_open");
+export const kemonoLoginOpen = () => invoke<PopupOpen>("kemono_login_open");
 export const kemonoLoginCheck = () => invoke<LoginCheck>("kemono_login_check");
 
 export const proxyInfo = () => invoke<ProxySettings>("proxy_info");
