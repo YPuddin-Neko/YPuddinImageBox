@@ -528,7 +528,7 @@ button:disabled {
   opacity: 1;
 }
 
-/* 卡片图片右下角的放大入口。 */
+/* 卡片图片右下角的放大入口。和勾选框一样，鼠标移到卡片上才出现。 */
 .card-view {
   position: absolute;
   right: 8px;
@@ -543,15 +543,19 @@ button:disabled {
   border-radius: 50%;
   background: rgba(10, 12, 18, 0.72);
   color: #fff;
-  opacity: 0.9;
+  opacity: 0;
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   transition: opacity 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
 }
 
-.card-view:hover,
+.card:hover .card-view,
 .card-view:focus-visible {
   opacity: 1;
+}
+
+.card-view:hover,
+.card-view:focus-visible {
   background: var(--accent);
   color: var(--accent-fg);
   transform: scale(1.06);
