@@ -7,8 +7,8 @@ export const MOD = isMac ? "⌘" : "Ctrl";
 
 export const hasMod = (event: KeyboardEvent) => (isMac ? event.metaKey : event.ctrlKey) && !event.altKey;
 
-/** 开着对话框时，除了对话框自己的按键，快捷键都不生效。 */
-export const dialogOpen = () => document.querySelector(".dialog-backdrop") !== null;
+/** 开着对话框或图片查看器时，除了它们自己的按键，快捷键都不生效。 */
+export const dialogOpen = () => document.querySelector(".dialog-backdrop, .image-viewer") !== null;
 
 /** 正在输入（包括输入法选字）、开着对话框或下拉菜单时，列表上的快捷键不生效。 */
 function blocked(event: KeyboardEvent): boolean {
