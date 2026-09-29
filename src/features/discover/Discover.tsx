@@ -883,6 +883,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
       <ImageViewer
         post={viewerPost}
         posts={posts}
+        useSample
         onClose={() => setViewerPost(null)}
         onChange={(post) => {
           setSelected(postKey(post));

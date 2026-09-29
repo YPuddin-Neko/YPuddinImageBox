@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent, type WheelEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent, type WheelEvent } from "react";
 
 import { imageSrc, postNumber, type Post } from "../lib/ipc";
 import { t } from "../lib/i18n";
@@ -13,7 +13,7 @@ interface ImageViewerProps {
   useSample?: boolean;
 }
 
-const MIN_ZOOM = 0.5;
+const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 4;
 type LoadPhase = "loading" | "leaving" | "failed" | null;
 
@@ -23,6 +23,8 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
   const [loadPhase, setLoadPhase] = useState<LoadPhase>(null);
   const drag = useRef<{ pointerId: number; x: number; y: number; startX: number; startY: number } | null>(null);
   const loadTimer = useRef<number | undefined>(undefined);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const index = post ? posts.findIndex((item) => item.source === post.source && item.id === post.id) : -1;
   const src = post ? imageSrc(useSample ? post.sampleUrl ?? post.thumbUrl : post.fileUrl ?? post.sampleUrl ?? post.thumbUrl) : undefined;
 
@@ -32,19 +34,46 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
     setOffset({ x: 0, y: 0 });
   }, [post?.source, post?.id]);
 
-  useEffect(() => {
-    window.clearTimeout(loadTimer.current);
-    setLoadPhase(src ? "loading" : "failed");
-    return () => window.clearTimeout(loadTimer.current);
-  }, [src]);
+  const fitToWindow = useCallback(() => {
+    const image = imageRef.current;
+    const stage = stageRef.current;
+    if (!image?.naturalWidth || !image.naturalHeight || !stage) return;
+    const width = Math.max(1, stage.clientWidth - 32);
+    const height = Math.max(1, stage.clientHeight - 32);
+    const fit = Math.min(width / image.naturalWidth, height / image.naturalHeight);
+    setZoom(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fit)));
+    setOffset({ x: 0, y: 0 });
+  }, []);
 
-  const finishLoading = (failed: boolean) => {
-    setLoadPhase(failed ? "failed" : "leaving");
-    if (!failed) {
+  const finishLoading = useCallback(
+    (failed: boolean) => {
+      if (failed) {
+        setLoadPhase("failed");
+        return;
+      }
+      fitToWindow();
+      setLoadPhase("leaving");
       window.clearTimeout(loadTimer.current);
       loadTimer.current = window.setTimeout(() => setLoadPhase(null), 220);
+    },
+    [fitToWindow],
+  );
+
+  useEffect(() => {
+    window.clearTimeout(loadTimer.current);
+    const image = imageRef.current;
+    if (src && image?.complete && image.currentSrc === src) {
+      if (image.naturalWidth > 0) {
+        fitToWindow();
+        setLoadPhase(null);
+      } else {
+        setLoadPhase("failed");
+      }
+    } else {
+      setLoadPhase(src ? "loading" : "failed");
     }
-  };
+    return () => window.clearTimeout(loadTimer.current);
+  }, [fitToWindow, src]);
 
   useEffect(() => {
     if (!post) return;
@@ -52,23 +81,15 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
       if (event.key === "Escape") onClose();
       if (event.key === "ArrowLeft" && index > 0) onChange(posts[index - 1]);
       if (event.key === "ArrowRight" && index >= 0 && index < posts.length - 1) onChange(posts[index + 1]);
-      if (event.key === "0") {
-        setZoom(1);
-        setOffset({ x: 0, y: 0 });
-      }
+      if (event.key === "0") fitToWindow();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [index, onChange, onClose, post, posts]);
+  }, [fitToWindow, index, onChange, onClose, post, posts]);
 
   if (!post) return null;
   const changeZoom = (delta: number) => {
     setZoom((current) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round((current + delta) * 4) / 4)));
-    setOffset({ x: 0, y: 0 });
-  };
-  const reset = () => {
-    setZoom(1);
-    setOffset({ x: 0, y: 0 });
   };
   const wheel = (event: WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -98,10 +119,10 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
             <button type="button" className="viewer-btn" onClick={() => changeZoom(-0.25)} aria-label="缩小" title="缩小">
               <Icon name="zoomOut" size={17} />
             </button>
-            <button type="button" className="viewer-btn" onClick={reset} aria-label={t("适应窗口")} title={t("适应窗口")}>
+            <button type="button" className="viewer-btn" onClick={fitToWindow} aria-label={t("适应窗口")} title={t("适应窗口")}>
               <Icon name="fit" size={17} />
             </button>
-            <button type="button" className="viewer-zoom" onClick={reset} title="重置缩放">
+            <button type="button" className="viewer-zoom" onClick={fitToWindow} title="适应窗口">
               {Math.round(zoom * 100)}%
             </button>
             <button type="button" className="viewer-btn" onClick={() => changeZoom(0.25)} aria-label="放大" title="放大">
@@ -112,39 +133,43 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
             </button>
           </div>
         </header>
-        <div className="image-viewer-stage" onWheel={wheel}>
+        <div ref={stageRef} className="image-viewer-stage" onWheel={wheel}>
           {index > 0 && (
             <button type="button" className="viewer-nav prev" onClick={() => onChange(posts[index - 1])} aria-label="上一张">
               <Icon name="chevronLeft" size={24} />
             </button>
           )}
-          <img
-            className={`image-viewer-image is-draggable${loadPhase === "loading" ? " is-loading" : ""}`}
-            src={src}
-            alt={`#${postNumber(post)}`}
-            draggable={false}
-            style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
-            onPointerDown={pointerDown}
-            onPointerMove={pointerMove}
-            onPointerUp={pointerUp}
-            onPointerCancel={pointerUp}
-            onLoad={() => {
-              finishLoading(false);
-            }}
-            onError={() => {
-              finishLoading(true);
-            }}
-          />
+          <div
+            className={`image-viewer-canvas${loadPhase === "loading" ? " is-loading" : ""}`}
+            style={{
+              transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
+              "--viewer-inverse-zoom": String(1 / zoom),
+            } as CSSProperties}
+          >
+            <img
+              ref={imageRef}
+              className={`image-viewer-image is-draggable${loadPhase === "loading" ? " is-loading" : ""}`}
+              src={src}
+              alt={`#${postNumber(post)}`}
+              draggable={false}
+              onPointerDown={pointerDown}
+              onPointerMove={pointerMove}
+              onPointerUp={pointerUp}
+              onPointerCancel={pointerUp}
+              onLoad={() => finishLoading(false)}
+              onError={() => finishLoading(true)}
+            />
+            {loadPhase && (
+              <div className={`image-viewer-load${loadPhase === "leaving" ? " is-leaving" : ""}${loadPhase === "failed" ? " is-failed" : ""}`} role="status">
+                {loadPhase === "loading" && <span className="image-viewer-spinner" aria-hidden="true" />}
+                <span>{loadPhase === "failed" ? t("图片加载失败") : t("正在加载…")}</span>
+              </div>
+            )}
+          </div>
           {index >= 0 && index < posts.length - 1 && (
             <button type="button" className="viewer-nav next" onClick={() => onChange(posts[index + 1])} aria-label="下一张">
               <Icon name="chevronRight" size={24} />
             </button>
-          )}
-          {loadPhase && (
-            <div className={`image-viewer-load${loadPhase === "leaving" ? " is-leaving" : ""}${loadPhase === "failed" ? " is-failed" : ""}`} role="status">
-              {loadPhase === "loading" && <span className="image-viewer-spinner" aria-hidden="true" />}
-              <span>{loadPhase === "failed" ? t("图片加载失败") : t("正在加载…")}</span>
-            </div>
           )}
         </div>
       </div>

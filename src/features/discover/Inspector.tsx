@@ -69,17 +69,17 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice, o
               loading="eager"
               fit="contain"
             />
+            {onView && (
+              <button type="button" className="insp-view" onClick={onView} aria-label={t("放大查看")} title={t("放大查看")}>
+                <Icon name="zoomIn" size={15} />
+              </button>
+            )}
           </div>
           <figcaption className="insp-res">
             {post.width} × {post.height}
             {post.fileExt ? ` · ${post.fileExt.toUpperCase()}` : ""}
             {post.pages ? ` · ${t("{n} 页", { n: post.pages })}` : ""}
           </figcaption>
-          {onView && (
-            <button type="button" className="insp-view" onClick={onView} aria-label={t("放大查看")} title={t("放大查看")}>
-              <Icon name="zoomIn" size={15} />
-            </button>
-          )}
         </figure>
         {notice && <p className="insp-notice">{notice}</p>}
         <div className="insp-id">

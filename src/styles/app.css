@@ -1200,31 +1200,44 @@ code {
 }
 
 .image-viewer {
-  width: min(1400px, calc(100vw - 48px));
-  height: min(900px, calc(100vh - 48px));
+  position: relative;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  border: 1px solid var(--line-2);
-  border-radius: 16px;
-  background: var(--panel);
-  box-shadow: var(--shadow);
+  overflow: visible;
+  background: transparent;
 }
 
 .image-viewer-toolbar {
-  height: 48px;
+  position: absolute;
+  top: 20px;
+  left: 24px;
+  right: 24px;
+  z-index: 10;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex: none;
-  padding: 0 12px 0 18px;
-  border-bottom: 1px solid var(--line);
+  padding: 0;
+  border: 0;
+  pointer-events: none;
 }
 
 .image-viewer-title {
+  max-width: min(52vw, 620px);
+  overflow: hidden;
+  padding: 9px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(18, 21, 30, 0.78);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
   color: var(--fg-1);
   font-size: 13px;
   font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: auto;
 }
 
 .image-viewer-title small {
@@ -1237,6 +1250,7 @@ code {
   display: flex;
   align-items: center;
   gap: 4px;
+  pointer-events: auto;
 }
 
 .viewer-btn,
@@ -1245,9 +1259,10 @@ code {
   display: grid;
   place-items: center;
   padding: 0 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(18, 21, 30, 0.78);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
   color: var(--fg-2);
 }
 
@@ -1267,6 +1282,7 @@ code {
 .image-viewer-stage {
   position: relative;
   flex: 1;
+  width: 100%;
   min-height: 0;
   display: grid;
   place-items: center;
@@ -1274,9 +1290,24 @@ code {
   background: #080a10;
 }
 
+.image-viewer-canvas {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  transform-origin: center;
+}
+
+.image-viewer-canvas.is-loading {
+  min-width: 180px;
+  min-height: 80px;
+}
+
 .image-viewer-image {
-  max-width: 100%;
-  max-height: 100%;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
@@ -1301,7 +1332,6 @@ code {
   position: absolute;
   left: 50%;
   bottom: 18px;
-  right: auto;
   z-index: 3;
   display: inline-flex;
   align-items: center;
@@ -1315,7 +1345,7 @@ code {
   font-size: 12px;
   font-weight: 700;
   opacity: 0;
-  transform: translate(-50%, 22px);
+  transform: translate(-50%, 22px) scale(var(--viewer-inverse-zoom, 1));
   animation: image-viewer-load-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
 }
 
@@ -1345,18 +1375,18 @@ code {
 @keyframes image-viewer-load-in {
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translate(-50%, 0) scale(var(--viewer-inverse-zoom, 1));
   }
 }
 
 @keyframes image-viewer-load-out {
   from {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translate(-50%, 0) scale(var(--viewer-inverse-zoom, 1));
   }
   to {
     opacity: 0;
-    transform: translate(-50%, 22px);
+    transform: translate(-50%, 22px) scale(var(--viewer-inverse-zoom, 1));
   }
 }
 
