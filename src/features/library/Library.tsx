@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { FanStack } from "../../components/FanStack";
 import { Icon } from "../../components/Icon";
+import { Toast, useToast } from "../../components/Toast";
 import { Select } from "../../components/Select";
 import { EVENTS } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
@@ -13,6 +15,7 @@ import {
   groupSorts,
   groupTotal,
   libraryFolders,
+  libraryImport,
   libraryGroups,
   type Folder,
   type Group,
@@ -58,6 +61,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
     yandere: "general",
     pixiv: "artist",
     x: "artist",
+    custom: "artist",
   });
   const [sort, setSort] = useState<GroupSort>("recent");
 
@@ -121,6 +125,7 @@ function FolderShelf({
 }) {
   const [folders, setFolders] = useState<Folder[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useToast();
 
   const load = useCallback(() => {
     libraryFolders().then(
@@ -136,9 +141,29 @@ function FolderShelf({
   useLibraryChanges(load);
 
   const total = folders?.reduce((sum, folder) => sum + folder.count, 0) ?? 0;
+  const importImages = async () => {
+    try {
+      const selected = await open({
+        multiple: true,
+        directory: false,
+        filters: [{ name: t("图片文件"), extensions: ["jpg", "jpeg", "png", "gif", "webp"] }],
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      const result = await libraryImport(paths);
+      setNotice(
+        result.skipped > 0
+          ? t("已导入 {n} 张，跳过 {skipped} 个文件", { n: formatCount(result.imported), skipped: formatCount(result.skipped) })
+          : t("已导入 {n} 张图片", { n: formatCount(result.imported) }),
+      );
+      load();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
   return (
-    <div className="page">
-      <header className="page-head" data-tauri-drag-region>
+    <div className="page library-page">
+      <header className="page-head library-page-head" data-tauri-drag-region>
         <div className="page-title">
           <h1>{t("图库")}</h1>
           <p>{folders ? t("{n} 张图，按来源分成文件夹，封面是最近下载的几张。", { n: formatCount(total) }) : " "}</p>
@@ -160,40 +185,47 @@ function FolderShelf({
       )}
 
       {folders && (
-        <div className="shelf page-block" data-size="lg">
-          {folders.map((folder) => (
-            <button
-              key={folder.source}
-              type="button"
-              className="stack-card"
-              onClick={() => onOpen(folder.source)}
-              disabled={folder.count === 0}
-            >
-              <FanStack covers={folder.covers} max={FOLDER_COVERS} />
-              <span className="stack-meta">
-                <span className="stack-title">{SOURCE_LABEL[folder.source]}</span>
-                <span className="stack-count">{t("{n} 张", { n: formatCount(folder.count) })}</span>
-              </span>
-              <span className="stack-sub">
-                {folder.latestAt === null
-                  ? t("还没有下载的图片")
-                  : t("最近下载 {time}", { time: formatTime(folder.latestAt) })}
-              </span>
-            </button>
-          ))}
-          {/* 自定义导入：导入本地图片的功能接上之前，这个文件夹是空的。 */}
-          <div className="stack-card" aria-disabled="true">
-            <FanStack covers={[]} max={FOLDER_COVERS} />
-            <span className="stack-meta">
-              <span className="stack-title">{t("自定义导入")}</span>
-              <span className="stack-count">{t("{n} 张", { n: 0 })}</span>
-            </span>
-            <span className="stack-sub">{t("还没有导入的图片")}</span>
-          </div>
+        <div className="shelf library-shelf" data-size="lg">
+          {folders.map((folder) => {
+            const content = (
+              <>
+                <FanStack covers={folder.covers} max={FOLDER_COVERS} />
+                <span className="stack-meta">
+                  <span className="stack-title">{SOURCE_LABEL[folder.source]}</span>
+                  <span className="stack-count">{t("{n} 张", { n: formatCount(folder.count) })}</span>
+                </span>
+                <span className="stack-sub">
+                  {folder.latestAt === null
+                    ? folder.source === "custom" ? t("还没有导入的图片") : t("还没有下载的图片")
+                    : t("最近下载 {time}", { time: formatTime(folder.latestAt) })}
+                </span>
+              </>
+            );
+            if (folder.source === "custom") {
+              return (
+                <div key={folder.source} className="stack-card stack-card-custom">
+                  {content}
+                  <div className="stack-custom-actions">
+                    {folder.count > 0 && <button type="button" className="btn ghost" onClick={() => onOpen(folder.source)}>{t("查看图片")}</button>}
+                    <button type="button" className="btn" onClick={() => void importImages()}>
+                      <Icon name="folder" size={15} />
+                      {t("导入图片")}
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <button key={folder.source} type="button" className="stack-card" onClick={() => onOpen(folder.source)} disabled={folder.count === 0}>
+                {content}
+              </button>
+            );
+          })}
         </div>
       )}
 
       {folders && total === 0 && !error && <EmptyLibrary onNavigate={onNavigate} title={t("图库里还没有图片")} />}
+      <Toast message={notice} />
     </div>
   );
 }

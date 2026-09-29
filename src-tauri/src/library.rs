@@ -1521,6 +1521,7 @@ mod tests {
                 (Source::Yandere, 0),
                 (Source::Pixiv, 0),
                 (Source::X, 0),
+                (Source::Custom, 0),
             ]
         );
         let ids: Vec<u64> = folders[0].covers.iter().map(|c| c.post_id).collect();

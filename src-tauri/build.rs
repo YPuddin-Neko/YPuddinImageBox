@@ -13,6 +13,7 @@ fn main() {
                 "clear_finished_jobs",
                 "library_list",
                 "library_folders",
+                "library_import",
                 "library_groups",
                 "library_delete",
                 "accounts_info",

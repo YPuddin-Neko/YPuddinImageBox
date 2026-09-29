@@ -2,7 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 import { t, type Msg } from "./i18n";
 
-export type Source = "danbooru" | "gelbooru" | "yandere" | "pixiv" | "x";
+export type Source = "danbooru" | "gelbooru" | "yandere" | "pixiv" | "x" | "custom";
 export type Rating = "general" | "sensitive" | "questionable" | "explicit";
 
 export const RATINGS: Rating[] = ["general", "sensitive", "questionable", "explicit"];
@@ -22,6 +22,7 @@ export const SOURCE_LABEL: Record<Source, string> = {
   yandere: "Yande.re",
   pixiv: "Pixiv",
   x: "X",
+  custom: "自定义导入",
 };
 
 /** 可直接请求接口的来源；X 使用单独的浏览器采集窗口。 */
@@ -57,6 +58,7 @@ const SITE_SORTS: Record<Source, RemoteSort[]> = {
   yandere: ["newest", "oldest", "score", "resolution"],
   pixiv: ["newest", "oldest"],
   x: [],
+  custom: [],
 };
 
 /** 几个站点一起搜时能合在一起排的，和 Rust 端的 `combined::can_merge` 一致。 */

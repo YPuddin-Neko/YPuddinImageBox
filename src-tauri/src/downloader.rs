@@ -650,7 +650,7 @@ pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
 }
 
 /// 把 tag 变成 Windows 和 macOS 都能用的文件夹名。
-fn safe_name(name: &str) -> String {
+pub(crate) fn safe_name(name: &str) -> String {
     const MAX_CHARS: usize = 100;
     let trim = |s: &str| s.trim_start().trim_end_matches(['.', ' ']).to_string();
     let cleaned: String = name

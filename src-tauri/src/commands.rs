@@ -1,5 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
@@ -25,7 +26,7 @@ fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
             let level = state.settings().accounts.danbooru.as_ref().and_then(|a| a.level.clone());
             Some(filter::danbooru_tag_limit(if signed_in { level.as_deref() } else { None }))
         }
-        Source::Gelbooru | Source::Yandere | Source::Pixiv | Source::X => None,
+        Source::Gelbooru | Source::Yandere | Source::Pixiv | Source::X | Source::Custom => None,
     }
 }
 
@@ -164,7 +165,7 @@ pub async fn search_sites(state: State<'_, AppState>, params: SitesSearchParams)
 /// 每个站点各取一批（合起来和单个站点一页差不多），按所选排序合成一列，规则见 [`combined`]。
 /// 一个站点出错不影响其他站点；第一页所有站点都出错时才整个报错。
 async fn combined_search(state: &AppState, params: SitesSearchParams) -> Result<SitesPage, AppError> {
-    let sources: Vec<Source> = Source::ALL.into_iter().filter(|source| params.sources.contains(source)).collect();
+    let sources: Vec<Source> = Source::REMOTE.into_iter().filter(|source| params.sources.contains(source)).collect();
     if sources.is_empty() {
         return Err(AppError::InvalidInput(tr!("至少选一个平台", "Choose at least one site")));
     }
@@ -348,6 +349,106 @@ pub async fn library_list(state: State<'_, AppState>, query: LibraryQuery) -> Re
 #[tauri::command]
 pub async fn library_folders(state: State<'_, AppState>) -> Result<Vec<Folder>, AppError> {
     Ok(state.library.folders().await?)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportOutcome {
+    pub imported: u32,
+    pub skipped: u32,
+}
+
+struct ImportedFile {
+    post: Post,
+    path: PathBuf,
+}
+
+fn import_id(md5: &str) -> u64 {
+    let mut bytes = [0u8; 8];
+    for (index, pair) in md5.as_bytes().chunks(2).take(8).enumerate() {
+        bytes[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap_or("00"), 16).unwrap_or(0);
+    }
+    let id = u64::from_be_bytes(bytes) & 0x7fff_ffff_ffff_ffff;
+    if id == 0 { 1 } else { id }
+}
+
+fn import_files(paths: Vec<PathBuf>, root: PathBuf) -> Result<(Vec<ImportedFile>, u32), AppError> {
+    let mut imported = Vec::new();
+    let mut skipped = 0;
+    for source in paths {
+        let Some(file_name) = source.file_name().map(|name| name.to_string_lossy().into_owned()) else {
+            skipped += 1;
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(&source) else {
+            skipped += 1;
+            continue;
+        };
+        let Ok(reader) = image::ImageReader::open(&source) else {
+            skipped += 1;
+            continue;
+        };
+        let Ok(reader) = reader.with_guessed_format() else {
+            skipped += 1;
+            continue;
+        };
+        let Ok(image) = reader.decode() else {
+            skipped += 1;
+            continue;
+        };
+        let digest = Md5::digest(&bytes);
+        let md5: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let parent = source.parent().and_then(Path::file_name).map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| "导入".into());
+        let ext = source.extension().and_then(|ext| ext.to_str()).unwrap_or("jpg").to_ascii_lowercase();
+        let target = root
+            .join(Source::Custom.site_name())
+            .join(crate::downloader::safe_name(&parent))
+            .join(crate::downloader::safe_name(&file_name));
+        if source != target {
+            if let Some(parent) = target.parent() { std::fs::create_dir_all(parent).map_err(|err| AppError::Internal(err.to_string()))?; }
+            std::fs::copy(&source, &target).map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+        imported.push(ImportedFile {
+            post: Post {
+                source: Source::Custom,
+                id: import_id(&md5),
+                md5: Some(md5),
+                width: image.width(),
+                height: image.height(),
+                rating: None,
+                score: 0,
+                fav_count: None,
+                file_ext: ext,
+                file_size: Some(bytes.len() as u64),
+                file_url: None,
+                sample_url: None,
+                thumb_url: None,
+                created_at: None,
+                post_url: format!("file://{}", source.to_string_lossy()),
+                tags: sources::PostTags { artist: vec![parent], ..sources::PostTags::default() },
+                pages: None,
+            },
+            path: target,
+        });
+    }
+    Ok((imported, skipped))
+}
+
+#[tauri::command]
+pub async fn library_import(app: AppHandle, state: State<'_, AppState>, paths: Vec<String>) -> Result<ImportOutcome, AppError> {
+    if paths.is_empty() {
+        return Err(AppError::InvalidInput(tr!("没有选择图片", "No images selected")));
+    }
+    let root = state.storage().path(StorageKind::Images);
+    let (files, skipped) = blocking(move || import_files(paths.into_iter().map(PathBuf::from).collect(), root)).await?;
+    let mut imported = 0;
+    for file in files {
+        let id = file.post.id;
+        state.library.save_post(&file.post, &file.path, crate::library::now_ms()).await?;
+        let _ = app.emit("library-changed", serde_json::json!({ "source": "custom", "postId": id }));
+        imported += 1;
+    }
+    Ok(ImportOutcome { imported, skipped })
 }
 
 /// 文件夹里按画师、作品、角色或 tag 分的组。
@@ -758,6 +859,9 @@ async fn save_account(state: &AppState, source: Source, name: String, api_key: S
         Source::X => {
             return Err(AppError::InvalidInput(tr!("X 的登录在媒体采集窗口里完成", "Sign in to X in the media capture window")))
         }
+        Source::Custom => {
+            return Err(AppError::InvalidInput(tr!("自定义导入不能填写账号", "Custom imports don't use an account")))
+        }
     };
 
     let snapshot = state.settings().clone();
@@ -1066,6 +1170,7 @@ pub fn restart_app(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    use image::{Rgb, RgbImage};
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex, RwLock};
 
@@ -1105,6 +1210,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn imports_images_into_custom_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let source_dir = root.path().join("artist");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source = source_dir.join("sample.png");
+        RgbImage::from_pixel(12, 8, Rgb([20, 40, 60])).save(&source).unwrap();
+        let target_root = root.path().join("images");
+        let (files, skipped) = import_files(vec![source], target_root.clone()).unwrap();
+        assert_eq!(skipped, 0);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].post.source, Source::Custom);
+        assert_eq!(files[0].post.tags.artist, ["artist"]);
+        assert_eq!((files[0].post.width, files[0].post.height), (12, 8));
+        assert!(files[0].path.starts_with(target_root.join("自定义导入/artist")));
+        assert!(files[0].path.exists());
+    }
+
     /// 未登录时搜两个站点：Gelbooru 报缺账号、之后不再搜它，Danbooru 照常往下翻，几页接起来从新到旧。
     #[tokio::test]
     #[ignore = "需要网络，手动运行"]
@@ -1112,7 +1235,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = state(dir.path()).await;
         let params = |cursor| SitesSearchParams {
-            sources: Source::ALL.to_vec(),
+            sources: Source::REMOTE.to_vec(),
             tags: "scenery".into(),
             ratings: vec![Rating::General],
             sort: Sort::Newest,

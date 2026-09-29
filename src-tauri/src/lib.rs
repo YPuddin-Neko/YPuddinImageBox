@@ -425,6 +425,7 @@ pub fn run() {
             commands::clear_finished_jobs,
             commands::library_list,
             commands::library_folders,
+            commands::library_import,
             commands::library_groups,
             commands::library_delete,
             commands::accounts_info,

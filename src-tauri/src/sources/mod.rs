@@ -26,10 +26,11 @@ pub enum Source {
     Yandere,
     Pixiv,
     X,
+    Custom,
 }
 
 impl Source {
-    pub const ALL: [Source; 5] = [Source::Danbooru, Source::Gelbooru, Source::Yandere, Source::Pixiv, Source::X];
+    pub const ALL: [Source; 6] = [Source::Danbooru, Source::Gelbooru, Source::Yandere, Source::Pixiv, Source::X, Source::Custom];
     pub const REMOTE: [Source; 4] = [Source::Danbooru, Source::Gelbooru, Source::Yandere, Source::Pixiv];
 
     /// 数据库、文件夹名和图片路由里用的小写名称。
@@ -40,6 +41,7 @@ impl Source {
             Source::Yandere => "yandere",
             Source::Pixiv => "pixiv",
             Source::X => "x",
+            Source::Custom => "custom",
         }
     }
 
@@ -54,6 +56,7 @@ impl Source {
             Source::Yandere => "Yande.re",
             Source::Pixiv => "Pixiv",
             Source::X => "X",
+            Source::Custom => "自定义导入",
         }
     }
 
@@ -66,6 +69,7 @@ impl Source {
             // 网页和接口在 pixiv.net，图片在 i.pximg.net。
             Source::Pixiv => &["pixiv.net", "pximg.net"],
             Source::X => &["x.com", "twitter.com", "twimg.com"],
+            Source::Custom => &[],
         }
     }
 
@@ -76,6 +80,7 @@ impl Source {
             Source::Yandere => "https://yande.re/",
             Source::Pixiv => pixiv::REFERER_URL,
             Source::X => "https://x.com/",
+            Source::Custom => "file://",
         }
     }
 
@@ -96,6 +101,7 @@ impl Source {
             Source::Gelbooru | Source::Yandere => 100,
             Source::Pixiv => pixiv::PAGE_SIZE,
             Source::X => 40,
+            Source::Custom => 40,
         }
     }
 }
@@ -222,6 +228,9 @@ impl Sort {
             (Source::X, _) => {
                 let site = source.site_name();
                 return Err(AppError::InvalidInput(tr!("{site} 通过媒体采集窗口使用", "Use {site} through the media capture window")));
+            }
+            (Source::Custom, _) => {
+                return Err(AppError::InvalidInput(tr!("自定义导入不能用于站点搜索", "Custom imports can't be used for site searches")));
             }
             (Source::Gelbooru | Source::Yandere | Source::Pixiv, _) => {
                 let site = source.site_name();
@@ -441,6 +450,7 @@ impl Accounts {
             Source::Yandere => None,
             Source::Pixiv => self.pixiv.as_ref().map(|c| c.session.as_str()),
             Source::X => None,
+            Source::Custom => None,
         }
     }
 
@@ -457,6 +467,7 @@ impl Accounts {
             // Pixiv 存的「Key」是登录后的 PHPSESSID，账号的用户 id 从里面取。
             Source::Pixiv => self.pixiv = account.and_then(|(_, session)| pixiv::Credentials::from_session(&session)),
             Source::X => {}
+            Source::Custom => {}
         }
     }
 }
@@ -511,6 +522,7 @@ pub async fn fetch(
         },
         Source::Pixiv => pixiv::search(net, accounts.pixiv.as_ref(), query, page).await,
         Source::X => Err(AppError::InvalidInput(tr!("X 通过媒体采集窗口使用", "Use X through the media capture window"))),
+        Source::Custom => Err(AppError::InvalidInput(tr!("自定义导入不能用于站点搜索", "Custom imports can't be used for site searches"))),
     }
 }
 
@@ -522,6 +534,7 @@ pub async fn count(net: &Net, accounts: &Accounts, source: Source, query: &str) 
         Source::Yandere => moebooru::count(net, query).await,
         Source::Pixiv => pixiv::count(net, accounts.pixiv.as_ref(), query).await,
         Source::X => Err(AppError::InvalidInput(tr!("X 通过媒体采集窗口使用", "Use X through the media capture window"))),
+        Source::Custom => Err(AppError::InvalidInput(tr!("自定义导入不能用于站点搜索", "Custom imports can't be used for site searches"))),
     }
 }
 
@@ -551,6 +564,7 @@ pub fn build_query(source: Source, tags: &str, ratings: &[Rating]) -> String {
                 parts.push(format!("rating:{}", names.join(",")));
             }
             Source::X => {}
+            Source::Custom => {}
         }
     }
     parts.join(" ")

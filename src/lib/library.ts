@@ -22,6 +22,11 @@ export interface DeleteOutcome {
   failed: { postId: number; message: string }[];
 }
 
+export interface ImportOutcome {
+  imported: number;
+  skipped: number;
+}
+
 /** 图库的排序；默认最近下载的在前。 */
 export type LibrarySort =
   | "downloaded"
@@ -121,6 +126,7 @@ const SOURCE_GROUP_KINDS: Record<Source, GroupKind[]> = {
   yandere: ["general"],
   pixiv: ["artist", "general"],
   x: ["artist", "general"],
+  custom: ["artist", "general"],
 };
 
 export function groupKinds(source: Source) {
@@ -140,6 +146,7 @@ export function groupTotal(kind: GroupKind, total: number): string {
 }
 
 export const libraryFolders = () => invoke<Folder[]>("library_folders");
+export const libraryImport = (paths: string[]) => invoke<ImportOutcome>("library_import", { paths });
 export const libraryGroups = (query: { source: Source; kind: GroupKind; sort: GroupSort; offset: number; limit: number }) =>
   invoke<GroupPage>("library_groups", { query });
 

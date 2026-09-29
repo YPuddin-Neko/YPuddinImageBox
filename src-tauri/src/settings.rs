@@ -108,6 +108,7 @@ impl AccountNames {
             Source::Pixiv => self.pixiv.as_ref(),
             Source::Yandere => None,
             Source::X => None,
+            Source::Custom => None,
         }
     }
 
@@ -118,6 +119,7 @@ impl AccountNames {
             Source::Pixiv => self.pixiv.as_mut(),
             Source::Yandere => None,
             Source::X => None,
+            Source::Custom => None,
         }
     }
 
@@ -129,6 +131,7 @@ impl AccountNames {
             // 不用登录的站点没有账号可存。
             Source::Yandere => {}
             Source::X => {}
+            Source::Custom => {}
         }
     }
 }

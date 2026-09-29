@@ -13,6 +13,7 @@ permissions = [
   "allow-clear-finished-jobs",
   "allow-library-list",
   "allow-library-folders",
+  "allow-library-import",
   "allow-library-groups",
   "allow-library-delete",
   "allow-accounts-info",
