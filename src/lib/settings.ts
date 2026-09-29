@@ -5,7 +5,7 @@ import type { Source } from "./ipc";
 
 export interface AccountView {
   source: Source;
-  /** 用户名（Gelbooru/Rule34.xxx 是 User ID，Pixiv 是账号昵称）；未登录时为 null。 */
+  /** 用户名（Gelbooru/Rule34.xxx 是 User ID，Pixiv 是账号昵称，Yande.re 只存用户名）；未登录时为 null。 */
   name: string | null;
   level: string | null;
   /** 设置里记着账号，但钥匙串里找不到 API Key。 */
@@ -36,17 +36,20 @@ export const accountRemove = (source: Source) => invoke<AccountsInfo>("account_r
 /** 切换保存方式，已保存的 Key 一起搬过去。 */
 export const accountKeyStorage = (storage: KeyStorage) => invoke<AccountsInfo>("account_key_storage", { storage });
 
-/** Pixiv 登录窗口的情况：还在等、被关掉了，或者已经登录（账号已保存）。 */
-export type PixivLogin = { status: "waiting" } | { status: "closed" } | { status: "signedIn"; info: AccountsInfo };
+/** 登录窗口（Pixiv、Kemono）的情况：还在等、被关掉了，或者已经登录（账号已保存）。 */
+export type LoginCheck = { status: "waiting" } | { status: "closed" } | { status: "signedIn"; info: AccountsInfo };
 
-/** 打开 Pixiv 的登录页；已经开着时切到前面。 */
-export interface PixivLoginOpen {
+/** 打开站点的登录页；已经开着时切到前面。 */
+export interface LoginOpen {
   proxyApplied: boolean;
+  /** 设了代理但登录窗口用不上，改为直连。 */
   proxyFallback: boolean;
 }
 
-export const pixivLoginOpen = () => invoke<PixivLoginOpen>("pixiv_login_open");
-export const pixivLoginCheck = () => invoke<PixivLogin>("pixiv_login_check");
+export const pixivLoginOpen = () => invoke<LoginOpen>("pixiv_login_open");
+export const pixivLoginCheck = () => invoke<LoginCheck>("pixiv_login_check");
+export const kemonoLoginOpen = () => invoke<LoginOpen>("kemono_login_open");
+export const kemonoLoginCheck = () => invoke<LoginCheck>("kemono_login_check");
 
 export const proxyInfo = () => invoke<ProxySettings>("proxy_info");
 export const proxySave = (proxy: ProxySettings) => invoke<ProxySettings>("proxy_save", { proxy });

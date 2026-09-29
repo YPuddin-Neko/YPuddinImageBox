@@ -7,6 +7,7 @@ import { Discover } from "./features/discover/Discover";
 import { Downloads } from "./features/downloads/Downloads";
 import { useDownloads } from "./features/downloads/context";
 import { DownloadsProvider } from "./features/downloads/DownloadsProvider";
+import { Favorites } from "./features/favorites/Favorites";
 import { Library } from "./features/library/Library";
 import { Settings, type SettingsSection } from "./features/settings/Settings";
 import { Subscriptions } from "./features/subscriptions/Subscriptions";
@@ -43,12 +44,20 @@ function Shell() {
     setView(next);
   }, []);
 
-  // 全局快捷键：⌘/Ctrl + 1～4 切换页面，⌘/Ctrl + , 打开设置，⌘/Ctrl + F 跳到搜索框。输入框里也能用。
+  // 全局快捷键：⌘/Ctrl + 1～6 按侧栏顺序切换页面，⌘/Ctrl + , 打开设置，⌘/Ctrl + F 跳到搜索框。输入框里也能用。
   useEffect(() => {
     const searchInput = () => document.querySelector<HTMLInputElement>('.view[aria-hidden="false"] .search-input');
     const onKey = (event: KeyboardEvent) => {
       if (!hasMod(event) || event.shiftKey || event.isComposing || dialogOpen()) return;
-      const pages: Record<string, View> = { "1": "discover", "2": "library", "3": "x", "4": "subscriptions", "5": "downloads", ",": "settings" };
+      const pages: Record<string, View> = {
+        "1": "discover",
+        "2": "favorites",
+        "3": "library",
+        "4": "x",
+        "5": "subscriptions",
+        "6": "downloads",
+        ",": "settings",
+      };
       const page = pages[event.key];
       if (page) {
         event.preventDefault();
@@ -79,6 +88,9 @@ function Shell() {
       <main className="app-main">
         <ViewPane active={view === "discover"}>
           <Discover active={view === "discover"} onNavigate={navigate} />
+        </ViewPane>
+        <ViewPane active={view === "favorites"}>
+          <Favorites active={view === "favorites"} onNavigate={navigate} />
         </ViewPane>
         <ViewPane active={view === "library"}>
           <Library active={view === "library"} onNavigate={navigate} />

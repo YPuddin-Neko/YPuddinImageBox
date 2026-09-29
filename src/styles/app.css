@@ -1454,6 +1454,67 @@ code {
   bottom: var(--viewer-dock);
 }
 
+/* ---------- 收藏 ---------- */
+
+/* 搜索框里写着是谁的收藏；没登录时是灰色的提示。和搜索框里的输入框同样大小。 */
+.favorites-who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 34px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.favorites-who[data-muted] {
+  color: var(--fg-3);
+  font-weight: 600;
+}
+
+/* Kemono 收藏的作者。列宽和间距与瀑布流一致，切换帖子和作者时列对得上。 */
+.creator-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.creator-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--raised);
+  text-align: left;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.creator-card:hover {
+  border-color: var(--line-2);
+  background: color-mix(in srgb, var(--fg-1) 4%, var(--raised));
+}
+
+.creator-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.creator-meta {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
 /* ---------- 设置 ---------- */
 
 .settings {

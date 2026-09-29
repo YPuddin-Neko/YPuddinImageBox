@@ -34,18 +34,18 @@ const languageOptions = (): { value: LanguageSetting; label: string }[] => [
 
 const SHORTCUTS: { keys: string[]; action: Msg }[] = [
   { keys: [MOD, "F"], action: "跳到搜索框" },
-  { keys: [MOD, "1～4"], action: "切换到发现、图库、订阅、下载" },
+  { keys: [MOD, "1～6"], action: "按侧栏顺序切换页面" },
   { keys: [MOD, ","], action: "打开设置" },
   { keys: ["←", "→"], action: "上一张、下一张" },
   { keys: ["空格"], action: "勾选或取消勾选当前这张" },
   { keys: [MOD, "A"], action: "勾选已加载的全部图片" },
   { keys: ["Esc"], action: "取消勾选" },
-  { keys: [MOD, "D"], action: "发现页：下载当前这张，有勾选时下载勾选的" },
+  { keys: [MOD, "D"], action: "发现、收藏：下载当前这张，有勾选时下载勾选的" },
   { keys: [isMac ? "⌫" : "Delete"], action: "图库：删除当前这张，有勾选时删除勾选的" },
 ];
 
 /** 快捷键里需要翻译的按键名称。 */
-const keyLabel = (key: string) => (key === "空格" || key === "1～4" ? t(key) : key);
+const keyLabel = (key: string) => (key === "空格" || key === "1～6" ? t(key) : key);
 
 export function GeneralSettings() {
   const [settings, setSettings] = useState<GeneralInfo | null>(null);

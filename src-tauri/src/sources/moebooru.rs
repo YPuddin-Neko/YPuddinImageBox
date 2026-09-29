@@ -1,12 +1,14 @@
 //! Yande.re（Moebooru）：`GET /post.json?tags=&page=&limit=`，每页最多 100 条，页码从 1 开始，不用登录。
 //! 帖子里的 tag 不带分类，全部归入「一般」。分级只有 s / q / e 三级，s（安全）包括一般和敏感。
 //! 上传时间是 Unix 秒；总数只有 `post.xml` 给（根节点的 `count` 属性）。
+//! 收藏记作 3 分的投票：某人的收藏是 `vote:3:用户名`，加 `order:vote` 按收藏先后排。
 
 use reqwest::header::ACCEPT;
 use serde::Deserialize;
 
 use super::{non_empty, split_tags, timestamp, Post, PostTags, Rating, Source};
 use crate::error::AppError;
+use crate::i18n::tr;
 use crate::net::Net;
 
 const BASE: &str = "https://yande.re";
@@ -38,6 +40,30 @@ pub async fn search(net: &Net, query: &str, page: u32, limit: u32) -> Result<(Ve
 pub async fn count(net: &Net, query: &str) -> Result<Option<u64>, AppError> {
     let body = get(net, "post.xml", query, 1, 1).await?;
     Ok(count_attribute(&String::from_utf8_lossy(&body)))
+}
+
+#[derive(Deserialize)]
+struct User {
+    name: String,
+}
+
+/// 按用户名找 Yande.re 用户，返回站点上的写法。`name=` 是模糊匹配，要自己挑出同名的那个。
+pub async fn find_user(net: &Net, name: &str) -> Result<String, AppError> {
+    let request = net
+        .client()
+        .get(format!("{BASE}/user.json"))
+        .query(&[("name", name), ("limit", "100")])
+        .header(ACCEPT, "application/json");
+    let response = net.api.send(request).await?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AppError::Http { site: SITE, status: status.as_u16() });
+    }
+    let users: Vec<User> = serde_json::from_slice(&response.bytes().await?)
+        .map_err(|e| AppError::Parse { site: SITE, detail: e.to_string() })?;
+    users.into_iter().map(|user| user.name).find(|found| found.eq_ignore_ascii_case(name)).ok_or_else(|| {
+        AppError::InvalidInput(tr!("Yande.re 上没有叫 {name} 的用户", "There's no Yande.re user named {name}"))
+    })
 }
 
 async fn get(net: &Net, endpoint: &str, query: &str, page: u32, limit: u32) -> Result<Vec<u8>, AppError> {
@@ -176,6 +202,25 @@ mod tests {
         assert_eq!(rating_term(&[General, Explicit]).as_deref(), Some("-rating:q"));
         assert_eq!(rating_term(&[Sensitive, Questionable, Explicit]), None);
         assert_eq!(rating_term(&[]), None);
+    }
+
+    /// 真实网络：按用户名找到用户（不分大小写），再按收藏先后翻两页（按页码翻，两页不重复）。
+    #[tokio::test]
+    #[ignore = "需要网络，手动运行"]
+    async fn lists_yandere_favorites() {
+        use crate::sources::{fetch, Accounts, Page};
+        let net = Net::new(&crate::settings::ProxySettings::default()).unwrap();
+        assert_eq!(find_user(&net, "arsy").await.unwrap(), "Arsy");
+        assert!(matches!(find_user(&net, "no-such-user-imagebox").await, Err(AppError::InvalidInput(_))));
+        let query = "vote:3:Arsy order:vote";
+        let accounts = Accounts::default();
+        let (first, _) = fetch(&net, &accounts, Source::Yandere, query, &Page::Number(1), 20).await.unwrap();
+        let next = Page::Number(1).next(Source::Yandere, query, None);
+        assert_eq!(next, Page::Number(2));
+        let (second, _) = fetch(&net, &accounts, Source::Yandere, query, &next, 20).await.unwrap();
+        assert_eq!((first.len(), second.len()), (20, 20));
+        assert!(second.iter().all(|post| first.iter().all(|seen| seen.id != post.id)));
+        println!("Arsy 的收藏：第一页 #{} 起，共 {:?} 张", first[0].id, count(&net, query).await.unwrap());
     }
 
     /// 真实网络：搜一页、取总数，再按 id 往旧和往新两个方向翻页（找新图的订阅用后者）。

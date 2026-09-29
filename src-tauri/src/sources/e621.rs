@@ -92,6 +92,13 @@ struct RawTags {
     lore: Vec<String>,
 }
 
+/// 收藏页用的条件（不是站点的语法）：自己的收藏，按收藏时间新的在前，要登录。
+pub const FAVORITES: &str = "favorites:";
+
+fn is_favorites(query: &str) -> bool {
+    query.split_whitespace().any(|tag| tag == FAVORITES)
+}
+
 pub async fn search(
     net: &Net,
     query: &str,
@@ -99,17 +106,26 @@ pub async fn search(
     limit: u32,
     credentials: Option<&Credentials>,
 ) -> Result<(Vec<Post>, usize), AppError> {
-    let request = net.client().get(format!("{BASE}/posts.json")).query(&[
-        ("tags", query.to_string()),
-        ("page", page.to_param()),
-        ("limit", limit.min(320).to_string()),
-    ]);
+    let limit = limit.min(320).to_string();
+    let request = if is_favorites(query) {
+        // 站点搜索的 fav: 只能按帖子 id 排；/favorites.json 按收藏时间排，不带 user_id 时就是自己的收藏。
+        credentials.ok_or(AppError::FavoritesSignIn(SITE))?;
+        net.client().get(format!("{BASE}/favorites.json")).query(&[("page", page.to_param()), ("limit", limit)])
+    } else {
+        net.client().get(format!("{BASE}/posts.json")).query(&[("tags", query.to_string()), ("page", page.to_param()), ("limit", limit)])
+    };
     let body = get(net, request, credentials).await?;
     parse(&body)
 }
 
 pub async fn count(net: &Net, query: &str, credentials: Option<&Credentials>) -> Result<Option<u64>, AppError> {
-    let request = net.client().get(format!("{BASE}/posts/count.json")).query(&[("tags", query.to_string())]);
+    // 收藏的总数用 fav:用户名 统计，和按收藏时间列出来的是同一批帖子。
+    let query = match credentials {
+        Some(credentials) if is_favorites(query) => format!("fav:{}", credentials.username),
+        None if is_favorites(query) => return Err(AppError::FavoritesSignIn(SITE)),
+        _ => query.to_string(),
+    };
+    let request = net.client().get(format!("{BASE}/posts/count.json")).query(&[("tags", query)]);
     let body = get(net, request, credentials).await?;
     let parsed: CountBody = serde_json::from_slice(&body).map_err(|e| AppError::Parse { site: SITE, detail: e.to_string() })?;
     Ok(parsed.count)

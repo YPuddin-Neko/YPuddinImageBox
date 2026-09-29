@@ -31,6 +31,9 @@ pub fn load(settings: &Settings) -> (Accounts, Option<String>) {
     let mut errors = Vec::new();
     for source in Source::ALL {
         let Some(saved) = settings.accounts.get(source) else { continue };
+        if !source.has_key() {
+            continue;
+        }
         match read(settings, source, saved) {
             Ok(Some(key)) => accounts.set(source, Some((saved.name.clone(), key))),
             Ok(None) => {}
@@ -129,6 +132,8 @@ mod tests {
                 e621: None,
                 rule34: None,
                 pixiv: None,
+                kemono: None,
+                yandere: None,
             },
             ..Settings::default()
         };

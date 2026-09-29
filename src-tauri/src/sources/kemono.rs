@@ -5,9 +5,12 @@
 //! 会分别变成一张可预览、可下载的图片，视频、压缩包和其他文件会跳过。
 //!
 //! 接口不给图片尺寸，宽高记为 1 × 1 表示未知，下载后按文件补上。
+//!
+//! 登录后（session Cookie）能看自己的收藏：收藏页的 `favorites:` 是收藏的帖子，
+//! 收藏的作者由 [`favorite_creators`] 单独列出。两者都是接口一次返回全部，按收藏先后在本地排序、分页。
 
-use reqwest::header::{ACCEPT, USER_AGENT};
-use serde::Deserialize;
+use reqwest::header::{ACCEPT, COOKIE, USER_AGENT};
+use serde::{Deserialize, Serialize};
 
 use super::{timestamp, Page, Post, PostTags, Source};
 use crate::error::AppError;
@@ -23,6 +26,21 @@ const THUMB_BASE: &str = "https://img.kemono.cr/thumbnail/data";
 /// 界面和文件名只显示帖子 id 和第几张。
 const SERVICE_FACTOR: u64 = 10_000_000_000_000;
 const MAX_FILES: usize = 1000;
+/// 收藏页用的条件（不是站点的语法）：自己收藏的帖子，要登录。
+pub const FAVORITES: &str = "favorites:";
+
+/// 登录后的 session Cookie。
+#[derive(Clone)]
+pub struct Credentials {
+    pub session: String,
+}
+
+/// 调试输出里不打印 Cookie。
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials").field("session", &"***").finish()
+    }
+}
 const SERVICES: [&str; 10] = [
     "patreon",
     "fanbox",
@@ -84,7 +102,20 @@ struct Query {
     tag: Option<String>,
 }
 
-pub async fn search(net: &Net, query: &str, page: &Page, _limit: u32) -> Result<(Vec<Post>, usize), AppError> {
+fn is_favorites(query: &str) -> bool {
+    query.split_whitespace().any(|token| token == FAVORITES)
+}
+
+pub async fn search(
+    net: &Net,
+    query: &str,
+    page: &Page,
+    _limit: u32,
+    credentials: Option<&Credentials>,
+) -> Result<(Vec<Post>, usize), AppError> {
+    if is_favorites(query) {
+        return favorites_page(net, credentials, page).await;
+    }
     let query = parse_query(query)?;
     let offset = match page {
         Page::Number(number) => number.saturating_sub(1).saturating_mul(PAGE_SIZE),
@@ -96,7 +127,10 @@ pub async fn search(net: &Net, query: &str, page: &Page, _limit: u32) -> Result<
 }
 
 /// 帖子数，不是图片数：一个帖子可能有好几张图。
-pub async fn count(net: &Net, query: &str) -> Result<Option<u64>, AppError> {
+pub async fn count(net: &Net, query: &str, credentials: Option<&Credentials>) -> Result<Option<u64>, AppError> {
+    if is_favorites(query) {
+        return Ok(Some(favorite_posts(net, credentials).await?.len() as u64));
+    }
     let query = parse_query(query)?;
     let body = request(net, &query, 0).await?;
     Ok(listing(&body)?.1)
@@ -127,6 +161,91 @@ async fn request(net: &Net, query: &Query, offset: u32) -> Result<Vec<u8>, AppEr
         return Err(AppError::Http { site: SITE, status: status.as_u16() });
     }
     Ok(body.to_vec())
+}
+
+/// 带登录 Cookie 请求账号相关的接口；没登录或登录已失效时报账号错误。
+async fn account_get(net: &Net, credentials: Option<&Credentials>, path: &str, params: &[(&str, &str)]) -> Result<Vec<u8>, AppError> {
+    let credentials = credentials.ok_or(AppError::FavoritesSignIn(SITE))?;
+    let request = net
+        .client()
+        .get(format!("{BASE}/api/v1{path}"))
+        .query(params)
+        .header(ACCEPT, "text/css")
+        .header(USER_AGENT, user_agent(None))
+        .header(COOKIE, format!("session={}", credentials.session));
+    let response = net.kemono.send(request).await?;
+    let status = response.status();
+    let body = response.bytes().await?;
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(AppError::BadCredentials { site: SITE });
+    }
+    if !status.is_success() {
+        return Err(AppError::Http { site: SITE, status: status.as_u16() });
+    }
+    Ok(body.to_vec())
+}
+
+fn parse_error(e: serde_json::Error) -> AppError {
+    AppError::Parse { site: SITE, detail: e.to_string() }
+}
+
+/// 验证登录，返回账号的用户名。
+pub async fn verify(net: &Net, credentials: &Credentials) -> Result<String, AppError> {
+    let body = account_get(net, Some(credentials), "/account", &[]).await?;
+    let value: serde_json::Value = serde_json::from_slice(&body).map_err(parse_error)?;
+    let account = &value["props"]["account"];
+    let name = account["username"].as_str().map(str::to_string).or_else(|| account["id"].as_u64().map(|id| format!("#{id}")));
+    name.ok_or_else(|| AppError::Parse { site: SITE, detail: "account".into() })
+}
+
+#[derive(Debug, Deserialize)]
+struct FavoritePost {
+    #[serde(flatten)]
+    post: RawPost,
+    #[serde(default)]
+    faved_seq: i64,
+}
+
+/// 收藏的全部帖子，后收藏的在前。
+async fn favorite_posts(net: &Net, credentials: Option<&Credentials>) -> Result<Vec<RawPost>, AppError> {
+    let body = account_get(net, credentials, "/account/favorites", &[("type", "post")]).await?;
+    let mut posts: Vec<FavoritePost> = serde_json::from_slice(&body).map_err(parse_error)?;
+    posts.sort_by_key(|favorite| std::cmp::Reverse(favorite.faved_seq));
+    Ok(posts.into_iter().map(|favorite| favorite.post).collect())
+}
+
+async fn favorites_page(net: &Net, credentials: Option<&Credentials>, page: &Page) -> Result<(Vec<Post>, usize), AppError> {
+    // 按收藏先后排，只能按页码翻，也不能订阅。
+    let Page::Number(number) = page else { return Ok((Vec::new(), 0)) };
+    let skip = number.saturating_sub(1).saturating_mul(PAGE_SIZE) as usize;
+    let posts: Vec<RawPost> = favorite_posts(net, credentials).await?.into_iter().skip(skip).take(PAGE_SIZE as usize).collect();
+    let fetched = posts.len();
+    Ok((posts.into_iter().flat_map(normalize).collect(), fetched))
+}
+
+/// 收藏的作者。点开后按 `creator:服务/作者ID` 搜他的帖子。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FavoriteCreator {
+    #[serde(deserialize_with = "string_value")]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(deserialize_with = "string_value")]
+    pub service: String,
+    /// 作者最近更新的时间（不带时区的 UTC）。
+    #[serde(default)]
+    pub updated: Option<String>,
+    #[serde(default, rename(deserialize = "faved_seq"), skip_serializing)]
+    faved_seq: i64,
+}
+
+/// 收藏的全部作者，后收藏的在前。
+pub async fn favorite_creators(net: &Net, credentials: Option<&Credentials>) -> Result<Vec<FavoriteCreator>, AppError> {
+    let body = account_get(net, credentials, "/account/favorites", &[("type", "artist")]).await?;
+    let mut creators: Vec<FavoriteCreator> = serde_json::from_slice(&body).map_err(parse_error)?;
+    creators.sort_by_key(|creator| std::cmp::Reverse(creator.faved_seq));
+    Ok(creators)
 }
 
 fn parse_query(value: &str) -> Result<Query, AppError> {
@@ -316,6 +435,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_favorites_newest_first() {
+        let body = br#"[{"id":"1","user":"9","service":"fanbox","faved_seq":3,"file":{"path":"/a/b/old.jpg"}},{"id":"2","user":"9","service":"fanbox","faved_seq":8,"file":{"path":"/a/b/new.jpg"}}]"#;
+        let mut posts: Vec<FavoritePost> = serde_json::from_slice(body).unwrap();
+        posts.sort_by_key(|favorite| std::cmp::Reverse(favorite.faved_seq));
+        assert_eq!(posts.iter().map(|p| p.post.id.as_str()).collect::<Vec<_>>(), vec!["2", "1"]);
+        let creators: Vec<FavoriteCreator> =
+            serde_json::from_slice(br#"[{"id":"237082","name":"G4ku","service":"fanbox","updated":"2025-01-02T03:04:05","faved_seq":1}]"#).unwrap();
+        assert_eq!((creators[0].service.as_str(), creators[0].id.as_str(), creators[0].name.as_str()), ("fanbox", "237082", "G4ku"));
+    }
+
+    #[test]
     fn parses_creator_and_tag_conditions() {
         let query = parse_query("creator:patreon/456 tag:illustration summer").unwrap();
         assert_eq!(query.service.as_deref(), Some("patreon"));
@@ -332,18 +462,18 @@ mod tests {
     async fn searches_kemono() {
         use reqwest::header::REFERER;
         let net = Net::new(&crate::settings::ProxySettings::default()).unwrap();
-        let (posts, fetched) = search(&net, "G4ku", &Page::Number(1), 50).await.unwrap();
+        let (posts, fetched) = search(&net, "G4ku", &Page::Number(1), 50, None).await.unwrap();
         assert!(fetched > 0 && !posts.is_empty());
         assert!(posts.iter().all(|p| p.thumb_url.as_deref().is_some_and(|url| url.starts_with(THUMB_BASE))));
         assert!(posts.iter().all(|p| p.created_at.as_deref().is_some_and(|time| time.ends_with('Z'))));
-        let total = count(&net, "G4ku").await.unwrap();
+        let total = count(&net, "G4ku", None).await.unwrap();
         println!("G4ku：{} 个帖子里 {} 张图，接口总数 {total:?}", fetched, posts.len());
         assert!(total.is_some());
 
-        let (creator, fetched) = search(&net, "creator:fanbox/237082", &Page::Number(1), 50).await.unwrap();
+        let (creator, fetched) = search(&net, "creator:fanbox/237082", &Page::Number(1), 50, None).await.unwrap();
         println!("fanbox/237082：{fetched} 个帖子里 {} 张图", creator.len());
         assert!(!creator.is_empty());
-        assert_eq!(count(&net, "creator:fanbox/237082").await.unwrap(), None);
+        assert_eq!(count(&net, "creator:fanbox/237082", None).await.unwrap(), None);
 
         let thumb = url::Url::parse(posts[0].thumb_url.as_deref().unwrap()).unwrap();
         assert_eq!(super::super::source_for_url(&thumb), Some(Source::Kemono));

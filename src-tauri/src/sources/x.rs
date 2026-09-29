@@ -14,15 +14,20 @@ use super::{Post, PostTags, Source};
 
 const SITE: &str = "X";
 
-/// 采集窗口只把这些 GraphQL 响应交给 Rust。
-pub fn is_timeline_path(path: &str) -> bool {
+/// 采集窗口只把这些 GraphQL 响应交给 Rust；返回它们来自哪种页面：用户的媒体（`media`），
+/// 或自己的喜欢（`likes`）、书签（`bookmarks`）。媒体归采集页，喜欢和书签归收藏页。
+pub fn timeline_kind(path: &str) -> Option<&'static str> {
     let path = path.split('?').next().unwrap_or(path);
     let path = path.strip_prefix("/i/api").unwrap_or(path);
-    path.starts_with("/graphql/")
-        && matches!(
-            path.rsplit('/').next(),
-            Some("UserMedia" | "UserTweets" | "TweetDetail" | "TweetResultByRestId")
-        )
+    if !path.starts_with("/graphql/") {
+        return None;
+    }
+    match path.rsplit('/').next()? {
+        "UserMedia" | "UserTweets" | "TweetDetail" | "TweetResultByRestId" => Some("media"),
+        "Likes" => Some("likes"),
+        "Bookmarks" => Some("bookmarks"),
+        _ => None,
+    }
 }
 
 /// X 的媒体 id 是字符串；图库的旧表使用正整数帖子 id，所以用媒体 key 做稳定的 63 位哈希。
@@ -254,12 +259,12 @@ mod tests {
 
     #[test]
     fn filters_timeline_paths() {
-        assert!(is_timeline_path("/i/api/graphql/query/UserMedia"));
-        assert!(is_timeline_path("/graphql/query/UserMedia"));
-        assert!(is_timeline_path(
-            "/i/api/graphql/query/UserTweets?variables=%7B%7D"
-        ));
-        assert!(!is_timeline_path("/i/api/graphql/query/Notifications"));
+        assert_eq!(timeline_kind("/i/api/graphql/query/UserMedia"), Some("media"));
+        assert_eq!(timeline_kind("/graphql/query/UserMedia"), Some("media"));
+        assert_eq!(timeline_kind("/i/api/graphql/query/UserTweets?variables=%7B%7D"), Some("media"));
+        assert_eq!(timeline_kind("/i/api/graphql/query/Likes"), Some("likes"));
+        assert_eq!(timeline_kind("/i/api/graphql/query/Bookmarks?variables=%7B%7D"), Some("bookmarks"));
+        assert_eq!(timeline_kind("/i/api/graphql/query/Notifications"), None);
         assert_eq!(label_id(12), "x-000000000000000c");
     }
 }

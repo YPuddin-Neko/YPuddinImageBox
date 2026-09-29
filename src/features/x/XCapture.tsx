@@ -27,7 +27,9 @@ export function XCapture({ active }: { active: boolean }) {
   const [notice, setNotice] = useToast();
   const { picked, pickedPosts, toggle: togglePick, clear: clearPicks, pickAll } = usePicker(posts);
 
-  useTauriEvent<XPostsPayload>("x-posts", ({ posts: incoming }) => {
+  useTauriEvent<XPostsPayload>("x-posts", ({ posts: incoming, kind }) => {
+    // 喜欢和书签是收藏页打开的。
+    if (kind !== "media") return;
     setPosts((previous) => {
       const next = appendPosts(previous, incoming);
       if (!selected && next[0]) setSelected(postKey(next[0]));

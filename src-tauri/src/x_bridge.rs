@@ -23,6 +23,8 @@ pub struct BridgeResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PostsPayload {
     pub posts: Vec<Post>,
+    /// `media`、`likes` 或 `bookmarks`，见 [`sources::x::timeline_kind`]。
+    pub kind: &'static str,
 }
 
 /// 只允许采集窗口把 X 的时间线响应送进应用，不能从页面触发其他应用命令。
@@ -38,12 +40,10 @@ pub async fn bridge_response<R: Runtime>(
             "Only the X capture window can submit responses"
         )));
     }
-    if !sources::x::is_timeline_path(&payload.path) {
-        return Ok(());
-    }
+    let Some(kind) = sources::x::timeline_kind(&payload.path) else { return Ok(()) };
     let posts = sources::x::parse_posts(&payload.body)?;
     if !posts.is_empty() {
-        app.emit("x-posts", PostsPayload { posts })
+        app.emit("x-posts", PostsPayload { posts, kind })
             .map_err(|err| AppError::Internal(err.to_string()))?;
     }
     Ok(())
@@ -60,7 +60,7 @@ pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
 pub const INIT_SCRIPT: &str = r#"
 (() => {
   if (!/^(https?:\/\/)(x\.com|[^/]+\.x\.com|twitter\.com|[^/]+\.twitter\.com)\//.test(location.href)) return;
-  const pathPattern = /(?:^|\/)graphql\/[^/]+\/(?:UserMedia|UserTweets|TweetDetail|TweetResultByRestId)(?:$|\/)/;
+  const pathPattern = /(?:^|\/)graphql\/[^/]+\/(?:UserMedia|UserTweets|TweetDetail|TweetResultByRestId|Likes|Bookmarks)(?:$|\/)/;
   const sent = new Set();
   const send = (url, body) => {
     try {

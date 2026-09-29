@@ -102,6 +102,12 @@ pub struct AccountNames {
     /// Pixiv 的名字是账号昵称，「Key」是登录后的 PHPSESSID。
     #[serde(default)]
     pub pixiv: Option<SavedAccount>,
+    /// Kemono 的名字是用户名，「Key」是登录后的 session Cookie。
+    #[serde(default)]
+    pub kemono: Option<SavedAccount>,
+    /// Yande.re 只存用户名，用来列出收藏；没有 Key。
+    #[serde(default)]
+    pub yandere: Option<SavedAccount>,
 }
 
 impl AccountNames {
@@ -112,8 +118,8 @@ impl AccountNames {
             Source::E621 => self.e621.as_ref(),
             Source::Rule34 => self.rule34.as_ref(),
             Source::Pixiv => self.pixiv.as_ref(),
-            Source::Kemono => None,
-            Source::Yandere => None,
+            Source::Kemono => self.kemono.as_ref(),
+            Source::Yandere => self.yandere.as_ref(),
             Source::X => None,
             Source::Custom => None,
         }
@@ -126,8 +132,8 @@ impl AccountNames {
             Source::E621 => self.e621.as_mut(),
             Source::Rule34 => self.rule34.as_mut(),
             Source::Pixiv => self.pixiv.as_mut(),
-            Source::Kemono => None,
-            Source::Yandere => None,
+            Source::Kemono => self.kemono.as_mut(),
+            Source::Yandere => self.yandere.as_mut(),
             Source::X => None,
             Source::Custom => None,
         }
@@ -140,9 +146,9 @@ impl AccountNames {
             Source::E621 => self.e621 = account,
             Source::Rule34 => self.rule34 = account,
             Source::Pixiv => self.pixiv = account,
-            Source::Kemono => {}
+            Source::Kemono => self.kemono = account,
+            Source::Yandere => self.yandere = account,
             // 不用登录的站点没有账号可存。
-            Source::Yandere => {}
             Source::X => {}
             Source::Custom => {}
         }
@@ -246,6 +252,8 @@ mod tests {
                 e621: None,
                 rule34: None,
                 pixiv: None,
+                kemono: None,
+                yandere: Some(SavedAccount { name: "yuki".into(), level: None, sealed_key: None }),
             },
             key_storage: KeyStorage::File,
             key_salt: Some("salt".into()),

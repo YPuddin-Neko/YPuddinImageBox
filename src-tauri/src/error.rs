@@ -11,6 +11,8 @@ pub enum AppError {
     /// 站点自己返回的错误说明，原样显示。
     Upstream { site: &'static str, message: String },
     CredentialsMissing(&'static str),
+    /// 看自己的收藏要先登录这个站点。
+    FavoritesSignIn(&'static str),
     Parse { site: &'static str, detail: String },
     Storage(#[from] crate::storage::StorageError),
     Database(#[from] sqlx::Error),
@@ -41,6 +43,10 @@ impl std::fmt::Display for AppError {
             AppError::CredentialsMissing(site) => {
                 tr!("{site} 需要账号和 API Key", "{site} requires an account and an API key")
             }
+            AppError::FavoritesSignIn(site) => tr!(
+                "看 {site} 的收藏要先在「设置 → 账号」里登录 {site}",
+                "Sign in to {site} in Settings → Accounts to see your favorites"
+            ),
             AppError::Parse { site, detail } => {
                 tr!("{site} 的响应无法解析：{detail}", "Couldn't read the response from {site}: {detail}")
             }
@@ -73,7 +79,8 @@ impl AppError {
             AppError::Http { .. } => "http",
             AppError::TagLimit { .. } => "tag_limit",
             AppError::Upstream { .. } => "upstream",
-            AppError::CredentialsMissing(_) => "credentials_missing",
+            // 界面按这个 code 显示「填写账号」「登录」按钮，两种情况处理一样。
+            AppError::CredentialsMissing(_) | AppError::FavoritesSignIn(_) => "credentials_missing",
             AppError::Parse { .. } => "parse",
             AppError::Storage(_) => "storage",
             AppError::Database(_) => "database",

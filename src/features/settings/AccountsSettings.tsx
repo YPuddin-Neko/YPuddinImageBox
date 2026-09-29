@@ -12,11 +12,15 @@ import {
   accountRemove,
   accountSave,
   accountsInfo,
+  kemonoLoginCheck,
+  kemonoLoginOpen,
   pixivLoginCheck,
   pixivLoginOpen,
   type AccountsInfo,
   type AccountView,
   type KeyStorage,
+  type LoginCheck,
+  type LoginOpen,
 } from "../../lib/settings";
 
 interface SiteText {
@@ -28,7 +32,7 @@ interface SiteText {
   helpLink: Msg;
 }
 
-/** 填用户名和 API Key 的站点。Pixiv 用自己的卡片（见 PixivCard）；不用登录的站点（Yande.re）不在账号列表里。 */
+/** 填用户名和 API Key 的站点。Pixiv、Kemono 用 Cookie 登录（见 LoginCard），Yande.re 只填用户名（见 NameCard）。 */
 const SITES: Partial<Record<Source, SiteText>> = {
   danbooru: {
     nameLabel: "用户名",
@@ -220,19 +224,49 @@ function AccountCard({
 /** 登录窗口开着时，隔多久问一次登录好了没有。 */
 const LOGIN_POLL_MS = 1500;
 
+/** 用 Cookie 登录、没有 API Key 的站点。 */
+interface LoginText {
+  description: Msg;
+  /** 保存登录状态的 Cookie。 */
+  cookie: string;
+  browserUrl: string;
+  open: () => Promise<LoginOpen>;
+  check: () => Promise<LoginCheck>;
+}
+
+const LOGIN_SITES: Partial<Record<Source, LoginText>> = {
+  pixiv: {
+    description: "不登录也能搜全年龄作品、下载原图，但按 tag 搜最多翻 10 页。看 R-18 作品和自己的收藏要先登录。",
+    cookie: "PHPSESSID",
+    browserUrl: "https://www.pixiv.net/",
+    open: pixivLoginOpen,
+    check: pixivLoginCheck,
+  },
+  kemono: {
+    description: "不登录也能搜索和下载。登录后可以在「收藏」里看你收藏的帖子和作者。",
+    cookie: "session",
+    browserUrl: "https://kemono.cr/authentication/login",
+    open: kemonoLoginOpen,
+    check: kemonoLoginCheck,
+  },
+};
+
 /**
- * Pixiv 没有 API Key：推荐在系统浏览器里登录后粘贴 PHPSESSID；也可以在软件窗口里登录。
+ * Pixiv、Kemono：推荐在系统浏览器里登录后粘贴 Cookie；也可以在软件窗口里登录，登录好后自动保存。
  */
-function PixivCard({
+function LoginCard({
+  site,
   account,
   onChange,
   onNotice,
 }: {
+  site: LoginText;
   account: AccountView;
   onChange: (info: AccountsInfo) => void;
   onNotice: (message: string) => void;
 }) {
   const label = SOURCE_LABEL[account.source];
+  const { cookie } = site;
   const signedIn = account.name !== null && !account.keyMissing;
   const [session, setSession] = useState("");
   const [busy, setBusy] = useState<"save" | "remove" | null>(null);
@@ -240,8 +274,8 @@ function PixivCard({
   const [error, setError] = useState<string | null>(null);
   // 每次打开登录窗口加一，重新开始等待。
   const [round, setRound] = useState(0);
-  const latest = useRef({ onChange, onNotice });
-  latest.current = { onChange, onNotice };
+  const latest = useRef({ onChange, onNotice, check: site.check });
+  latest.current = { onChange, onNotice, check: site.check };
 
   // 登录窗口开着时隔一会儿问一次。打开这一页时也问一次：离开时窗口还开着的话接着等。
   useEffect(() => {
@@ -250,7 +284,7 @@ function PixivCard({
     let timer = 0;
     const check = async () => {
       try {
-        const login = await pixivLoginCheck();
+        const login = await latest.current.check();
         if (stopped) return;
         setWaiting(login.status === "waiting");
         if (login.status === "waiting") {
@@ -275,7 +309,7 @@ function PixivCard({
   const openLogin = async () => {
     setError(null);
     try {
-      const result = await pixivLoginOpen();
+      const result = await site.open();
       setWaiting(true);
       setRound((count) => count + 1);
       if (result.proxyFallback) {
@@ -289,8 +323,8 @@ function PixivCard({
   const openBrowser = async () => {
     setError(null);
     try {
-      await openUrl("https://www.pixiv.net/");
-      onNotice(t("已在浏览器打开 Pixiv，请登录后粘贴 PHPSESSID"));
+      await openUrl(site.browserUrl);
+      onNotice(t("已在浏览器打开 {site}，请登录后粘贴 {cookie}", { site: label, cookie }));
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -338,7 +372,7 @@ function PixivCard({
         <h2 id={`account-${account.source}`}>{label}</h2>
         {status}
       </div>
-      <p className="set-desc">{t("不登录也能搜全年龄作品、下载原图，但按 tag 搜最多翻 10 页。看 R-18 作品要先登录。")}</p>
+      <p className="set-desc">{t(site.description)}</p>
 
       {signedIn ? (
         <div className="set-line">
@@ -355,13 +389,13 @@ function PixivCard({
       ) : (
         <form className="form-row" onSubmit={(event) => void save(event)}>
           <label className="field">
-            <span>PHPSESSID</span>
+            <span>{cookie}</span>
             <input
               className="field-input"
               type="password"
               value={session}
               onChange={(event) => setSession(event.target.value)}
-              placeholder={t("粘贴 PHPSESSID")}
+              placeholder={t("粘贴 {cookie}", { cookie })}
               autoComplete="off"
               spellCheck={false}
             />
@@ -390,11 +424,116 @@ function PixivCard({
         <p className="form-hint">
           <span>
             {waiting
-              ? t("在软件窗口里登录 Pixiv，登录好后这里会自动完成。")
-              : t("推荐在浏览器里登录 Pixiv，再粘贴 Cookie 里的 PHPSESSID；软件内登录窗口会使用当前代理。")}
+              ? t("在软件窗口里登录 {site}，登录好后这里会自动完成。", { site: label })
+              : t("推荐在浏览器里登录 {site}，再粘贴 Cookie 里的 {cookie}；软件内登录窗口会使用当前代理。", { site: label, cookie })}
           </span>
         </p>
       )}
+    </section>
+  );
+}
+
+/**
+ * 只存用户名的站点（Yande.re）：不用登录也能搜索和下载，填了用户名才能在「收藏」里列出这个用户的收藏。
+ */
+function NameCard({
+  account,
+  onChange,
+  onNotice,
+}: {
+  account: AccountView;
+  onChange: (info: AccountsInfo) => void;
+  onNotice: (message: string) => void;
+}) {
+  const label = SOURCE_LABEL[account.source];
+  const saved = account.name !== null;
+  const [editing, setEditing] = useState(!saved);
+  const [name, setName] = useState(account.name ?? "");
+  const [busy, setBusy] = useState<"save" | "remove" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy("save");
+    setError(null);
+    try {
+      onChange(await accountSave(account.source, name, ""));
+      setEditing(false);
+      onNotice(t("已保存 {site} 用户名", { site: label }));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const remove = async () => {
+    setBusy("remove");
+    setError(null);
+    try {
+      onChange(await accountRemove(account.source));
+      setName("");
+      setEditing(true);
+      onNotice(t("已移除 {site} 用户名", { site: label }));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="set-card" aria-labelledby={`account-${account.source}`}>
+      <div className="set-title">
+        <h2 id={`account-${account.source}`}>{label}</h2>
+        {saved ? <span className="badge ok">{t("已填写")}</span> : <span className="badge">{t("未填写")}</span>}
+      </div>
+      <p className="set-desc">
+        {t("不用登录也能搜索和下载。填写用户名后，可以在「收藏」里看这个用户的收藏（Yande.re 的收藏是公开的）。")}
+      </p>
+
+      {saved && !editing ? (
+        <div className="set-line">
+          <div className="identity">
+            <Icon name="user" size={15} />
+            <b>{account.name}</b>
+          </div>
+          <div className="set-actions">
+            <button type="button" className="btn" onClick={() => setEditing(true)} disabled={busy !== null}>
+              {t("更换用户名")}
+            </button>
+            <button type="button" className="btn ghost" onClick={() => void remove()} disabled={busy !== null}>
+              {busy === "remove" ? t("正在移除…") : t("移除")}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form className="form-row" onSubmit={(event) => void save(event)}>
+          <label className="field">
+            <span>{t("用户名")}</span>
+            <input
+              className="field-input"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder={t("Yande.re 用户名")}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <div className="set-actions">
+            <button type="submit" className="btn primary" disabled={busy !== null}>
+              <SwapLabel labels={[t("保存"), t("正在查找…")]} active={busy === "save" ? 1 : 0} />
+            </button>
+            {saved && (
+              <button type="button" className="btn ghost" onClick={() => setEditing(false)} disabled={busy !== null}>
+                {t("取消")}
+              </button>
+            )}
+          </div>
+        </form>
+      )}
+
+      {error && <p className="form-error">{error}</p>}
     </section>
   );
 }
@@ -444,8 +583,12 @@ export function AccountsSettings() {
       <div className="set-list">
         {info?.accounts.map((account) => {
           const key = `${account.source}-${account.name ?? ""}-${account.keyMissing}`;
-          if (account.source === "pixiv") {
-            return <PixivCard key={key} account={account} onChange={setInfo} onNotice={setNotice} />;
+          const login = LOGIN_SITES[account.source];
+          if (login) {
+            return <LoginCard key={key} site={login} account={account} onChange={setInfo} onNotice={setNotice} />;
+          }
+          if (account.source === "yandere") {
+            return <NameCard key={key} account={account} onChange={setInfo} onNotice={setNotice} />;
           }
           const site = SITES[account.source];
           return (

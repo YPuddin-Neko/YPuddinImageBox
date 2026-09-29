@@ -2,6 +2,8 @@
 //! - 按 tag 搜：`/ajax/search/artworks/{词}`，每页 60 个作品；不登录最多翻 10 页。
 //! - 画师的作品：`/ajax/user/{id}/profile/all` 给出全部作品 id，再用 `/ajax/user/{id}/profile/illusts` 每次取 60 个的信息。
 //! - 一个作品可以有好几页，下载时才用 `/ajax/illust/{id}/pages` 取每一页的原图地址。
+//! - 自己的收藏（收藏页的 `bookmarks:`，非公开的是 `bookmarks:private`）：
+//!   `/ajax/user/{自己的 id}/illusts/bookmarks`，按收藏时间新的在前，要登录。
 //!
 //! 不登录也能搜全年龄作品、下载原图；R-18 作品要登录。原图要带 `Referer: https://www.pixiv.net/`。
 //! 帖子 id 是「作品 id × 1000 + 页码」：搜索结果里一个作品一张卡片（第 0 页），图库里每一页各存一条。
@@ -27,6 +29,8 @@ pub const PAGE_SIZE: u32 = 60;
 const PAGE_FACTOR: u64 = 1000;
 /// 找新作品时最多往下翻几页。
 const MAX_NEW_PAGES: u32 = 5;
+/// 收藏每页取的作品数（站点网页也是 48）。
+const BOOKMARK_PAGE: u32 = 48;
 /// 动图（ugoira）作品的扩展名，下载时跳过。
 const UGOIRA: &str = "ugoira";
 
@@ -83,12 +87,16 @@ enum Target {
     Search,
     User(u64),
     Work(u64),
+    /// 自己的收藏；`private` 为非公开收藏。
+    Bookmarks { private: bool },
 }
 
 fn parse_query(query: &str) -> Query {
     let mut parsed = Query::default();
     for token in query.split_whitespace() {
-        if let Some(id) = user_of(token) {
+        if token == "bookmarks:" || token == "bookmarks:private" {
+            parsed.target = Target::Bookmarks { private: token.ends_with("private") };
+        } else if let Some(id) = user_of(token) {
             parsed.target = Target::User(id);
         } else if let Some(id) = work_of(token) {
             parsed.target = Target::Work(id);
@@ -243,6 +251,9 @@ pub async fn search(
         (Target::User(user), Page::Number(n)) => user_page(net, credentials, *user, &query, *n).await?,
         (Target::Search, Page::After(after)) => search_after(net, credentials, &query, split_id(*after).0).await?,
         (Target::Search, Page::Number(n)) => search_page(net, credentials, &query, *n).await?,
+        (Target::Bookmarks { private }, Page::Number(n)) => bookmarks_page(net, credentials, *private, *n).await?,
+        // 收藏按收藏时间排，不能订阅。
+        (Target::Bookmarks { .. }, Page::After(_)) => (Vec::new(), 0),
         // Pixiv 按页码翻页，不会用到「id 小于」。
         (_, Page::Before(_)) => (Vec::new(), 0),
     };
@@ -319,6 +330,32 @@ async fn search_after(
     }
     newer.reverse();
     Ok((newer, fetched))
+}
+
+/// 自己的一页收藏。已删除或设为私密的作品（isMasked）没有图，跳过。
+async fn bookmarks_page(
+    net: &Net,
+    credentials: Option<&Credentials>,
+    private: bool,
+    page: u32,
+) -> Result<(Vec<Post>, usize), AppError> {
+    let body = bookmarks(net, credentials, private, page.saturating_sub(1) * BOOKMARK_PAGE, BOOKMARK_PAGE).await?;
+    let works: Vec<Value> = serde_json::from_value(body["works"].clone()).unwrap_or_default();
+    let fetched = works.len();
+    let posts = works.into_iter().filter(|work| work["isMasked"].as_bool() != Some(true)).filter_map(work_post).collect();
+    Ok((posts, fetched))
+}
+
+async fn bookmarks(net: &Net, credentials: Option<&Credentials>, private: bool, offset: u32, limit: u32) -> Result<Value, AppError> {
+    let credentials = credentials.ok_or(AppError::FavoritesSignIn(SITE))?;
+    let params = [
+        ("tag", String::new()),
+        ("offset", offset.to_string()),
+        ("limit", limit.to_string()),
+        ("rest", if private { "hide" } else { "show" }.to_string()),
+    ];
+    let path = ["ajax", "user", credentials.user_id.as_str(), "illusts", "bookmarks"];
+    get(net, Some(credentials), api_url(&path, &params)).await
 }
 
 /// 画师的全部作品 id（插画和漫画），新的在前。
@@ -480,6 +517,7 @@ pub async fn count(net: &Net, credentials: Option<&Credentials>, query: &str) ->
     let parsed = parse_query(query);
     match parsed.target {
         Target::Work(_) => Ok(Some(1)),
+        Target::Bookmarks { private } => Ok(bookmarks(net, credentials, private, 0, 1).await?["total"].as_u64()),
         Target::User(_) if !parsed.words.is_empty() => Ok(None),
         Target::User(user) => Ok(Some(user_ids(net, credentials, user).await?.len() as u64)),
         Target::Search => {
@@ -534,6 +572,8 @@ mod tests {
         assert_eq!(parse_query("https://www.pixiv.net/en/users/4447171/illustrations").target, Target::User(4447171));
         assert_eq!(parse_query("https://www.pixiv.net/artworks/150225552").target, Target::Work(150225552));
         assert_eq!(parse_query("id:150225552").target, Target::Work(150225552));
+        assert_eq!(parse_query("bookmarks:").target, Target::Bookmarks { private: false });
+        assert_eq!(parse_query("bookmarks:private").target, Target::Bookmarks { private: true });
         // 别的站点的地址当普通的词。
         assert_eq!(parse_query("https://example.com/users/1").target, Target::Search);
     }

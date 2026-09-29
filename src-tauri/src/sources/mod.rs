@@ -120,6 +120,11 @@ impl Source {
         }
     }
 
+    /// 保存的账号有没有 Key。Yande.re 只存用户名（看收藏用）。
+    pub fn has_key(self) -> bool {
+        self != Source::Yandere
+    }
+
     pub fn for_host(host: &str) -> Option<Source> {
         let host = host.trim_end_matches('.').to_ascii_lowercase();
         Source::ALL.into_iter().find(|source| {
@@ -477,10 +482,13 @@ impl Page {
 }
 
 /// 查询里指定了排序（order:score、随机、Gelbooru 的 sort: 等）时不能按 id 翻页，也不能订阅。
+/// 收藏页的 `favorites:`（e621、Kemono）和 `bookmarks:`（Pixiv）按收藏时间排，同样只能按页码翻。
 pub fn has_custom_order(query: &str) -> bool {
     query.split_whitespace().any(|tag| {
         let tag = tag.to_ascii_lowercase();
-        ["order:", "ordfav:", "ordpool:", "random:", "sort:"].iter().any(|prefix| tag.starts_with(prefix))
+        ["order:", "ordfav:", "ordpool:", "random:", "sort:", "favorites:", "bookmarks:"]
+            .iter()
+            .any(|prefix| tag.starts_with(prefix))
     })
 }
 
@@ -493,6 +501,8 @@ pub struct Accounts {
     pub rule34: Option<rule34::Credentials>,
     /// 不登录也能用，登录后才能看 R-18 作品。
     pub pixiv: Option<pixiv::Credentials>,
+    /// 不登录也能搜；登录后才能看自己的收藏。
+    pub kemono: Option<kemono::Credentials>,
 }
 
 impl Accounts {
@@ -510,7 +520,7 @@ impl Accounts {
             Source::Gelbooru => self.gelbooru.as_ref().map(|c| c.api_key.as_str()),
             Source::E621 => self.e621.as_ref().map(|c| c.api_key.as_str()),
             Source::Rule34 => self.rule34.as_ref().map(|c| c.api_key.as_str()),
-            Source::Kemono => None,
+            Source::Kemono => self.kemono.as_ref().map(|c| c.session.as_str()),
             Source::Yandere => None,
             Source::Pixiv => self.pixiv.as_ref().map(|c| c.session.as_str()),
             Source::X => None,
@@ -533,7 +543,9 @@ impl Accounts {
             Source::Rule34 => {
                 self.rule34 = account.map(|(user_id, api_key)| rule34::Credentials { user_id, api_key })
             }
-            Source::Kemono => {}
+            // Kemono 存的「Key」是登录后的 session Cookie。
+            Source::Kemono => self.kemono = account.map(|(_, session)| kemono::Credentials { session }),
+            // Yande.re 只存用户名（看收藏用），没有 Key。
             Source::Yandere => {}
             // Pixiv 存的「Key」是登录后的 PHPSESSID，账号的用户 id 从里面取。
             Source::Pixiv => self.pixiv = account.and_then(|(_, session)| pixiv::Credentials::from_session(&session)),
@@ -597,7 +609,7 @@ pub async fn fetch(
                 Page::Before(_) => rule34::search(net, query, 1, limit, creds).await,
             }
         }
-        Source::Kemono => kemono::search(net, query, page, limit).await,
+        Source::Kemono => kemono::search(net, query, page, limit, accounts.kemono.as_ref()).await,
         // Yande.re 用 id 条件翻页：默认从新到旧，id:< 接着往旧的方向翻；找新图时 id:> 加按 id 升序。
         Source::Yandere => match page {
             Page::Number(n) => moebooru::search(net, query, *n, limit).await,
@@ -617,7 +629,7 @@ pub async fn count(net: &Net, accounts: &Accounts, source: Source, query: &str) 
         Source::Gelbooru => gelbooru::count(net, query, accounts.gelbooru()?).await,
         Source::E621 => e621::count(net, query, accounts.e621.as_ref()).await,
         Source::Rule34 => rule34::count(net, query, accounts.rule34()?).await,
-        Source::Kemono => kemono::count(net, query).await,
+        Source::Kemono => kemono::count(net, query, accounts.kemono.as_ref()).await,
         Source::Yandere => moebooru::count(net, query).await,
         Source::Pixiv => pixiv::count(net, accounts.pixiv.as_ref(), query).await,
         Source::X => Err(AppError::InvalidInput(tr!("X 通过媒体采集窗口使用", "Use X through the media capture window"))),

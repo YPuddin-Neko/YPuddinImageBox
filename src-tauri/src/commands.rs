@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,9 @@ use crate::library::{
 };
 use crate::settings::{parse_proxy_url, KeyStorage, ProxyMode, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
-use crate::sources::{self, combined, danbooru, e621, gelbooru, pixiv, rule34, Page, Post, Rating, SearchPage, SearchParams, Sort, Source};
+use crate::sources::{
+    self, combined, danbooru, e621, gelbooru, kemono, moebooru, pixiv, rule34, Page, Post, Rating, SearchPage, SearchParams, Sort, Source,
+};
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
 use crate::{keys, net, secrets, thumbs, x_bridge, AppState};
 
@@ -796,6 +799,9 @@ fn accounts_info_of(state: &AppState) -> AccountsInfo {
             view(Source::E621, &settings.accounts.e621, accounts.e621.is_some()),
             view(Source::Rule34, &settings.accounts.rule34, accounts.rule34.is_some()),
             view(Source::Pixiv, &settings.accounts.pixiv, accounts.pixiv.is_some()),
+            view(Source::Kemono, &settings.accounts.kemono, accounts.kemono.is_some()),
+            // Yande.re 只存用户名，没有要读取的 Key。
+            view(Source::Yandere, &settings.accounts.yandere, settings.accounts.yandere.is_some()),
         ],
         key_storage: settings.key_storage,
         error: state.accounts_error(),
@@ -814,7 +820,7 @@ pub fn accounts_info(state: State<'_, AppState>) -> AccountsInfo {
 }
 
 /// 先用填写的账号访问一次站点，通过了才把 API Key 存进钥匙串。
-/// Pixiv 填的是登录后的 PHPSESSID，账号名从站点取，不用填。
+/// Pixiv、Kemono 填的是登录后的 Cookie，账号名从站点取，不用填；Yande.re 只填用户名。
 #[tauri::command]
 pub async fn account_save(
     state: State<'_, AppState>,
@@ -828,8 +834,8 @@ pub async fn account_save(
 async fn save_account(state: &AppState, source: Source, name: String, api_key: String) -> Result<AccountsInfo, AppError> {
     let name = name.trim().to_string();
     let api_key = api_key.trim().to_string();
-    if name.is_empty() && matches!(source, Source::Danbooru | Source::Gelbooru | Source::E621 | Source::Rule34) {
-        return Err(AppError::InvalidInput(if source == Source::Danbooru {
+    if name.is_empty() && matches!(source, Source::Danbooru | Source::Gelbooru | Source::E621 | Source::Rule34 | Source::Yandere) {
+        return Err(AppError::InvalidInput(if matches!(source, Source::Danbooru | Source::Yandere) {
             tr!("请填写用户名", "Enter your username")
         } else if matches!(source, Source::Gelbooru | Source::Rule34) {
             tr!("请填写 User ID", "Enter your User ID")
@@ -837,9 +843,14 @@ async fn save_account(state: &AppState, source: Source, name: String, api_key: S
             tr!("请填写用户名", "Enter your username")
         }));
     }
+    if source == Source::Yandere {
+        return save_name(state, source, moebooru::find_user(&state.net, &name).await?);
+    }
     if api_key.is_empty() {
         return Err(AppError::InvalidInput(if source == Source::Pixiv {
             tr!("请粘贴 PHPSESSID", "Paste your PHPSESSID")
+        } else if source == Source::Kemono {
+            tr!("请粘贴 session", "Paste your session cookie")
         } else {
             tr!("请填写 API Key", "Enter your API key")
         }));
@@ -875,12 +886,12 @@ async fn save_account(state: &AppState, source: Source, name: String, api_key: S
             let user = pixiv::verify(&state.net, &creds).await?;
             (user, None, creds.session)
         }
-        Source::Yandere => {
-            return Err(AppError::InvalidInput(tr!("Yande.re 不需要账号", "Yande.re doesn't need an account")))
-        }
         Source::Kemono => {
-            return Err(AppError::InvalidInput(tr!("Kemono 不需要账号", "Kemono doesn't need an account")))
+            let creds = kemono::Credentials { session: api_key.clone() };
+            let user = kemono::verify(&state.net, &creds).await?;
+            (user, None, api_key)
         }
+        Source::Yandere => unreachable!("Yande.re 在前面按只存用户名处理"),
         Source::X => {
             return Err(AppError::InvalidInput(tr!("X 的登录在媒体采集窗口里完成", "Sign in to X in the media capture window")))
         }
@@ -912,28 +923,85 @@ async fn save_account(state: &AppState, source: Source, name: String, api_key: S
     Ok(accounts_info_of(state))
 }
 
-/// 退出登录：删掉保存的 API Key 和设置里的用户名。Pixiv 还要清掉登录窗口留下的 Cookie，
+/// 只存用户名、没有 Key 的账号（Yande.re）。
+fn save_name(state: &AppState, source: Source, name: String) -> Result<AccountsInfo, AppError> {
+    state.update_settings(|settings| {
+        settings.accounts.set(source, Some(SavedAccount { name, level: None, sealed_key: None }));
+    })?;
+    Ok(accounts_info_of(state))
+}
+
+/// 退出登录：删掉保存的 API Key 和设置里的用户名。Pixiv、Kemono 还要清掉登录窗口留下的 Cookie，
 /// 不然下次点「登录」会直接用上一个账号登录。
 #[tauri::command]
 pub async fn account_remove(app: AppHandle, state: State<'_, AppState>, source: Source) -> Result<AccountsInfo, AppError> {
     let saved = state.settings().accounts.get(source).cloned();
-    if let Some(saved) = saved {
+    if let Some(saved) = saved.filter(|_| source.has_key()) {
         blocking(move || keys::forget(source, &saved)).await?;
     }
     state.update_settings(|settings| settings.accounts.set(source, None))?;
     state.accounts.update(|accounts| accounts.set(source, None));
-    if source == Source::Pixiv {
-        forget_pixiv_cookies(&app);
+    if let Some(login) = LoginSite::of(source) {
+        forget_login_cookies(&app, &login);
     }
     Ok(accounts_info_of(&state))
 }
 
-const PIXIV_LOGIN_WINDOW: &str = "pixiv-login";
+/// 在站点自己的登录页里登录的窗口（Pixiv、Kemono）。账号密码只在站点的页面里输入，窗口没有调用软件功能的权限；
+/// 登录成功后由 [`check_login`] 从窗口的 Cookie 里取出登录状态。所有窗口共用一份 Cookie。
+#[derive(Clone, Copy)]
+struct LoginSite {
+    source: Source,
+    window: &'static str,
+    login_url: &'static str,
+    /// 读 Cookie 用的站点地址。
+    site_url: &'static str,
+    /// 保存登录状态的 Cookie。
+    cookie: &'static str,
+}
+
+impl LoginSite {
+    const PIXIV: LoginSite = LoginSite {
+        source: Source::Pixiv,
+        window: "pixiv-login",
+        login_url: "https://accounts.pixiv.net/login?return_to=https%3A%2F%2Fwww.pixiv.net%2F&source=pc&view_type=page",
+        site_url: pixiv::REFERER_URL,
+        cookie: "PHPSESSID",
+    };
+    const KEMONO: LoginSite = LoginSite {
+        source: Source::Kemono,
+        window: "kemono-login",
+        login_url: "https://kemono.cr/authentication/login",
+        site_url: "https://kemono.cr/",
+        cookie: "session",
+    };
+
+    fn of(source: Source) -> Option<LoginSite> {
+        match source {
+            Source::Pixiv => Some(Self::PIXIV),
+            Source::Kemono => Some(Self::KEMONO),
+            _ => None,
+        }
+    }
+
+    fn site(&self) -> url::Url {
+        url::Url::parse(self.site_url).expect("固定的地址")
+    }
+
+    /// 像登录后的值。Pixiv 没登录时也有 PHPSESSID，只是不带「数字_」前缀。
+    fn accepts(&self, value: &str) -> bool {
+        match self.source {
+            Source::Pixiv => pixiv::Credentials::from_session(value).is_some(),
+            _ => !value.is_empty(),
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PixivLoginOpen {
+pub struct LoginOpen {
     pub proxy_applied: bool,
+    /// 设了代理但登录窗口用不上，改为直连。
     pub proxy_fallback: bool,
 }
 
@@ -950,27 +1018,42 @@ fn webview_proxy(proxy: &ProxySettings) -> Result<Option<url::Url>, AppError> {
     }
     if !matches!(url.scheme(), "http" | "socks5") {
         return Err(AppError::InvalidInput(tr!(
-            "Pixiv 登录窗口只支持 http 或 socks5 代理",
-            "The Pixiv login window supports http or socks5 proxies"
+            "登录窗口只支持 http 或 socks5 代理",
+            "The login window supports http or socks5 proxies"
         )));
     }
     Ok(Some(url))
 }
 
-fn x_page(username: &str) -> Result<url::Url, AppError> {
+/// 采集窗口打开的页面：用户的媒体，或自己的喜欢、书签（收藏页用）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum XTarget {
+    #[default]
+    Media,
+    Likes,
+    Bookmarks,
+}
+
+fn x_page(username: &str, target: XTarget) -> Result<url::Url, AppError> {
+    // 书签只有自己能看，地址里不带用户名。
+    if target == XTarget::Bookmarks {
+        return Ok(url::Url::parse("https://x.com/i/bookmarks").expect("固定的地址"));
+    }
     let username = username.trim().trim_start_matches('@');
     if username.is_empty() || username.len() > 15 || !username.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
         return Err(AppError::InvalidInput(tr!("请输入有效的 X 用户名", "Enter a valid X username")));
     }
-    format!("https://x.com/{username}/media")
+    let page = if target == XTarget::Likes { "likes" } else { "media" };
+    format!("https://x.com/{username}/{page}")
         .parse()
         .map_err(|err: url::ParseError| AppError::Internal(err.to_string()))
 }
 
 /// 打开 X 媒体采集窗口。登录状态只留在这个窗口自己的 WebView Cookie 中。
 #[tauri::command]
-pub async fn x_capture_open(app: AppHandle, username: String) -> Result<(), AppError> {
-    let url = x_page(&username)?;
+pub async fn x_capture_open(app: AppHandle, username: String, target: Option<XTarget>) -> Result<(), AppError> {
+    let url = x_page(&username, target.unwrap_or_default())?;
     if let Some(window) = app.get_webview_window(x_bridge::WINDOW) {
         let _ = window.set_focus();
         window.navigate(url).map_err(|err| AppError::Internal(err.to_string()))?;
@@ -997,51 +1080,43 @@ pub fn x_capture_close(app: AppHandle) -> Result<(), AppError> {
     Ok(())
 }
 
-fn pixiv_site() -> url::Url {
-    url::Url::parse(pixiv::REFERER_URL).expect("固定的地址")
-}
-
-/// 所有窗口共用一份 Cookie，从主窗口删掉 Pixiv 的登录 Cookie 就行。
-fn forget_pixiv_cookies(app: &AppHandle) {
+fn forget_login_cookies(app: &AppHandle, login: &LoginSite) {
     let Some(window) = app.get_webview_window(crate::MAIN_WINDOW) else { return };
-    let Ok(cookies) = window.cookies_for_url(pixiv_site()) else { return };
-    for cookie in cookies.into_iter().filter(|cookie| cookie.name() == "PHPSESSID") {
+    let Ok(cookies) = window.cookies_for_url(login.site()) else { return };
+    for cookie in cookies.into_iter().filter(|cookie| cookie.name() == login.cookie) {
         let _ = window.delete_cookie(cookie);
     }
 }
 
-/// 打开 Pixiv 的登录页。账号密码只在 Pixiv 自己的页面里输入，这个窗口没有调用软件功能的权限；
-/// 登录成功后由 [`pixiv_login_check`] 从窗口的 Cookie 里取出登录状态。
-#[tauri::command]
-pub async fn pixiv_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<PixivLoginOpen, AppError> {
-    if let Some(window) = app.get_webview_window(PIXIV_LOGIN_WINDOW) {
+async fn open_login(app: &AppHandle, state: &AppState, login: LoginSite) -> Result<LoginOpen, AppError> {
+    if let Some(window) = app.get_webview_window(login.window) {
         let _ = window.set_focus();
-        return Ok(PixivLoginOpen { proxy_applied: false, proxy_fallback: false });
+        return Ok(LoginOpen { proxy_applied: false, proxy_fallback: false });
     }
-    let url = "https://accounts.pixiv.net/login?return_to=https%3A%2F%2Fwww.pixiv.net%2F&source=pc&view_type=page";
-    let url: url::Url = url.parse().map_err(|err: url::ParseError| AppError::Internal(err.to_string()))?;
+    let url: url::Url = login.login_url.parse().map_err(|err: url::ParseError| AppError::Internal(err.to_string()))?;
+    let title = match login.source {
+        Source::Kemono => tr!("登录 Kemono", "Sign in to Kemono"),
+        _ => tr!("登录 Pixiv", "Sign in to Pixiv"),
+    };
     let proxy = webview_proxy(&state.settings().proxy)?;
+    let had_proxy = proxy.is_some();
     let make_builder = || {
-        WebviewWindowBuilder::new(&app, PIXIV_LOGIN_WINDOW, WebviewUrl::External(url.clone()))
-            .title(tr!("登录 Pixiv", "Sign in to Pixiv"))
-            .inner_size(480.0, 720.0)
+        WebviewWindowBuilder::new(app, login.window, WebviewUrl::External(url.clone())).title(title.clone()).inner_size(480.0, 720.0)
     };
     if let Some(proxy) = proxy {
         match make_builder().proxy_url(proxy).build() {
-            Ok(_) => return Ok(PixivLoginOpen { proxy_applied: true, proxy_fallback: false }),
-            Err(err) => log::warn!("Pixiv 登录窗口使用代理失败，回退到直连：{err}"),
+            Ok(_) => return Ok(LoginOpen { proxy_applied: true, proxy_fallback: false }),
+            Err(err) => log::warn!("{} 登录窗口使用代理失败，回退到直连：{err}", login.source.site_name()),
         }
     }
-    make_builder()
-        .build()
-        .map_err(|err| AppError::Internal(err.to_string()))?;
-    Ok(PixivLoginOpen { proxy_applied: false, proxy_fallback: true })
+    make_builder().build().map_err(|err| AppError::Internal(err.to_string()))?;
+    Ok(LoginOpen { proxy_applied: false, proxy_fallback: had_proxy })
 }
 
 /// 登录窗口现在的情况。
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
-pub enum PixivLogin {
+pub enum LoginCheck {
     /// 窗口还开着，还没登录好。
     Waiting,
     /// 窗口已经关掉了（登录成功后软件自己关的除外）。
@@ -1050,28 +1125,63 @@ pub enum PixivLogin {
     SignedIn { info: AccountsInfo },
 }
 
-/// 登录窗口里是否已经登录：读到登录后的 PHPSESSID 就验证、保存并关掉窗口。界面每隔一会儿问一次。
-/// Windows 上读 Cookie 不能在主线程，所以这是异步命令。
-#[tauri::command]
-pub async fn pixiv_login_check(app: AppHandle, state: State<'_, AppState>) -> Result<PixivLogin, AppError> {
-    let Some(window) = app.get_webview_window(PIXIV_LOGIN_WINDOW) else { return Ok(PixivLogin::Closed) };
-    let cookies = window.cookies_for_url(pixiv_site()).map_err(|err| AppError::Internal(err.to_string()))?;
-    let Some(session) = cookies
+/// 验证不通过的 Cookie（例如没登录时站点也会发的 session），同一个值不再反复去验证。
+static REJECTED_LOGIN: Mutex<Option<String>> = Mutex::new(None);
+
+/// 登录窗口里是否已经登录：读到登录后的 Cookie 就验证、保存并关掉窗口。界面每隔一会儿问一次。
+/// Windows 上读 Cookie 不能在主线程，所以调用它的是异步命令。
+async fn check_login(app: &AppHandle, state: &AppState, login: LoginSite) -> Result<LoginCheck, AppError> {
+    let Some(window) = app.get_webview_window(login.window) else { return Ok(LoginCheck::Closed) };
+    let cookies = window.cookies_for_url(login.site()).map_err(|err| AppError::Internal(err.to_string()))?;
+    let rejected = REJECTED_LOGIN.lock().map(|value| value.clone()).unwrap_or_default();
+    let Some(value) = cookies
         .iter()
-        .filter(|cookie| cookie.name() == "PHPSESSID")
-        .find_map(|cookie| pixiv::Credentials::from_session(cookie.value()))
+        .filter(|cookie| cookie.name() == login.cookie)
+        .map(|cookie| cookie.value().to_string())
+        .find(|value| login.accepts(value) && rejected.as_deref() != Some(value.as_str()))
     else {
-        return Ok(PixivLogin::Waiting);
+        return Ok(LoginCheck::Waiting);
     };
-    match save_account(&state, Source::Pixiv, String::new(), session.session).await {
+    match save_account(state, login.source, String::new(), value.clone()).await {
         Ok(info) => {
             let _ = window.close();
-            Ok(PixivLogin::SignedIn { info })
+            Ok(LoginCheck::SignedIn { info })
         }
-        // 上次登录留下的 Cookie 已经失效：用户正在窗口里重新登录，接着等。
-        Err(AppError::BadCredentials { .. }) => Ok(PixivLogin::Waiting),
+        // 没登录时的 Cookie，或上次登录留下、已经失效的：用户正在窗口里登录，接着等。
+        Err(AppError::BadCredentials { .. }) => {
+            if let Ok(mut slot) = REJECTED_LOGIN.lock() {
+                *slot = Some(value);
+            }
+            Ok(LoginCheck::Waiting)
+        }
         Err(err) => Err(err),
     }
+}
+
+#[tauri::command]
+pub async fn pixiv_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<LoginOpen, AppError> {
+    open_login(&app, &state, LoginSite::PIXIV).await
+}
+
+#[tauri::command]
+pub async fn pixiv_login_check(app: AppHandle, state: State<'_, AppState>) -> Result<LoginCheck, AppError> {
+    check_login(&app, &state, LoginSite::PIXIV).await
+}
+
+#[tauri::command]
+pub async fn kemono_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<LoginOpen, AppError> {
+    open_login(&app, &state, LoginSite::KEMONO).await
+}
+
+#[tauri::command]
+pub async fn kemono_login_check(app: AppHandle, state: State<'_, AppState>) -> Result<LoginCheck, AppError> {
+    check_login(&app, &state, LoginSite::KEMONO).await
+}
+
+/// Kemono 上收藏的作者，后收藏的在前。
+#[tauri::command]
+pub async fn kemono_favorite_creators(state: State<'_, AppState>) -> Result<Vec<kemono::FavoriteCreator>, AppError> {
+    kemono::favorite_creators(&state.net, state.accounts.get().kemono.as_ref()).await
 }
 
 /// 切换 API Key 的保存方式，已保存的 Key 一起搬过去。
@@ -1113,9 +1223,11 @@ pub fn proxy_save(app: AppHandle, state: State<'_, AppState>, proxy: ProxySettin
     proxy.validate()?;
     state.net.apply_proxy(&proxy)?;
     state.update_settings(|settings| settings.proxy = proxy.clone())?;
-    // WebView 的代理只能在创建窗口时设置；让下一次 Pixiv 登录使用新代理。
-    if let Some(window) = app.get_webview_window(PIXIV_LOGIN_WINDOW) {
-        let _ = window.close();
+    // WebView 的代理只能在创建窗口时设置；让下一次登录使用新代理。
+    for login in [LoginSite::PIXIV, LoginSite::KEMONO] {
+        if let Some(window) = app.get_webview_window(login.window) {
+            let _ = window.close();
+        }
     }
     Ok(proxy)
 }
