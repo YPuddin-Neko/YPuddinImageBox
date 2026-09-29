@@ -76,9 +76,8 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice, o
             {post.pages ? ` · ${t("{n} 页", { n: post.pages })}` : ""}
           </figcaption>
           {onView && (
-            <button type="button" className="insp-view" onClick={onView}>
+            <button type="button" className="insp-view" onClick={onView} aria-label={t("放大查看")} title={t("放大查看")}>
               <Icon name="zoomIn" size={15} />
-              {t("放大查看")}
             </button>
           )}
         </figure>

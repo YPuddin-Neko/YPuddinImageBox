@@ -54,6 +54,7 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
   if (!post) return null;
   const changeZoom = (delta: number) => {
     setZoom((current) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round((current + delta) * 4) / 4)));
+    setOffset({ x: 0, y: 0 });
   };
   const reset = () => {
     setZoom(1);
@@ -64,7 +65,6 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
     changeZoom(event.deltaY < 0 ? 0.25 : -0.25);
   };
   const pointerDown = (event: PointerEvent<HTMLImageElement>) => {
-    if (zoom <= 1) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, startX: offset.x, startY: offset.y };
   };
@@ -88,6 +88,9 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
             <button type="button" className="viewer-btn" onClick={() => changeZoom(-0.25)} aria-label="缩小" title="缩小">
               <Icon name="zoomOut" size={17} />
             </button>
+            <button type="button" className="viewer-btn" onClick={reset} aria-label={t("适应窗口")} title={t("适应窗口")}>
+              <Icon name="fit" size={17} />
+            </button>
             <button type="button" className="viewer-zoom" onClick={reset} title="重置缩放">
               {Math.round(zoom * 100)}%
             </button>
@@ -106,7 +109,7 @@ export function ImageViewer({ post, posts, onClose, onChange, useSample = false 
             </button>
           )}
           <img
-            className={`image-viewer-image${zoom > 1 ? " is-draggable" : ""}${loading ? " is-loading" : ""}`}
+            className={`image-viewer-image is-draggable${loading ? " is-loading" : ""}`}
             src={src}
             alt={`#${postNumber(post)}`}
             draggable={false}
