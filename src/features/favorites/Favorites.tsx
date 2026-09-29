@@ -658,6 +658,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
       <ImageViewer
         post={viewerPost}
         posts={posts}
+        downloaded={owned}
         onClose={() => setViewerPost(null)}
         cardOf={(post) => visibleCard(center.current, post)}
         onChange={(post) => {

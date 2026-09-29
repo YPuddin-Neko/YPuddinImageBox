@@ -2,7 +2,18 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type Poi
 import { AnimatePresence, useAnimate, usePresence, useReducedMotionConfig } from "motion/react";
 
 import { t, type Msg } from "../lib/i18n";
-import { goldOnly, hasSize, imageSrc, originalIsImage, originalSrc, originalUrl, postKey, postNumber, type Post } from "../lib/ipc";
+import {
+  goldOnly,
+  hasSize,
+  imageSrc,
+  localFileSrc,
+  originalIsImage,
+  originalSrc,
+  originalUrl,
+  postKey,
+  postNumber,
+  type Post,
+} from "../lib/ipc";
 import { EASE_OUT } from "../lib/motion";
 import { Icon } from "./Icon";
 import { LoadingPill } from "./LoadingPill";
@@ -14,6 +25,8 @@ interface ImageViewerProps {
   onChange: (post: Post) => void;
   /** 图库里的记录：sampleUrl 就是本地的原图文件，直接显示它，不再从站点下载原图。 */
   local?: boolean;
+  /** 已在图库中的帖子：直接显示下载好的文件，读不到（例如文件被移走了）才从站点加载。 */
+  downloaded?: ReadonlySet<string>;
   /** 这张图在瀑布流里的卡片，看不见时为 null。打开时图片从卡片放大出来，关闭时缩回卡片。 */
   cardOf?: (post: Post) => HTMLElement | null;
 }
@@ -124,7 +137,7 @@ export function ImageViewer({ post, ...props }: ImageViewerProps) {
   return <AnimatePresence>{post && <Viewer key="viewer" post={post} {...props} />}</AnimatePresence>;
 }
 
-function Viewer({ post, posts, onClose, onChange, local = false, cardOf }: ViewerProps) {
+function Viewer({ post, posts, onClose, onChange, local = false, downloaded, cardOf }: ViewerProps) {
   const [present, safeToRemove] = usePresence();
   const [scope, animate] = useAnimate<HTMLDivElement>();
   const reduced = useReducedMotionConfig() ?? false;
@@ -158,15 +171,17 @@ function Viewer({ post, posts, onClose, onChange, local = false, cardOf }: Viewe
   });
 
   const index = posts.findIndex((item) => item.source === post.source && item.id === post.id);
-  const lookup = !local && post.source === "pixiv" && !post.fileExt;
-  const sources = sourcesOf(post, local, lookup ? originals[key] : post.fileUrl);
-  const { preview, full } = sources;
-  const thumb = imageSrc(post.thumbUrl);
   const naturalOf = (src: string | undefined) => {
     const result = src ? loads[src] : undefined;
     return result && result !== "failed" ? result : null;
   };
   const failedOf = (src: string) => loads[src] === "failed";
+  const saved = !local && downloaded?.has(key) ? localFileSrc(post) : undefined;
+  const fromDisk = !!saved && !failedOf(saved);
+  const lookup = !local && !fromDisk && post.source === "pixiv" && !post.fileExt;
+  const sources: Sources = fromDisk ? { full: saved } : sourcesOf(post, local, lookup ? originals[key] : post.fileUrl);
+  const { preview, full } = sources;
+  const thumb = imageSrc(post.thumbUrl);
   const previewSize = naturalOf(preview);
   const fullSize = naturalOf(full);
   const shown = live.key === key ? live.srcs : [];

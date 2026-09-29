@@ -219,6 +219,12 @@ export function imageSrc(url: string | null | undefined): string | undefined {
   return url ? convertFileSrc(url, "ibx") : undefined;
 }
 
+/** 图库里这张图的本地原图：按帖子找，找不到再按 md5 找同一张图（可能是从别的站点下载的）。 */
+export function localFileSrc(post: Pick<Post, "source" | "id" | "md5">): string | undefined {
+  const md5 = post.md5 && /^[0-9a-f]{32}$/i.test(post.md5) ? `/${post.md5.toLowerCase()}` : "";
+  return imageSrc(`local/file/${post.source}/${post.id}${md5}`);
+}
+
 /** 查看器里的原图：同样经 ibx:// 加载，但不写进缓存（原图常有几十 MB），大小上限也放宽。 */
 export function originalSrc(url: string | null | undefined): string | undefined {
   return url ? convertFileSrc(`full/${url}`, "ibx") : undefined;

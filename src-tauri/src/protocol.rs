@@ -5,7 +5,8 @@
 //! - 查看器里的原图：`full/{完整地址}`。照样先查缓存，但不写进去（原图常有几十 MB，缓存会很快膨胀），
 //!   大小上限和超时也放宽一些。
 //! - 图库里的图：`local/thumb/{来源}/{帖子id}` 和 `local/file/{来源}/{帖子id}`，
-//!   只能读到图库登记过的文件；缩略图不存在时现场生成。
+//!   只能读到图库登记过的文件；缩略图不存在时现场生成。发现页里「已下载」的图在查看器里用
+//!   `local/file/{来源}/{帖子id}/{md5}`：同一张图可能是从别的站点下载的，按帖子找不到文件时再按 md5 找。
 //!
 //! 地址由前端 `convertFileSrc(地址, "ibx")` 生成，路径部分是百分号编码后的完整地址。
 
@@ -110,7 +111,16 @@ enum LocalRoute {
     File,
 }
 
-fn parse_local(route: &str) -> Option<(LocalRoute, Source, u64)> {
+#[derive(Debug, PartialEq, Eq)]
+struct LocalRequest {
+    kind: LocalRoute,
+    source: Source,
+    id: u64,
+    /// 只有原图能带：按帖子找不到文件时按它找同一张图。
+    md5: Option<String>,
+}
+
+fn parse_local(route: &str) -> Option<LocalRequest> {
     let mut parts = route.split('/');
     let kind = match parts.next()? {
         "thumb" => LocalRoute::Thumb,
@@ -119,35 +129,57 @@ fn parse_local(route: &str) -> Option<(LocalRoute, Source, u64)> {
     };
     let source = Source::parse(parts.next()?)?;
     let id = parts.next()?.parse().ok()?;
-    parts.next().is_none().then_some((kind, source, id))
+    let md5 = match parts.next() {
+        None => None,
+        Some(md5) if kind == LocalRoute::File && md5.len() == 32 && md5.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            Some(md5.to_ascii_lowercase())
+        }
+        Some(_) => return None,
+    };
+    parts.next().is_none().then_some(LocalRequest { kind, source, id, md5 })
 }
 
 async fn load_local<R: Runtime>(app: &AppHandle<R>, route: &str) -> Result<(Vec<u8>, &'static str), Failure> {
-    let (kind, source, id) = parse_local(route).ok_or((StatusCode::BAD_REQUEST, "图片地址无效".to_string()))?;
+    let LocalRequest { kind, source, id, md5 } =
+        parse_local(route).ok_or((StatusCode::BAD_REQUEST, "图片地址无效".to_string()))?;
     let state = app.state::<AppState>();
-    let file = state
-        .library
-        .local_path(source, id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "图库里没有这张图".to_string()))?;
+    let database = |e: sqlx::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    let own = state.library.local_path(source, id).await.map_err(database)?;
+    let not_found = || (StatusCode::NOT_FOUND, "图库里没有这张图".to_string());
     let missing = || (StatusCode::NOT_FOUND, "图片文件不见了，可能已被移动或删除".to_string());
 
-    if kind == LocalRoute::Thumb {
-        let thumb = thumbs::path(&state.storage().path(StorageKind::Cache), source, id);
-        if let Ok(bytes) = tokio::fs::read(&thumb).await {
-            if let Some(mime) = sniff(&bytes) {
+    if kind == LocalRoute::File {
+        // 先读这个帖子自己的文件，没有（不在图库里，或文件不见了）再读 md5 相同的。
+        let mut candidates: Vec<PathBuf> = own.into_iter().collect();
+        if let Some(md5) = md5 {
+            candidates.extend(state.library.paths_with_md5(&md5, source, id).await.map_err(database)?);
+        }
+        if candidates.is_empty() {
+            return Err(not_found());
+        }
+        for path in candidates {
+            if let Ok(bytes) = tokio::fs::read(&path).await {
+                let mime = sniff(&bytes).ok_or((StatusCode::UNSUPPORTED_MEDIA_TYPE, "不是支持的图片格式".to_string()))?;
                 return Ok((bytes, mime));
             }
         }
-        if !tokio::fs::try_exists(&file).await.unwrap_or(false) {
-            return Err(missing());
+        return Err(missing());
+    }
+
+    let file = own.ok_or_else(not_found)?;
+    let thumb = thumbs::path(&state.storage().path(StorageKind::Cache), source, id);
+    if let Ok(bytes) = tokio::fs::read(&thumb).await {
+        if let Some(mime) = sniff(&bytes) {
+            return Ok((bytes, mime));
         }
-        // 解码不了的格式（例如 AVIF）直接用原图当缩略图，交给 WebView 显示。
-        if let Ok(bytes) = thumbs::generate(file.clone(), thumb).await {
-            if let Some(mime) = sniff(&bytes) {
-                return Ok((bytes, mime));
-            }
+    }
+    if !tokio::fs::try_exists(&file).await.unwrap_or(false) {
+        return Err(missing());
+    }
+    // 解码不了的格式（例如 AVIF）直接用原图当缩略图，交给 WebView 显示。
+    if let Ok(bytes) = thumbs::generate(file.clone(), thumb).await {
+        if let Some(mime) = sniff(&bytes) {
+            return Ok((bytes, mime));
         }
     }
     let bytes = tokio::fs::read(&file).await.map_err(|_| missing())?;
@@ -202,9 +234,19 @@ mod tests {
 
     #[test]
     fn parses_local_routes_strictly() {
-        assert_eq!(parse_local("thumb/danbooru/42"), Some((LocalRoute::Thumb, Source::Danbooru, 42)));
-        assert_eq!(parse_local("file/gelbooru/7"), Some((LocalRoute::File, Source::Gelbooru, 7)));
+        let request = |kind, source, id, md5: Option<&str>| Some(LocalRequest { kind, source, id, md5: md5.map(String::from) });
+        assert_eq!(parse_local("thumb/danbooru/42"), request(LocalRoute::Thumb, Source::Danbooru, 42, None));
+        assert_eq!(parse_local("file/gelbooru/7"), request(LocalRoute::File, Source::Gelbooru, 7, None));
+        let md5 = "0123456789abcdef0123456789ABCDEF";
+        assert_eq!(
+            parse_local(&format!("file/gelbooru/7/{md5}")),
+            request(LocalRoute::File, Source::Gelbooru, 7, Some("0123456789abcdef0123456789abcdef"))
+        );
+        // 只有原图能带 md5，md5 必须是 32 位十六进制，后面不能再有别的。
+        assert_eq!(parse_local(&format!("thumb/gelbooru/7/{md5}")), None);
         assert_eq!(parse_local("file/gelbooru/7/extra"), None);
+        assert_eq!(parse_local(&format!("file/gelbooru/7/{md5}/x")), None);
+        assert_eq!(parse_local("file/gelbooru/7/../../etc/passwd"), None);
         assert_eq!(parse_local("file/../../etc/passwd"), None);
         assert_eq!(parse_local("thumb/danbooru/-1"), None);
         assert_eq!(parse_local("other/danbooru/1"), None);
