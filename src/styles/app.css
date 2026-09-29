@@ -435,11 +435,15 @@ button:disabled {
   text-align: center;
 }
 
-/* 顶部留 4px：选中卡片的外圈描边画在卡片外面，贴着滚动区上沿会被裁掉一截。 */
+/* 顶部留 4px：选中卡片的外圈描边画在卡片外面，贴着滚动区上沿会被裁掉一截。
+   横向不滚：窗口快速变窄时，重新排好之前的那一帧卡片还是旧宽度，会顶出一条横向滚动条一闪而过。
+   浏览器自带的滚动锚定也关掉，改宽度时由 PostGrid 自己把视口顶上的卡片留在原处。 */
 .scroll {
   flex: 1;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 4px 20px 28px;
 }
 

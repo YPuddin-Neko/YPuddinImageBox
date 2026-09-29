@@ -44,6 +44,28 @@ interface Layout {
   height: number;
 }
 
+/** 视口顶边落在哪张卡片的什么位置，宽度变了重新排过之后按它找回滚动位置。 */
+interface Anchor {
+  key: string;
+  /** 卡片有几成在视口顶边以上。 */
+  share: number;
+  /** 卡片顶边比视口顶边低多少像素（负数）；有一部分在视口以上时是 0。 */
+  lead: number;
+}
+
+/**
+ * 视口顶边上的卡片：按顺序第一张底边在视口顶边以下的。卡片按顺序放进最矮的一列，这张的顶边最多比视口顶边低一个间距。
+ * 滚动区在最顶上时不记，重排之后也还在最顶上。`viewTop` 是视口顶边在网格里的坐标。
+ */
+function anchorAt(posts: Post[], layout: Layout, viewTop: number, atTop: boolean): Anchor | null {
+  if (atTop) return null;
+  const index = layout.boxes.findIndex((box) => box.y + box.height > viewTop);
+  if (index < 0) return null;
+  const box = layout.boxes[index];
+  const into = viewTop - box.y;
+  return { key: postKey(posts[index]), share: into > 0 ? into / box.height : 0, lead: Math.min(0, into) };
+}
+
 /** 依次放进当前最矮的一列。追加新的一页时前面的卡片位置不变。 */
 function computeLayout(posts: Post[], width: number): Layout {
   const columns = Math.max(1, Math.floor((width + GAP) / (COLUMN_MIN + GAP)));
@@ -104,11 +126,26 @@ export function PostGrid<T extends Post>({
   const layout = useMemo(() => computeLayout(posts, width), [posts, width]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
+  const postsRef = useRef(posts);
+  postsRef.current = posts;
+  /** 用户滚到的位置，只在滚动和换列表时更新；拖动窗口改宽度时一直用它，卡片不会越拖越偏。 */
+  const anchor = useRef<Anchor | null>(null);
+  /** 按锚点设的滚动位置：由它引起的滚动事件不改锚点。 */
+  const restoredTop = useRef<number | null>(null);
+  /** 按当前滚动位置重算可见范围，由下面的效果提供。 */
+  const measure = useRef(() => {});
 
   useLayoutEffect(() => {
     const el = grid.current;
     if (!el) return;
-    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    let current = 0;
+    const observer = new ResizeObserver(([entry]) => {
+      const next = entry.contentRect.width;
+      // 宽度变了是重新排，不是新结果：卡片直接出现在新位置，不再淡入一次，不然拖动窗口时一闪一闪的。
+      if (current > 0 && next !== current) postsRef.current.forEach((post) => entered.current.add(postKey(post)));
+      current = next;
+      setWidth(next);
+    });
     observer.observe(el);
     setWidth(el.clientWidth);
     return () => observer.disconnect();
@@ -130,16 +167,48 @@ export function PostGrid<T extends Post>({
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(update);
     };
+    const scrolled = () => {
+      if (restoredTop.current === scroller.scrollTop) {
+        restoredTop.current = null;
+      } else {
+        const viewTop = scroller.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        anchor.current = anchorAt(postsRef.current, layoutRef.current, viewTop, scroller.scrollTop <= 0);
+      }
+      schedule();
+    };
+    measure.current = update;
     update();
-    scroller.addEventListener("scroll", schedule, { passive: true });
+    scroller.addEventListener("scroll", scrolled, { passive: true });
     const observer = new ResizeObserver(schedule);
     observer.observe(scroller);
     return () => {
       cancelAnimationFrame(frame);
-      scroller.removeEventListener("scroll", schedule);
+      scroller.removeEventListener("scroll", scrolled);
       observer.disconnect();
     };
   }, []);
+
+  // 宽度变了（拖动窗口、开关侧边面板）重新排过：锚点卡片回到视口里原来的位置，绘制前连可见范围一起算好。
+  // 不然同一个滚动位置上换成了别处的卡片，整屏一跳。追加一页、换一批结果时只记下现在的位置。
+  const laidOutWidth = useRef(0);
+  useLayoutEffect(() => {
+    const el = grid.current;
+    const scroller = el?.closest<HTMLElement>(".scroll");
+    const previous = laidOutWidth.current;
+    laidOutWidth.current = width;
+    if (!el || !scroller || width <= 0) return;
+    const gridTop = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    const saved = previous > 0 && previous !== width ? anchor.current : null;
+    const box = saved ? layout.boxes[posts.findIndex((post) => postKey(post) === saved.key)] : undefined;
+    if (!saved || !box) {
+      anchor.current = anchorAt(posts, layout, scroller.scrollTop - gridTop, scroller.scrollTop <= 0);
+      return;
+    }
+    const before = scroller.scrollTop;
+    scroller.scrollTop = Math.max(0, Math.round(gridTop + box.y + saved.share * box.height + saved.lead));
+    if (scroller.scrollTop !== before) restoredTop.current = scroller.scrollTop;
+    measure.current();
+  }, [layout]);
 
   // 换了一批结果（重新搜索、换筛选）时，新卡片照样播入场动画。
   useEffect(() => {
