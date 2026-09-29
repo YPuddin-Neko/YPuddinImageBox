@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FanStack } from "../../components/FanStack";
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { LoadingPill } from "../../components/LoadingPill";
 import { Toast, useToast } from "../../components/Toast";
 import { Select } from "../../components/Select";
 import { EVENTS } from "../../lib/downloads";
@@ -352,89 +353,92 @@ function GroupShelf({
   const name = SOURCE_LABEL[source];
   const kindOptions = groupKinds(source);
   return (
-    <div className="page">
-      <header className="page-head" data-tauri-drag-region>
-        <div className="page-title">
-          <h1 className="crumbs">
-            <button type="button" className="crumb" onClick={onBack}>
-              {t("图库")}
-            </button>
-            <span className="crumb-sep" aria-hidden="true">
-              /
-            </span>
-            <span>{name}</span>
-          </h1>
-          <p>
-            {folder
-              ? `${t("{n} 张", { n: formatCount(folder.count) })} · ${groupTotal(kind, total)}`
-              : " "}
-          </p>
-        </div>
-        <div className="page-actions">
-          {kindOptions.length > 1 && (
+    <>
+      <div className="page">
+        <header className="page-head" data-tauri-drag-region>
+          <div className="page-title">
+            <h1 className="crumbs">
+              <button type="button" className="crumb" onClick={onBack}>
+                {t("图库")}
+              </button>
+              <span className="crumb-sep" aria-hidden="true">
+                /
+              </span>
+              <span>{name}</span>
+            </h1>
+            <p>
+              {folder
+                ? `${t("{n} 张", { n: formatCount(folder.count) })} · ${groupTotal(kind, total)}`
+                : " "}
+            </p>
+          </div>
+          <div className="page-actions">
+            {kindOptions.length > 1 && (
+              <Select
+                className="select"
+                name={t("分组")}
+                label={t("分组")}
+                value={kind}
+                options={kindOptions}
+                onChange={onKind}
+              />
+            )}
             <Select
               className="select"
-              name={t("分组")}
-              label={t("分组")}
-              value={kind}
-              options={kindOptions}
-              onChange={onKind}
+              name={t("排序")}
+              label={t("排序")}
+              value={sort}
+              options={groupSorts()}
+              onChange={onSort}
             />
-          )}
-          <Select
-            className="select"
-            name={t("排序")}
-            label={t("排序")}
-            value={sort}
-            options={groupSorts()}
-            onChange={onSort}
-          />
-        </div>
-      </header>
+          </div>
+        </header>
 
-      {error && (
-        <div className="alert page-block" role="alert">
-          <span>{error}</span>
-          <button type="button" className="btn" onClick={() => void load(0)}>
-            <Icon name="retry" size={15} />
-            {t("重试")}
-          </button>
-        </div>
-      )}
+        {error && (
+          <div className="alert page-block" role="alert">
+            <span>{error}</span>
+            <button type="button" className="btn" onClick={() => void load(0)}>
+              <Icon name="retry" size={15} />
+              {t("重试")}
+            </button>
+          </div>
+        )}
 
-      {folder && groups && (
-        <div className="shelf page-block" data-size="md" data-loading={loading || undefined}>
-          <button type="button" className="stack-card" onClick={() => onOpen({ source, tag: null, title: name })}>
-            <FanStack covers={folder.covers} max={GROUP_COVERS} />
-            <span className="stack-meta">
-              <span className="stack-title">{t("全部")}</span>
-              <span className="stack-count">{formatCount(folder.count)}</span>
-            </span>
-          </button>
-          {groups.map((group) => (
-            <button
-              key={group.name}
-              type="button"
-              className="stack-card"
-              title={group.name}
-              onClick={() => onOpen({ source, tag: group.name, title: group.name })}
-            >
-              <FanStack covers={group.covers} max={GROUP_COVERS} />
+        {folder && groups && (
+          <div className="shelf page-block" data-size="md" data-loading={loading || undefined}>
+            <button type="button" className="stack-card" onClick={() => onOpen({ source, tag: null, title: name })}>
+              <FanStack covers={folder.covers} max={GROUP_COVERS} />
               <span className="stack-meta">
-                <span className="stack-title">{group.name}</span>
-                <span className="stack-count">{formatCount(group.count)}</span>
+                <span className="stack-title">{t("全部")}</span>
+                <span className="stack-count">{formatCount(folder.count)}</span>
               </span>
             </button>
-          ))}
-        </div>
-      )}
+            {groups.map((group) => (
+              <button
+                key={group.name}
+                type="button"
+                className="stack-card"
+                title={group.name}
+                onClick={() => onOpen({ source, tag: group.name, title: group.name })}
+              >
+                <FanStack covers={group.covers} max={GROUP_COVERS} />
+                <span className="stack-meta">
+                  <span className="stack-title">{group.name}</span>
+                  <span className="stack-count">{formatCount(group.count)}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
 
-      {folder?.count === 0 && !error && <EmptyLibrary onNavigate={onNavigate} title={t("这个文件夹里还没有图片")} />}
-      {folder && folder.count > 0 && groups?.length === 0 && !loading && (
-        <p className="hint page-block">{t("这些图都没有这类 tag，可以换一种分组方式。")}</p>
-      )}
-      {!groups && loading && <p className="hint page-block">{t("正在加载…")}</p>}
-      <div ref={sentinel} className="sentinel" aria-hidden="true" />
-    </div>
+        {folder?.count === 0 && !error && <EmptyLibrary onNavigate={onNavigate} title={t("这个文件夹里还没有图片")} />}
+        {folder && folder.count > 0 && groups?.length === 0 && !loading && (
+          <p className="hint page-block">{t("这些图都没有这类 tag，可以换一种分组方式。")}</p>
+        )}
+        <div ref={sentinel} className="sentinel" aria-hidden="true" />
+      </div>
+      {/* 放在滚动区域外面，停在页面底部正中，不随列表滚动。 */}
+      <LoadingPill loading={loading} />
+    </>
   );
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type MouseEve
 
 import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { LoadingPill } from "../../components/LoadingPill";
 import { PostGrid } from "../../components/PostGrid";
 import type { View } from "../../components/Rail";
 import { MenuButton, MultiSelect, Select } from "../../components/Select";
@@ -413,7 +414,6 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
   /** 来源勾选了两个以上站点（按搜索框里现在的勾选，不等搜索结果）。 */
   const combined = sources.length > 1;
-  const firstLoad = loading && !results;
   /** 当前结果对应的收藏（按已经搜过的条件算，不看输入框里还没提交的字）。 */
   const currentSaved =
     saved.find((item) => sameSearch(item, { ...committed.current, sources: searchSources(committed.current) })) ?? null;
@@ -820,7 +820,6 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 )}
               </div>
             ))}
-          {firstLoad && <p className="hint">{t("正在加载…")}</p>}
           {results && posts.length === 0 && !results.next && !loading && !error && (
             <p className="hint">
               {committed.current.sort === "popular"
@@ -844,11 +843,13 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
           />
           <div ref={sentinel} className="sentinel" aria-hidden="true" />
           {results?.next && !error && !paused && (
-            <button type="button" className="btn more" onClick={loadMore} disabled={loading}>
-              {loading ? t("正在加载…") : t("加载更多")}
+            <button type="button" className="btn more" onClick={loadMore} disabled={loading} data-busy={loading || undefined}>
+              {t("加载更多")}
             </button>
           )}
         </div>
+
+        <LoadingPill loading={loading} />
 
         <SelectionDock count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
           <button type="button" className="btn primary" onClick={() => void downloadPicked()} disabled={busy}>

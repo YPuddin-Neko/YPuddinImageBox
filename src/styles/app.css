@@ -665,9 +665,69 @@ button:disabled {
   height: 1px;
 }
 
-.more {
+/* 自动翻页没触发时的后备按钮。加载中隐藏但保留位置，底部提示已经说明在加载。
+   写成 .btn.more：.btn 在后面，会把 display 盖成 inline-flex，按钮就不居中了。 */
+.btn.more {
   display: flex;
+  width: max-content;
   margin: 6px auto 0;
+}
+
+.btn.more[data-busy] {
+  visibility: hidden;
+}
+
+/* 加载提示：所在区域底部正中，和多选条、提示同一条中线。从底边以下弹上来，加载完退回去。 */
+.loading-pill {
+  position: absolute;
+  z-index: 6;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  width: max-content;
+  height: 34px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 0 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 17px;
+  background: var(--glass);
+  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  color: var(--fg-2);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: bottom 0.2s ease;
+}
+
+.loading-pill[data-failed] {
+  color: var(--err);
+}
+
+/* 底部有多选条或提示时，加载提示停在它们上方。 */
+.center:has(> .dock, > .toast) > .loading-pill {
+  bottom: 84px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .hint {

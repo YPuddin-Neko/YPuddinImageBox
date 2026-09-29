@@ -4,6 +4,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Dialog } from "../../components/Dialog";
 import { ImageViewer } from "../../components/ImageViewer";
 import { Icon } from "../../components/Icon";
+import { LoadingPill } from "../../components/LoadingPill";
 import { PostGrid } from "../../components/PostGrid";
 import { MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
@@ -359,7 +360,6 @@ export function LibraryGrid({
               </button>
             </div>
           )}
-          {!listing && loading && <p className="hint">{t("正在加载…")}</p>}
           {listing && posts.length === 0 && !loading && !error && (
             filtered ? (
               <p className="hint">{t("没有符合条件的图片。可以减少 tag 或放宽分级再试。")}</p>
@@ -390,11 +390,13 @@ export function LibraryGrid({
           />
           <div ref={sentinel} className="sentinel" aria-hidden="true" />
           {listing?.hasMore && !error && (
-            <button type="button" className="btn more" onClick={loadMore} disabled={loading}>
-              {loading ? t("正在加载…") : t("加载更多")}
+            <button type="button" className="btn more" onClick={loadMore} disabled={loading} data-busy={loading || undefined}>
+              {t("加载更多")}
             </button>
           )}
         </div>
+
+        <LoadingPill loading={loading} />
 
         <SelectionDock count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
           <button type="button" className="btn danger" onClick={() => setDeleting(pickedPosts)} disabled={busy}>
