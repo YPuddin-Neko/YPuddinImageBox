@@ -9,7 +9,6 @@ Danbooru、Pixiv、X 等平台的图片搜索、批量下载与本地图库管�
 [![License](https://img.shields.io/badge/License-GPLv3-007ec6)](LICENSE)
 [![构建](https://github.com/YPuddin-Neko/YPuddinImageBox/actions/workflows/build.yml/badge.svg)](https://github.com/YPuddin-Neko/YPuddinImageBox/actions/workflows/build.yml)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-555)
-![Version](https://img.shields.io/github/package-json/v/YPuddin-Neko/YPuddinImageBox?label=Version&color=e8743b)
 ![Rust](https://img.shields.io/badge/Rust-Tauri%202-e8743b)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 
