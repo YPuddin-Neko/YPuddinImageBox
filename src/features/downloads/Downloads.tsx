@@ -73,36 +73,36 @@ function Progress({ job }: { job: Job }) {
   const done = processed(job);
   // 按条件下载且站点没给总数时，下载中显示来回滑动的进度条。
   const indeterminate = job.total == null && job.status === "running";
-  // 已处理的部分和右边的数字一致（跳过的也算），里面按已保存、跳过、失败的张数分段。
+  // 已处理的部分和右下角的张数一致（跳过的也算），里面按已保存、跳过、失败的张数分段。
   const parts = [
     { className: "bar-saved", n: job.saved },
     { className: "bar-skipped", n: job.skipped },
     { className: "bar-failed", n: job.failed },
   ];
   return (
-    <div className="job-progress">
-      <div
-        className={`bar${indeterminate ? " is-indeterminate" : ""}`}
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={job.total ?? undefined}
-        aria-valuenow={done}
-      >
-        {indeterminate ? (
-          <i className="bar-indeterminate" />
-        ) : (
-          <i className="bar-fill" style={{ width: `${job.total ? Math.min(100, (done / job.total) * 100) : 0}%` }}>
-            {parts.map(
-              ({ className, n }) => n > 0 && <i key={className} className={className} style={{ flexGrow: n }} />,
-            )}
-          </i>
-        )}
-      </div>
-      <span className="job-count">
-        {job.total != null ? `${formatCount(done)} / ${formatCount(job.total)}` : t("{n} 张", { n: formatCount(done) })}
-      </span>
+    <div
+      className={`bar${indeterminate ? " is-indeterminate" : ""}`}
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={job.total ?? undefined}
+      aria-valuenow={done}
+    >
+      {indeterminate ? (
+        <i className="bar-indeterminate" />
+      ) : (
+        <i className="bar-fill" style={{ width: `${job.total ? Math.min(100, (done / job.total) * 100) : 0}%` }}>
+          {parts.map(
+            ({ className, n }) => n > 0 && <i key={className} className={className} style={{ flexGrow: n }} />,
+          )}
+        </i>
+      )}
     </div>
   );
+}
+
+function countLabel(job: Job): string {
+  const done = formatCount(processed(job));
+  return job.total != null ? `${done} / ${formatCount(job.total)}` : t("{n} 张", { n: done });
 }
 
 function NoteList({ source, notes }: { source: Source; notes: Notes | undefined }) {
@@ -249,6 +249,7 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
                     {open === job.id ? t("收起原因") : t("查看跳过和失败的原因")}
                   </button>
                 )}
+                <span className="job-count">{countLabel(job)}</span>
               </div>
               {job.error && !isActive(job) && <p className="job-error">{job.error}</p>}
               {open === job.id && <NoteList source={job.source} notes={notes[job.id]} />}

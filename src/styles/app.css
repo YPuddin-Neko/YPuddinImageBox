@@ -2766,15 +2766,8 @@ kbd {
   color: var(--fg-3);
 }
 
-.job-progress {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
 .bar {
   position: relative;
-  flex: 1;
   height: 6px;
   overflow: hidden;
   border-radius: 3px;
@@ -2824,15 +2817,6 @@ kbd {
   }
 }
 
-.job-count {
-  flex: none;
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-2);
-}
-
 .job-meta {
   display: flex;
   flex-wrap: wrap;
@@ -2842,14 +2826,21 @@ kbd {
   color: var(--fg-3);
 }
 
-.job-meta b {
+.job-meta b,
+.job-count {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--fg-2);
 }
 
-.job-meta .link {
+/* 行尾的链接靠右；下载页行尾是张数，链接跟在前面的文字后面。 */
+.job-meta > .link:last-child {
   margin-left: auto;
+}
+
+.job-count {
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .job-error {
