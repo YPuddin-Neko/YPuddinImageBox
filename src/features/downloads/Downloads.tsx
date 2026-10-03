@@ -71,27 +71,31 @@ function summary(jobs: Job[]): string {
 
 function Progress({ job }: { job: Job }) {
   const done = processed(job);
-  const total = job.total ?? (done > 0 ? done : null);
-  const savedPercent = total ? Math.min(100, (job.saved / total) * 100) : 0;
-  const failedPercent = total ? Math.min(100 - savedPercent, (job.failed / total) * 100) : 0;
   // 按条件下载且站点没给总数时，下载中显示来回滑动的进度条。
-  const indeterminate = total === null && job.status === "running";
+  const indeterminate = job.total == null && job.status === "running";
+  // 已处理的部分和右边的数字一致（跳过的也算），里面按已保存、跳过、失败的张数分段。
+  const parts = [
+    { className: "bar-saved", n: job.saved },
+    { className: "bar-skipped", n: job.skipped },
+    { className: "bar-failed", n: job.failed },
+  ];
   return (
     <div className="job-progress">
       <div
         className={`bar${indeterminate ? " is-indeterminate" : ""}`}
         role="progressbar"
         aria-valuemin={0}
-        aria-valuemax={total ?? undefined}
+        aria-valuemax={job.total ?? undefined}
         aria-valuenow={done}
       >
         {indeterminate ? (
           <i className="bar-indeterminate" />
         ) : (
-          <>
-            {savedPercent > 0 && <i className="bar-saved" style={{ width: `${savedPercent}%` }} />}
-            {failedPercent > 0 && <i className="bar-failed" style={{ width: `${failedPercent}%` }} />}
-          </>
+          <i className="bar-fill" style={{ width: `${job.total ? Math.min(100, (done / job.total) * 100) : 0}%` }}>
+            {parts.map(
+              ({ className, n }) => n > 0 && <i key={className} className={className} style={{ flexGrow: n }} />,
+            )}
+          </i>
         )}
       </div>
       <span className="job-count">

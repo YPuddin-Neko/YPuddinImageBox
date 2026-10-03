@@ -2782,15 +2782,26 @@ kbd {
 }
 
 .bar > i {
-  display: block;
+  display: flex;
   width: 0;
   height: 100%;
+  overflow: hidden;
   border-radius: inherit;
   transition: width 0.3s ease;
 }
 
+/* 分段并排、宽度按张数分，两头的圆角由外层裁出来，分段之间是直边。 */
+.bar-fill > i {
+  flex-basis: 0;
+  transition: flex-grow 0.3s ease;
+}
+
 .bar-saved {
   background: var(--ok);
+}
+
+.bar-skipped {
+  background: var(--fg-3);
 }
 
 .bar-failed {
@@ -2798,7 +2809,7 @@ kbd {
 }
 
 /* 总数未知时来回滑动。 */
-.bar-indeterminate {
+.bar > .bar-indeterminate {
   background: var(--accent);
   width: 30%;
   animation: bar-slide 1.3s ease-in-out infinite;
@@ -2814,8 +2825,8 @@ kbd {
 }
 
 .job-count {
-  min-width: 110px;
-  text-align: right;
+  flex: none;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
