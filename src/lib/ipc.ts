@@ -200,7 +200,7 @@ const KEMONO_SERVICE_FACTOR = 10_000_000_000_000;
  * 界面上显示的编号（前面的 # 由文案自己写），和 Rust 端的 `Post::label` 一致：
  * Pixiv、FANBOX、Kemono 显示帖子 id，第二页（张）起再写页码。`grouped` 时数字带千位分隔（详情面板的标题用）。
  */
-export function postNumber(post: Pick<Post, "source" | "id">, { grouped = false } = {}): string {
+export function postNumber(post: Pick<Post, "source" | "id"> & Partial<Pick<Post, "fileUrl">>, { grouped = false } = {}): string {
   if (post.source === "x") return `x-${post.id.toString(16).padStart(16, "0")}`;
   const [id, page] =
     post.source === "pixiv" || post.source === "fanbox"
@@ -209,6 +209,16 @@ export function postNumber(post: Pick<Post, "source" | "id">, { grouped = false 
         ? [Math.floor((post.id % KEMONO_SERVICE_FACTOR) / 1000), post.id % 1000]
         : [post.id, 0];
   const number = grouped ? id.toLocaleString("en-US") : String(id);
+  if (post.source === "fanbox" && page === 999) {
+    if (!("fileUrl" in post)) return number;
+    try {
+      const url = new URL(post.fileUrl ?? "");
+      if (url.protocol === "https:" && url.hostname === "pixiv.pximg.net" && !url.port && !url.username && !url.password && !url.hash
+        && url.pathname.startsWith(`/fanbox/public/images/post/${id}/cover/`)) {
+        return `${number} ${t("封面")}`;
+      }
+    } catch { /* 缺少有效地址时仍按普通资源显示。 */ }
+  }
   return page === 0 ? number : `${number} p${page + 1}`;
 }
 

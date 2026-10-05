@@ -19,6 +19,8 @@ const MEDIA_HOST: &str = "downloads.fanbox.cc";
 pub const REFERER_URL: &str = "https://www.fanbox.cc/";
 pub const PAGE_SIZE: u32 = 10;
 const PAGE_FACTOR: u64 = 1000;
+const COVER_INDEX: usize = 999;
+const COVER_CROP: &str = "/c/1200x630_90_a2_g5";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
 
@@ -91,6 +93,35 @@ fn trusted_url(url: &Url, host: &str) -> bool {
         && url.username().is_empty()
         && url.password().is_none()
         && url.fragment().is_none()
+}
+
+fn cover_url(raw: &str, post_id: u64) -> Option<Url> {
+    let mut url = Url::parse(raw).ok()?;
+    if post_id == 0 || !trusted_url(&url, "pixiv.pximg.net") {
+        return None;
+    }
+    let path = url.path().strip_prefix(COVER_CROP).unwrap_or(url.path());
+    let prefix = format!("/fanbox/public/images/post/{post_id}/cover/");
+    let file = path.strip_prefix(&prefix)?;
+    let (name, extension) = file.rsplit_once('.')?;
+    if name.is_empty()
+        || !name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        || !matches!(extension.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif")
+    {
+        return None;
+    }
+    let original_path = path.to_string();
+    url.set_path(&original_path);
+    Some(url)
+}
+
+/// 第 1000 项也可能是旧版保存的正文，需同时核对封面地址。
+pub fn is_cover(post: &Post) -> bool {
+    let (post_id, index) = split_id(post.id);
+    post.source == Source::Fanbox
+        && index == COVER_INDEX as u32
+        && post.id <= MAX_SAFE_INTEGER
+        && post.file_url.as_deref().and_then(|url| cover_url(url, post_id)).is_some()
 }
 
 fn request(
@@ -480,6 +511,7 @@ where
             }
         }
     }
+    posts.sort_unstable_by_key(|post| post.id);
     Ok((posts, complete_posts))
 }
 
@@ -505,6 +537,12 @@ fn post_items(value: &Value, single_post: bool) -> Result<Vec<Post>, AppError> {
             Ok(Vec::new())
         };
     }
+    let cover = match value.get("coverImageUrl") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(raw)) if raw.trim().is_empty() => None,
+        Some(Value::String(raw)) => Some(cover_url(raw, id).ok_or_else(|| parse_error("invalid cover URL"))?),
+        _ => return Err(parse_error("invalid cover URL")),
+    };
     let kind = value
         .get("type")
         .and_then(Value::as_str)
@@ -554,11 +592,14 @@ fn post_items(value: &Value, single_post: bool) -> Result<Vec<Post>, AppError> {
             }
             found
         }
-        "text" | "video" | "entry" => return Ok(Vec::new()),
+        "text" | "video" | "entry" => Vec::new(),
         _ => return Err(parse_error("unsupported post type")),
     };
-    if list.len() > PAGE_FACTOR as usize {
+    if list.len() + usize::from(cover.is_some()) > PAGE_FACTOR as usize {
         return Err(parse_error("post contains more than 1000 resources"));
+    }
+    if list.is_empty() && cover.is_none() {
+        return Ok(Vec::new());
     }
     let creator = value
         .get("creatorId")
@@ -590,6 +631,30 @@ fn post_items(value: &Value, single_post: bool) -> Result<Vec<Post>, AppError> {
         Rating::General
     };
     let mut posts = Vec::new();
+    if let Some(original) = cover {
+        let extension = original.path().rsplit_once('.').expect("validated cover extension").1.to_ascii_lowercase();
+        posts.push(Post {
+            source: Source::Fanbox,
+            id: image_id(id, COVER_INDEX)?,
+            md5: None,
+            width: 1,
+            height: 1,
+            rating: Some(rating),
+            score: value.get("likeCount").and_then(Value::as_i64).unwrap_or(0),
+            fav_count: None,
+            file_ext: extension,
+            file_size: None,
+            file_name: None,
+            title: value.get("title").and_then(Value::as_str).map(str::to_string),
+            file_url: Some(original.to_string()),
+            sample_url: Some(original.to_string()),
+            thumb_url: Some(original.to_string()),
+            created_at: value.get("publishedDatetime").and_then(Value::as_str).map(str::to_string),
+            post_url: format!("{REFERER_URL}@{creator}/posts/{id}"),
+            tags: PostTags { artist: vec![artist.clone()], general: tags.clone(), ..PostTags::default() },
+            pages: None,
+        });
+    }
     for (index, media) in list.into_iter().enumerate() {
         let (item, is_image) = match media {
             Media::Image(item) => (item, true),
@@ -932,6 +997,10 @@ mod tests {
             "hasAdultContent":false, "isRestricted":false, "tags":["drawing"], "body":{"images":[image("a"),image("b")]}})
     }
 
+    fn cover(post_id: u64) -> String {
+        format!("https://pixiv.pximg.net/c/1200x630_90_a2_g5/fanbox/public/images/post/{post_id}/cover/cover-image.jpeg")
+    }
+
     fn attachment(key: &str, name: &str, extension: &str) -> Value {
         json!({"id":key, "name":name, "extension":extension, "size": 12345,
             "url":format!("https://downloads.fanbox.cc/files/post/42/{key}.{extension}")})
@@ -1081,6 +1150,94 @@ mod tests {
         let mut value = raw();
         value["body"]["images"] = Value::Array(vec![image("a"); 1001]);
         assert!(post_items(&value, true).is_err());
+    }
+
+    #[test]
+    fn cover_is_first_without_changing_body_ids_or_using_cropped_dimensions() {
+        let mut value = raw();
+        let existing = post_items(&value, true).unwrap();
+        value["coverImageUrl"] = json!(cover(42));
+        let posts = post_items(&value, true).unwrap();
+        assert_eq!(posts.iter().map(|post| post.id).collect::<Vec<_>>(), [42999, 42000, 42001]);
+        assert!(is_cover(&posts[0]));
+        assert!(!is_cover(&posts[1]));
+        assert_eq!(serde_json::to_value(&posts[1..]).unwrap(), serde_json::to_value(existing).unwrap());
+        let original = "https://pixiv.pximg.net/fanbox/public/images/post/42/cover/cover-image.jpeg";
+        assert_eq!(posts[0].file_url.as_deref(), Some(original));
+        assert_eq!(posts[0].thumb_url, posts[0].file_url);
+        assert_eq!(posts[0].sample_url, posts[0].file_url);
+        assert_eq!((posts[0].width, posts[0].height), (1, 1));
+        assert_eq!(posts[0].title.as_deref(), Some("October sketches"));
+        assert!(posts[0].file_name.is_none() && posts[0].file_size.is_none());
+    }
+
+    #[test]
+    fn covers_keep_the_existing_total_resource_limit_and_legacy_slot_identity() {
+        let mut value = raw();
+        value["body"]["images"] = Value::Array(vec![image("a"); 1000]);
+        let existing = post_items(&value, true).unwrap();
+        assert_eq!(existing.last().unwrap().id, 42999);
+        assert!(!is_cover(existing.last().unwrap()));
+        value["coverImageUrl"] = json!(cover(42));
+        assert!(post_items(&value, true).is_err());
+        value["body"]["images"] = Value::Array(vec![image("a"); 999]);
+        let posts = post_items(&value, true).unwrap();
+        assert_eq!(posts.len(), 1000);
+        assert_eq!(posts.iter().map(|post| post.id).collect::<HashSet<_>>().len(), 1000);
+        assert_eq!(posts.last().unwrap().id, 42998);
+    }
+
+    #[test]
+    fn cover_urls_require_the_exact_host_post_and_known_path() {
+        let mut value = raw();
+        value["coverImageUrl"] = json!(cover(42));
+        let mut parsed = post_items(&value, true).unwrap().remove(0);
+        for bad in [
+            "https://pixiv.pximg.net.evil.test/fanbox/public/images/post/42/cover/a.jpeg",
+            "http://pixiv.pximg.net/fanbox/public/images/post/42/cover/a.jpeg",
+            "https://user:password@pixiv.pximg.net/fanbox/public/images/post/42/cover/a.jpeg",
+            "https://pixiv.pximg.net:8443/fanbox/public/images/post/42/cover/a.jpeg",
+            "https://pixiv.pximg.net/fanbox/public/images/post/43/cover/a.jpeg",
+            "https://pixiv.pximg.net/fanbox/public/images/post/42/other/a.jpeg",
+            "https://pixiv.pximg.net/c/unknown/fanbox/public/images/post/42/cover/a.jpeg",
+            "https://pixiv.pximg.net/fanbox/public/images/post/42/cover/folder/a.jpeg",
+            "https://pixiv.pximg.net/fanbox/public/images/post/42/cover/a%2Fother.jpeg",
+            "https://pixiv.pximg.net/fanbox/public/images/post/42/cover/a.jpeg#fragment",
+            "https://pixiv.pximg.net/fanbox/public/images/post/42/cover/a.html",
+        ] {
+            value["coverImageUrl"] = json!(bad);
+            assert!(post_items(&value, true).is_err(), "{bad}");
+            parsed.file_url = Some(bad.into());
+            assert!(!is_cover(&parsed), "{bad}");
+        }
+        parsed.file_url = Some(cover(42));
+        assert!(is_cover(&parsed));
+        parsed.id = 42000;
+        assert!(!is_cover(&parsed));
+        parsed.id = 42999;
+        parsed.source = Source::Pixiv;
+        assert!(!is_cover(&parsed));
+    }
+
+    #[test]
+    fn accessible_text_video_and_entry_can_have_covers_without_unlocking_restricted_posts() {
+        for kind in ["text", "video", "entry"] {
+            let mut value = raw();
+            value["type"] = json!(kind);
+            value["body"] = json!({"text":"Content"});
+            assert!(post_items(&value, true).unwrap().is_empty());
+            value["coverImageUrl"] = json!(cover(42));
+            let posts = post_items(&value, true).unwrap();
+            assert_eq!(posts.len(), 1);
+            assert!(is_cover(&posts[0]));
+            value["isRestricted"] = json!(true);
+            assert!(post_items(&value, true).is_err());
+            assert!(post_items(&value, false).unwrap().is_empty());
+            value["isRestricted"] = json!(false);
+            value["body"] = Value::Null;
+            assert!(post_items(&value, true).is_err());
+            assert!(post_items(&value, false).unwrap().is_empty());
+        }
     }
 
     #[test]
@@ -1274,6 +1431,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subscriptions_sort_covers_after_complete_bodies_without_losing_recovered_items() {
+        let load = |id| {
+            let mut value = raw();
+            value["id"] = json!(id);
+            value["coverImageUrl"] = json!(cover(id));
+            std::future::ready(Ok(value))
+        };
+        let ids = (42..=53).collect::<BTreeSet<_>>();
+        let (first, count) = collect_after(ids.clone(), 41999, &[], load).await.unwrap();
+        assert_eq!(count, 10);
+        assert_eq!(first.len(), 30);
+        assert_eq!(first.iter().take(3).map(|post| post.id).collect::<Vec<_>>(), [42000, 42001, 42999]);
+        assert!(first.windows(2).all(|pair| pair[0].id < pair[1].id));
+        assert_eq!(first.last().unwrap().id, 51999);
+        let (second, count) = collect_after(ids.clone(), 51999, &[], load).await.unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(second.iter().map(|post| post.id).collect::<Vec<_>>(), [52000, 52001, 52999, 53000, 53001, 53999]);
+        let (recovered, _) = collect_after(ids, 42000, &[], load).await.unwrap();
+        assert_eq!(recovered[0].id, 42001);
+        assert_eq!(recovered[1].id, 42999);
+        assert_eq!(recovered[2].id, 43000);
+    }
+
+    #[tokio::test]
     #[ignore = "requires public FANBOX network access"]
     async fn live_public_post_smoke() {
         let net = Net::new(&crate::settings::ProxySettings::default()).unwrap();
@@ -1282,10 +1463,12 @@ mod tests {
             .unwrap();
         assert_eq!(fetched, 1);
         assert!(!posts.is_empty());
+        assert!(is_cover(&posts[0]));
+        assert!(posts.iter().any(|post| !is_cover(post)));
         assert!(posts.iter().all(|post| post.source == Source::Fanbox
-            && post
+            && (is_cover(post) || post
                 .file_url
                 .as_deref()
-                .is_some_and(|url| url.starts_with("https://downloads.fanbox.cc/"))));
+                .is_some_and(|url| url.starts_with("https://downloads.fanbox.cc/")))));
     }
 }

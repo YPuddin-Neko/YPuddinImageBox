@@ -12,7 +12,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
 use crate::i18n::{text, tr};
-use crate::sources::{join_sources, split_sources, timestamp, Post, PostTags, Rating, Sort, Source};
+use crate::sources::{fanbox, join_sources, split_sources, timestamp, Post, PostTags, Rating, Sort, Source};
 
 const DB_FILE: &str = "library.sqlite3";
 /// 一次列表查询最多返回多少张。
@@ -563,6 +563,22 @@ impl Library {
         Ok(path.map(PathBuf::from))
     }
 
+    /// FANBOX 封面和旧版第 1000 个正文资源共用编号，不能互相替换。
+    pub async fn resource_conflicts(&self, post: &Post) -> Result<bool, sqlx::Error> {
+        if post.source != Source::Fanbox || fanbox::split_id(post.id).1 != 999 {
+            return Ok(false);
+        }
+        let existing: Option<Option<String>> =
+            sqlx::query_scalar("SELECT file_url FROM posts WHERE source = ? AND post_id = ?")
+                .bind(post.source.as_str())
+                .bind(post.id as i64)
+                .fetch_optional(&self.pool)
+                .await?;
+        let Some(file_url) = existing else { return Ok(false) };
+        let saved = Post { file_url, ..post.clone() };
+        Ok(fanbox::is_cover(post) != fanbox::is_cover(&saved))
+    }
+
     /// 图库里 md5 相同的其他帖子（同一张图在另一个站点或另一个帖子里）的本地路径。
     pub async fn paths_with_md5(&self, md5: &str, source: Source, post_id: u64) -> Result<Vec<PathBuf>, sqlx::Error> {
         let paths: Vec<String> = sqlx::query_scalar(
@@ -609,14 +625,20 @@ impl Library {
         let rows: Vec<(String, i64, Option<String>)> = query.build_query_as().fetch_all(&self.pool).await?;
         let saved: HashSet<(&str, i64)> = rows.iter().map(|(source, id, _)| (source.as_str(), *id)).collect();
         let hashes: HashSet<&str> = rows.iter().filter_map(|(_, _, md5)| md5.as_deref()).collect();
-        Ok(posts
+        let mut owned: HashSet<(Source, u64)> = posts
             .iter()
             .filter(|post| {
                 saved.contains(&(post.source.as_str(), post.id as i64))
                     || post.md5.as_deref().is_some_and(|md5| hashes.contains(md5.to_ascii_lowercase().as_str()))
             })
             .map(|post| (post.source, post.id))
-            .collect())
+            .collect();
+        for post in posts.iter().filter(|post| post.source == Source::Fanbox && fanbox::split_id(post.id).1 == 999) {
+            if owned.contains(&(post.source, post.id)) && self.resource_conflicts(post).await? {
+                owned.remove(&(post.source, post.id));
+            }
+        }
+        Ok(owned)
     }
 
     /// 记录一张下载好的图。重复下载同一帖子时更新信息和路径。
@@ -1478,6 +1500,46 @@ mod tests {
         let owned = lib.owned(&probes).await.unwrap();
         assert_eq!(owned, HashSet::from([(Source::Danbooru, 1), (Source::Gelbooru, 9)]));
         assert!(lib.owned(&[]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fanbox_cover_conflicts_do_not_count_as_owned() {
+        let lib = Library::in_memory().await;
+        let body = Post {
+            file_url: Some("https://downloads.fanbox.cc/images/post/42/body.png".into()),
+            ..post(Source::Fanbox, 42_999, PostTags::default())
+        };
+        let cover = Post {
+            file_url: Some("https://pixiv.pximg.net/fanbox/public/images/post/42/cover/cover.png".into()),
+            ..body.clone()
+        };
+        assert!(!fanbox::is_cover(&body));
+        assert!(fanbox::is_cover(&cover));
+        assert!(!lib.resource_conflicts(&cover).await.unwrap());
+        assert!(lib.owned(std::slice::from_ref(&cover)).await.unwrap().is_empty());
+
+        lib.save_post(&body, Path::new("/images/body.png"), 1).await.unwrap();
+        assert!(!lib.resource_conflicts(&body).await.unwrap());
+        assert!(lib.resource_conflicts(&cover).await.unwrap());
+        assert!(lib.owned(std::slice::from_ref(&cover)).await.unwrap().is_empty());
+        assert_eq!(lib.owned(std::slice::from_ref(&body)).await.unwrap(), HashSet::from([(Source::Fanbox, 42_999)]));
+
+        lib.remove_posts(&[(Source::Fanbox, 42_999)]).await.unwrap();
+        lib.save_post(&cover, Path::new("/images/cover.png"), 2).await.unwrap();
+        assert!(lib.resource_conflicts(&body).await.unwrap());
+        assert!(!lib.resource_conflicts(&cover).await.unwrap());
+        assert!(lib.owned(std::slice::from_ref(&body)).await.unwrap().is_empty());
+        assert_eq!(lib.owned(std::slice::from_ref(&cover)).await.unwrap(), HashSet::from([(Source::Fanbox, 42_999)]));
+
+        let ordinary = Post { id: 42_998, ..body.clone() };
+        lib.save_post(&ordinary, Path::new("/images/ordinary.png"), 3).await.unwrap();
+        assert!(!lib.resource_conflicts(&ordinary).await.unwrap());
+        let other_source = Post { source: Source::Pixiv, ..body };
+        assert!(!lib.resource_conflicts(&other_source).await.unwrap());
+        assert_eq!(
+            lib.owned(&[cover, ordinary]).await.unwrap(),
+            HashSet::from([(Source::Fanbox, 42_999), (Source::Fanbox, 42_998)])
+        );
     }
 
     #[tokio::test]

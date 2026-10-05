@@ -573,6 +573,12 @@ impl Downloader {
 
     /// 下载一个文件（其他站点的一个帖子，或 Pixiv 作品的一页）。
     async fn save_file(&self, post: &Post) -> Result<Outcome, AppError> {
+        if self.library.resource_conflicts(post).await? {
+            return Ok(Outcome::Failed(tr!(
+                "这篇投稿的封面与已下载的正文编号冲突",
+                "This post's cover ID conflicts with a downloaded content image"
+            )));
+        }
         if let Some(path) = self.library.local_path(post.source, post.id).await? {
             if exists(&path).await {
                 return Ok(Outcome::Skipped(note_owned()));
@@ -581,8 +587,8 @@ impl Downloader {
         let Some(ext) = download_ext(post) else { return Ok(Outcome::Skipped(note_not_image())) };
         let Some(url) = post.file_url.as_deref() else { return Ok(Outcome::Failed(note_no_file(post).into())) };
         let url = match Url::parse(url) {
-            // 只从帖子所属站点的域名下载。
-            Ok(url) if sources::source_for_url(&url) == Some(post.source) => url,
+            // FANBOX 正文在下载域名，独立封面在公开的 Pixiv CDN。
+            Ok(url) if sources::source_for_url(&url) == Some(post.source) || fanbox::is_cover(post) => url,
             _ => return Ok(Outcome::Failed(note_bad_url().into())),
         };
         if let Some(md5) = post.md5.as_deref() {
@@ -678,7 +684,7 @@ pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
         }
         Source::Fanbox => {
             let (id, index) = fanbox::split_id(post.id);
-            format!("{id}_p{index}")
+            if fanbox::is_cover(post) { format!("{id}_cover") } else { format!("{id}_p{index}") }
         }
         _ => post.id.to_string(),
     };
@@ -914,6 +920,44 @@ mod tests {
         p.source = Source::Fanbox;
         assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/FANBOX/alice/12560223_p1.jpeg"));
         assert_eq!(p.label(), "#12560223 p2");
+
+        p.id = 12_560_223_999;
+        p.file_url = Some("https://pixiv.pximg.net/fanbox/public/images/post/12560223/cover/example.jpeg".into());
+        assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/FANBOX/alice/12560223_cover.jpeg"));
+        assert_eq!(p.label(), "#12560223 封面");
+        p.file_url = Some("https://downloads.fanbox.cc/images/post/12560223/body.jpeg".into());
+        assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/FANBOX/alice/12560223_p999.jpeg"));
+        assert_eq!(p.label(), "#12560223 p1000");
+    }
+
+    #[tokio::test]
+    async fn fanbox_cover_downloads_reject_other_pixiv_urls() {
+        let h = harness().await;
+        for url in [
+            "https://pixiv.pximg.net/fanbox/public/images/post/41/cover/a.jpeg",
+            "https://pixiv.pximg.net/user-profile/a.jpeg",
+            "https://pixiv.pximg.net.evil.test/fanbox/public/images/post/42/cover/a.jpeg",
+        ] {
+            let mut p = post(42_999, "jpeg", Some(url));
+            p.source = Source::Fanbox;
+            assert!(matches!(h.downloader.save(&p).await.unwrap(), Outcome::Failed(_)));
+            assert!(h.library.local_path(p.source, p.id).await.unwrap().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn fanbox_cover_downloads_preserve_conflicting_old_files() {
+        let h = harness().await;
+        let mut body = post(42_999, "jpeg", Some("https://downloads.fanbox.cc/images/post/42/body.jpeg"));
+        body.source = Source::Fanbox;
+        let path = h._dir.path().join("old-body.jpeg");
+        tokio::fs::write(&path, b"original file").await.unwrap();
+        h.library.save_post(&body, &path, 1).await.unwrap();
+        let mut cover = body.clone();
+        cover.file_url = Some("https://pixiv.pximg.net/fanbox/public/images/post/42/cover/a.jpeg".into());
+        assert!(matches!(h.downloader.save(&cover).await.unwrap(), Outcome::Failed(_)));
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"original file");
+        assert!(!h.library.resource_conflicts(&body).await.unwrap());
     }
 
     #[test]
@@ -934,16 +978,30 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires public FANBOX network access"]
-    async fn downloads_public_fanbox_image_into_library() {
+    async fn downloads_public_fanbox_images_and_cover_into_library() {
         let h = harness().await;
         let (posts, _) = fanbox::search(&h.downloader.net, None, "post:12560223", &Page::Number(1)).await.unwrap();
-        let post = posts.first().expect("public example has an image");
-        assert!(matches!(h.downloader.save(post).await.unwrap(), Outcome::Saved));
-        let path = h.library.local_path(Source::Fanbox, post.id).await.unwrap().unwrap();
-        let bytes = tokio::fs::read(&path).await.unwrap();
-        assert!(sniff(&bytes).is_some());
-        assert!(!bytes.is_empty());
-        assert!(matches!(h.downloader.save(post).await.unwrap(), Outcome::Skipped(_)));
+        assert!(posts.iter().any(fanbox::is_cover));
+        assert!(posts.iter().any(|post| !fanbox::is_cover(post)));
+        // 先存正文，再重新下载整篇，覆盖已下载文章补封面的场景。
+        for post in posts.iter().filter(|post| !fanbox::is_cover(post)) {
+            assert!(matches!(h.downloader.save(post).await.unwrap(), Outcome::Saved));
+        }
+        for post in &posts {
+            let result = h.downloader.save(post).await.unwrap();
+            assert!(if fanbox::is_cover(post) { matches!(result, Outcome::Saved) } else { matches!(result, Outcome::Skipped(_)) });
+            let path = h.library.local_path(Source::Fanbox, post.id).await.unwrap().unwrap();
+            let bytes = tokio::fs::read(&path).await.unwrap();
+            assert!(sniff(&bytes).is_some());
+            assert!(!bytes.is_empty());
+            assert!(matches!(h.downloader.save(post).await.unwrap(), Outcome::Skipped(_)));
+        }
+        let page = h.library.list(&crate::library::LibraryQuery::default()).await.unwrap();
+        assert_eq!(page.total as usize, posts.len());
+        let cover = page.posts.iter().find(|post| fanbox::is_cover(&post.post)).unwrap();
+        assert!(cover.post.width > 1 && cover.post.height > 1);
+        assert!(cover.path.ends_with("12560223_cover.jpeg"));
+        assert!(h._dir.path().join("cache/thumbs/fanbox").join(cover.post.id.to_string()).is_file());
     }
 
     #[test]

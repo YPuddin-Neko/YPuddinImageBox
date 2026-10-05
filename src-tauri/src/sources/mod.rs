@@ -385,6 +385,10 @@ impl Post {
                 (post, 0) => format!("#{post}"),
                 (post, index) => format!("#{post} p{}", index + 1),
             },
+            Source::Fanbox if fanbox::is_cover(self) => {
+                let (post, _) = fanbox::split_id(self.id);
+                crate::i18n::tr!("#{post} 封面", "#{post} Cover")
+            }
             Source::Fanbox => match fanbox::split_id(self.id) {
                 (post, 0) => format!("#{post}"),
                 (post, index) => format!("#{post} p{}", index + 1),
