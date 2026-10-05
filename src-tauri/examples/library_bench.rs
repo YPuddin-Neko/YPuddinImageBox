@@ -65,6 +65,8 @@ fn post(rng: &mut Rng, id: u64) -> Post {
         score: rng.skewed(800) as i64,
         fav_count: Some(rng.skewed(1_200) as i64),
         file_ext: "jpg".into(),
+        file_name: None,
+        title: None,
         file_size: Some(200_000 + rng.below(15_000_000)),
         file_url: Some(format!("https://cdn.donmai.us/original/{id}.jpg")),
         sample_url: None,

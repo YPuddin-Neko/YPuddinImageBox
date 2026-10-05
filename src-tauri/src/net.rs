@@ -110,6 +110,7 @@ impl Lane {
 
 pub struct Net {
     client: RwLock<reqwest::Client>,
+    fanbox_client: RwLock<reqwest::Client>,
     /// 搜索、计数等接口：2 次/秒，最多 4 个并发。
     pub api: Lane,
     /// 缩略图、预览图：10 次/秒，最多 6 个并发，保证瀑布流加载不卡。
@@ -121,17 +122,20 @@ pub struct Net {
     pub pixiv: Lane,
     /// Kemono 的接口：1 次/秒，最多 2 个并发。请求快了会被站点返回 429。
     pub kemono: Lane,
+    pub fanbox: Lane,
 }
 
 impl Net {
     pub fn new(proxy: &ProxySettings) -> Result<Self, AppError> {
         Ok(Self {
             client: RwLock::new(build_client(proxy)?),
+            fanbox_client: RwLock::new(build_fanbox_client(proxy)?),
             api: Lane::new("接口", 2.0, 4),
             preview: Lane::new("预览", 10.0, 6),
             file: Lane::new("下载", 5.0, 4),
             pixiv: Lane::new("Pixiv", 1.0, 2),
             kemono: Lane::new("Kemono", 1.0, 2),
+            fanbox: Lane::new("FANBOX", 1.0, 2),
         })
     }
 
@@ -140,9 +144,16 @@ impl Net {
         self.client.read().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
+    /// FANBOX 请求携带会话 Cookie，不跟随服务端重定向。
+    pub fn fanbox_client(&self) -> reqwest::Client {
+        self.fanbox_client.read().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
     /// 按新的代理设置换客户端，之后发出的请求生效。
     pub fn apply_proxy(&self, proxy: &ProxySettings) -> Result<(), AppError> {
         let client = build_client(proxy)?;
+        let fanbox_client = build_fanbox_client(proxy)?;
+        *self.fanbox_client.write().unwrap_or_else(PoisonError::into_inner) = fanbox_client;
         *self.client.write().unwrap_or_else(PoisonError::into_inner) = client;
         Ok(())
     }
@@ -155,6 +166,14 @@ pub fn challenged(response: &Response) -> bool {
 
 /// 「跟随系统」时 reqwest 读取系统代理设置和 HTTP(S)_PROXY 环境变量；手动设置了代理就只用它。
 pub fn build_client(proxy: &ProxySettings) -> Result<reqwest::Client, AppError> {
+    Ok(client_builder(proxy)?.build()?)
+}
+
+fn build_fanbox_client(proxy: &ProxySettings) -> Result<reqwest::Client, AppError> {
+    Ok(client_builder(proxy)?.redirect(reqwest::redirect::Policy::none()).build()?)
+}
+
+fn client_builder(proxy: &ProxySettings) -> Result<reqwest::ClientBuilder, AppError> {
     let builder = reqwest::Client::builder()
         .user_agent(user_agent(None))
         .gzip(true)
@@ -173,7 +192,7 @@ pub fn build_client(proxy: &ProxySettings) -> Result<reqwest::Client, AppError> 
             builder.proxy(proxy)
         }
     };
-    Ok(builder.build()?)
+    Ok(builder)
 }
 
 /// 用给定的代理设置访问一次 Danbooru，返回耗时。只发一个很小的请求，不经过限速通道。

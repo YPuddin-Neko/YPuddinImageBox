@@ -16,10 +16,11 @@ import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
 import { hasMod, spaceForButton, useHotkeys } from "../../lib/hotkeys";
 import { collapsedTitle, t, tx } from "../../lib/i18n";
-import { errorMessage, postKey, postNumber, ratingOptions, RATINGS, type Rating, type Source } from "../../lib/ipc";
+import { errorMessage, isFanboxFile, postKey, postNumber, ratingOptions, RATINGS, type Rating, type Source } from "../../lib/ipc";
 import {
   libraryDelete,
   libraryList,
+  libraryOpenFile,
   librarySorts,
   type LibrarySort,
   type LocalPost,
@@ -141,6 +142,7 @@ export function LibraryGrid({
   useTauriEvent<SavedPayload>(EVENTS.librarySaved, () => setFresh((count) => count + 1));
 
   const posts = listing?.posts ?? [];
+  const fileUnits = scope.source === "fanbox" || scope.source === null;
   const { picked, pickedPosts, toggle: togglePick, clear: clearPicks, pickAll, forget } = usePicker(posts);
 
   // 删掉的图直接从列表里拿掉，不必重新加载。
@@ -209,6 +211,15 @@ export function LibraryGrid({
     }
   };
 
+  const openFile = async (post: LocalPost) => {
+    setActionError(null);
+    try {
+      await libraryOpenFile({ source: post.source, postId: post.id });
+    } catch (err) {
+      setActionError(t("{action}失败：{error}", { action: t("打开文件"), error: errorMessage(err) }));
+    }
+  };
+
   // 文件不见了：按原来的帖子重新下载，存好后图库自动刷新。
   const redownload = async (post: LocalPost) => {
     setActionError(null);
@@ -234,11 +245,11 @@ export function LibraryGrid({
       );
       if (outcome.removed.length > 0) {
         const n = formatCount(outcome.removed.length);
-        setNotice(keepFiles ? t("已从图库移除 {n} 张", { n }) : t("已删除 {n} 张", { n }));
+        setNotice(keepFiles ? t(fileUnits ? "已从图库移除 {n} 项" : "已从图库移除 {n} 张", { n }) : t(fileUnits ? "已删除 {n} 项" : "已删除 {n} 张", { n }));
       }
       if (outcome.failed.length > 0) {
         setActionError(
-          t("有 {n} 张没能移到{trash}：{error}", {
+          t(fileUnits ? "有 {n} 项没能移到{trash}：{error}" : "有 {n} 张没能移到{trash}：{error}", {
             n: formatCount(outcome.failed.length),
             trash: trashLabel(),
             error: outcome.failed[0].message,
@@ -334,14 +345,14 @@ export function LibraryGrid({
               <button
                 type="button"
                 className="btn sm collapsible"
-                title={collapsedTitle(t("有 {n} 张新下载的图", { n: formatCount(fresh) }))}
+                title={collapsedTitle(t(fileUnits ? "有 {n} 项新下载的文件" : "有 {n} 张新下载的图", { n: formatCount(fresh) }))}
                 onClick={() => void load(committed.current, 0)}
               >
                 <Icon name="retry" size={14} />
-                <span className="btn-text">{t("有 {n} 张新下载的图", { n: formatCount(fresh) })}</span>
+                <span className="btn-text">{t(fileUnits ? "有 {n} 项新下载的文件" : "有 {n} 张新下载的图", { n: formatCount(fresh) })}</span>
               </button>
             )}
-            <span className="count">{t("共 {n} 张", { n: formatCount(listing?.total ?? 0) })}</span>
+            <span className="count">{t(fileUnits ? "共 {n} 项" : "共 {n} 张", { n: formatCount(listing?.total ?? 0) })}</span>
           </div>
         </div>
         <div className="scroll">
@@ -364,11 +375,11 @@ export function LibraryGrid({
           )}
           {listing && posts.length === 0 && !loading && !error && (
             filtered ? (
-              <p className="hint">{t("没有符合条件的图片。可以减少 tag 或放宽分级再试。")}</p>
+              <p className="hint">{t(fileUnits ? "没有符合条件的文件。可以减少 tag 或放宽分级再试。" : "没有符合条件的图片。可以减少 tag 或放宽分级再试。")}</p>
             ) : (
               <div className="empty">
-                <p className="empty-title">{t("图库里还没有图片")}</p>
-                <p>{t("在「发现」里下载的图片会出现在这里。")}</p>
+                <p className="empty-title">{t(fileUnits ? "图库里还没有文件" : "图库里还没有图片")}</p>
+                <p>{t(fileUnits ? "在「发现」里下载的图片和附件会出现在这里。" : "在「发现」里下载的图片会出现在这里。")}</p>
                 <button type="button" className="btn primary" onClick={() => onNavigate("discover")}>
                   <Icon name="compass" size={15} />
                   {t("去发现")}
@@ -381,6 +392,7 @@ export function LibraryGrid({
             selected={selected}
             onSelect={selectCard}
             onView={(post) => {
+              if (isFanboxFile(post)) return;
               setSelected(postKey(post));
               setViewerPost(post);
             }}
@@ -400,7 +412,7 @@ export function LibraryGrid({
 
         <LoadingPill loading={loading} />
 
-        <SelectionDock count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
+        <SelectionDock unit={fileUnits ? "items" : "images"} count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
           <button type="button" className="btn danger" onClick={() => setDeleting(pickedPosts)} disabled={busy}>
             <Icon name="trash" size={15} />
             {t("删除")}
@@ -416,15 +428,19 @@ export function LibraryGrid({
           setFlash({ tag: cleanTag(tag), at: Date.now() });
         }}
         localPath={selectedPost?.path}
-        notice={selectedPost?.missing ? t("文件不在记录的位置，可能已被移动或删除。可以重新下载到图片位置。") : undefined}
+        notice={selectedPost?.missing ? t(isFanboxFile(selectedPost) ? "文件不在记录的位置，可能已被移动或删除。可以重新下载。" : "文件不在记录的位置，可能已被移动或删除。可以重新下载到图片位置。") : undefined}
         primaryAction={
           selectedPost && (
             <>
-              {!selectedPost.missing ? (
-                <button type="button" className="btn primary" onClick={() => void reveal(selectedPost)}>
+              {!selectedPost.missing ? (<>
+                {isFanboxFile(selectedPost) && <button type="button" className="btn primary" onClick={() => void openFile(selectedPost)}>
+                  <Icon name="file" size={15} />
+                  {t("打开文件")}
+                </button>}
+                <button type="button" className={`btn${isFanboxFile(selectedPost) ? " icon-only" : " primary"}`} title={revealLabel()} aria-label={revealLabel()} onClick={() => void reveal(selectedPost)}>
                   <Icon name="folder" size={15} />
-                  {revealLabel()}
-                </button>
+                  {!isFanboxFile(selectedPost) && revealLabel()}
+                </button></>
               ) : requeued.has(postKey(selectedPost)) ? (
                 <button type="button" className="btn" disabled>
                   <Icon name="check" size={15} />
@@ -439,8 +455,8 @@ export function LibraryGrid({
               <button
                 type="button"
                 className="btn danger icon-only"
-                aria-label={t("删除这张图")}
-                title={t("删除这张图")}
+                aria-label={t(isFanboxFile(selectedPost) ? "删除这个文件" : "删除这张图")}
+                title={t(isFanboxFile(selectedPost) ? "删除这个文件" : "删除这张图")}
                 onClick={() => setDeleting([selectedPost])}
                 disabled={busy}
               >
@@ -467,8 +483,8 @@ export function LibraryGrid({
         open={deleting !== null}
         title={
           deleting && deleting.length > 1
-            ? t("删除选中的 {n} 张图？", { n: formatCount(deleting.length) })
-            : t("删除这张图？")
+            ? t(deleting.some(isFanboxFile) ? "删除选中的 {n} 个文件？" : "删除选中的 {n} 张图？", { n: formatCount(deleting.length) })
+            : t(deleting?.some(isFanboxFile) ? "删除这个文件？" : "删除这张图？")
         }
         onClose={() => setDeleting(null)}
         initialFocus="last"
@@ -489,7 +505,7 @@ export function LibraryGrid({
       >
         <ul className="dialog-options">
           <li>
-            {tx("{title}：图片文件移到{trash}，还能从那里找回；图库记录和缩略图一起删除。", {
+            {tx(deleting?.some(isFanboxFile) ? "{title}：文件移到{trash}，还能从那里找回；图库记录一起删除。" : "{title}：图片文件移到{trash}，还能从那里找回；图库记录和缩略图一起删除。", {
               title: <b>{t("移到{trash}", { trash: trashLabel() })}</b>,
               trash: trashLabel(),
             })}

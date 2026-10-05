@@ -43,6 +43,7 @@ const PATHS = {
     </>
   ),
   download: <path d="M12 4.5v10.5M7.5 11 12 15.5l4.5-4.5M5 19.5h14" />,
+  file: <path d="M13.5 3.5h-7a1 1 0 0 0-1 1v15a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-11zM13.5 3.5v5h5M9 13h6M9 16.5h4" />,
   pause: <path d="M9 6.5v11M15 6.5v11" />,
   play: <path d="M8.5 5.8v12.4l9.5-6.2z" />,
   close: <path d="m6.5 6.5 11 11M17.5 6.5l-11 11" />,

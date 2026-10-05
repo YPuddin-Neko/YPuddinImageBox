@@ -67,10 +67,9 @@ export function t(text: Msg, vars?: Record<string, Value>): string {
 }
 
 /**
- * 可收起按钮（样式里的 `.collapsible`）的悬停提示：英文窄窗口下按钮只留图标，靠它看文字；
- * 中文不会收起，不加提示，免得和按钮上的字重复。
+ * 可收起按钮在窄窗口下只留图标，中英文都通过悬停提示保留完整操作名称。
  */
-export const collapsedTitle = (text: string) => (current === "en" ? text : undefined);
+export const collapsedTitle = (text: string) => text;
 
 /** 把几句话连成一段：中文直接相连，英文句子之间加空格。 */
 export const sentences = (...parts: (string | false | null | undefined)[]) =>

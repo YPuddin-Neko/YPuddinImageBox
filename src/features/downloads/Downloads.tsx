@@ -38,7 +38,7 @@ const actionButton = (action: JobAction, label: Msg, icon: IconName, ghost = fal
 function actionsFor(job: Job): ActionButton[] {
   const remove: ActionButton = {
     ...actionButton("remove", "移除", "trash", true),
-    title: t("只移除这条任务，已下载的图片不受影响"),
+    title: t(job.source === "fanbox" ? "只移除这条任务，已下载的文件不受影响" : "只移除这条任务，已下载的图片不受影响"),
   };
   switch (job.status) {
     case "queued":
@@ -51,7 +51,7 @@ function actionsFor(job: Job): ActionButton[] {
       return [actionButton("resume", "继续", "play"), remove];
     case "done":
       return job.failed > 0
-        ? [{ action: "retry", label: t("重试失败的 {n} 张", { n: formatCount(job.failed) }), icon: "retry" }, remove]
+        ? [{ action: "retry", label: t(job.source === "fanbox" ? "重试失败的 {n} 项" : "重试失败的 {n} 张", { n: formatCount(job.failed) }), icon: "retry" }, remove]
         : [remove];
   }
 }
@@ -102,13 +102,13 @@ function Progress({ job }: { job: Job }) {
 
 function countLabel(job: Job): string {
   const done = formatCount(processed(job));
-  return job.total != null ? `${done} / ${formatCount(job.total)}` : t("{n} 张", { n: done });
+  return job.total != null ? `${done} / ${formatCount(job.total)}` : t(job.source === "fanbox" ? "{n} 项" : "{n} 张", { n: done });
 }
 
 function NoteList({ source, notes }: { source: Source; notes: Notes | undefined }) {
   if (notes === undefined || notes === "loading") return <p className="job-notes-hint">{t("正在读取…")}</p>;
   if (notes === "failed") return <p className="job-notes-hint">{t("读取失败，请稍后再试。")}</p>;
-  if (notes.length === 0) return <p className="job-notes-hint">{t("没有跳过或失败的图。")}</p>;
+  if (notes.length === 0) return <p className="job-notes-hint">{t(source === "fanbox" ? "没有跳过或失败的文件。" : "没有跳过或失败的图。")}</p>;
   return (
     <ul className="job-notes">
       {notes.map((note) => (
@@ -230,7 +230,7 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
                 <code className="job-query" title={t("发给站点的查询")}>
                   {job.query || t("全部帖子")}
                   {job.localFilter ? t(" · 本地筛选 {filter}", { filter: job.localFilter }) : ""}
-                  {job.maxPosts ? t(" · 最多 {n} 张", { n: formatCount(job.maxPosts) }) : ""}
+                  {job.maxPosts ? t(job.source === "fanbox" ? " · 最多 {n} 项" : " · 最多 {n} 张", { n: formatCount(job.maxPosts) }) : ""}
                 </code>
               )}
               <Progress job={job} />

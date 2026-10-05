@@ -20,6 +20,7 @@ import {
   errorCode,
   errorMessage,
   goldOnly,
+  isFanboxFile,
   postKey,
   postNumber,
   ratingOptions,
@@ -217,8 +218,11 @@ function siteMessage(site: SiteStatus): string {
 }
 
 const isAccountError = (code: string | null | undefined) => code === "credentials_missing" || code === "bad_credentials";
-/** 账号出错时去设置页的按钮：Pixiv 是登录，其余站点填用户名和 API Key。 */
-const accountAction = (source: Source | undefined) => (source === "pixiv" ? t("登录 Pixiv") : t("填写账号"));
+/** Cookie 账号出错时提示登录，其余站点填写用户名和 API Key。 */
+const accountAction = (source: Source | undefined) =>
+  source === "pixiv" || source === "kemono" || source === "fanbox"
+    ? t("登录 {site}", { site: SOURCE_LABEL[source] })
+    : t("填写账号");
 
 const sitesLabel = (sources: Source[]) => sources.map((source) => SOURCE_LABEL[source]).join(t("、::list"));
 
@@ -417,6 +421,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     runLater({ ...formCriteria(), sources: next, platforms: next, sort: nextSort });
   };
 
+  const fileUnits = sources.includes("fanbox") || posts.some((post) => post.source === "fanbox");
   const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
   /** 来源勾选了两个以上站点（按搜索框里现在的勾选，不等搜索结果）。 */
   const combined = sources.length > 1;
@@ -489,7 +494,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   };
 
   const downloadPicked = async () => {
-    if (await enqueue(pickedPosts, t("已加入下载队列：{n} 张", { n: formatCount(pickedPosts.length) }))) clearPicks();
+    if (await enqueue(pickedPosts, t(fileUnits ? "已加入下载队列：{n} 项" : "已加入下载队列：{n} 张", { n: formatCount(pickedPosts.length) }))) clearPicks();
   };
 
   /** 能接着搜的站点：出错后不再往下翻的（例如没填账号）不下载、不订阅。 */
@@ -635,7 +640,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         onClick={() => void enqueue([selectedPost], t("已加入下载队列：#{id}", { id: postNumber(selectedPost) }))}
       >
         <Icon name="download" size={15} />
-        {t("下载原图")}
+        {t(isFanboxFile(selectedPost) ? "下载文件" : "下载原图")}
       </button>
     ) : (
       <button
@@ -678,7 +683,9 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                   ? t("输入 tag、user:画师 ID，或粘贴画师、作品链接")
                   : sources.length === 1 && sources[0] === "kemono"
                     ? t("输入关键词，或 creator:服务/作者 ID，例如 creator:patreon/123456")
-                  : t("输入 tag，空格分隔，例如 scenery sky")
+                    : sources.length === 1 && sources[0] === "fanbox"
+                      ? t("输入 creator:创作者 ID，或粘贴创作者、帖子链接")
+                      : t("输入 tag，空格分隔，例如 scenery sky")
               }
               value={tags}
               onChange={setTags}
@@ -763,7 +770,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 {t("本地筛选 {filter}", { filter: localFilter })}
               </span>
             )}
-            <span className="count">{t("{n} 张", { n: formatCount(posts.length) })}</span>
+            <span className="count">{t(fileUnits ? "{n} 项" : "{n} 张", { n: formatCount(posts.length) })}</span>
             <button
               type="button"
               className="btn sm collapsible"
@@ -826,7 +833,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             ))}
           {results && posts.length === 0 && !results.next && !loading && !error && (
             <p className="hint">
-              {committed.current.sort === "popular"
+              {sources.length === 1 && sources[0] === "fanbox" ? t("没有找到可访问的图片或附件。") : committed.current.sort === "popular"
                 ? t("没有找到符合条件的图片。「近期热门」只包含最近两天上传的图，可以换个排序再试。")
                 : t("没有找到符合条件的图片。可以减少 tag 或放宽分级再试。")}
             </p>
@@ -836,6 +843,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             selected={selectedKey}
             onSelect={selectCard}
             onView={(post) => {
+              if (isFanboxFile(post)) return;
               setSelected(postKey(post));
               setViewerPost(post);
             }}
@@ -855,7 +863,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
         <LoadingPill loading={loading} />
 
-        <SelectionDock count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
+        <SelectionDock unit={fileUnits ? "items" : "images"} count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
           <button type="button" className="btn primary" onClick={() => void downloadPicked()} disabled={busy}>
             <Icon name="download" size={15} />
             {t("下载")}
@@ -960,7 +968,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 />
                 <span>
                   {bulk.criteria.sort === "newest"
-                    ? t("张，留空表示全部下载")
+                    ? t(bulk.sites.some((site) => site.source === "fanbox") ? "项，留空表示全部下载" : "张，留空表示全部下载")
                     : t("张，按「{sort}」取排在前面的，留空表示全部下载", { sort: remoteSortLabel(bulk.criteria.sort) })}
                 </span>
               </dd>
@@ -968,7 +976,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             <p className="dialog-note">
               {sentences(
                 bulk.sites.length > 1 && t("每个平台各建一个下载任务，上限对每个平台分别计算。"),
-                t("已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。"),
+                t(bulk.sites.some((site) => site.source === "fanbox") ? "已在图库里的文件会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。" : "已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。"),
               )}
             </p>
           </>
@@ -1018,7 +1026,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                   onChange={(interval) => setSubscribing((current) => current && { ...current, interval })}
                 />
               </dd>
-              <dt>{t("已有的图")}</dt>
+              <dt>{t(subscribing.sites.some((site) => site.source === "fanbox") ? "已有的文件" : "已有的图")}</dt>
               <dd className="dialog-choices">
                 <label className="choice">
                   <input
@@ -1027,7 +1035,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                     checked={!subscribing.existing}
                     onChange={() => setSubscribing((current) => current && { ...current, existing: false })}
                   />
-                  {t("不下载，只下载以后的新图")}
+                  {t(subscribing.sites.some((site) => site.source === "fanbox") ? "不下载，只下载以后的新文件" : "不下载，只下载以后的新图")}
                 </label>
                 <label className="choice">
                   <input
@@ -1036,7 +1044,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                     checked={subscribing.existing}
                     onChange={() => setSubscribing((current) => current && { ...current, existing: true })}
                   />
-                  {tx("现在也下载，最多{input}张", {
+                  {tx(subscribing.sites.some((site) => site.source === "fanbox") ? "现在也下载，最多{input}项" : "现在也下载，最多{input}张", {
                     input: (
                       <input
                         className="field-input"
@@ -1045,7 +1053,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                         step={1}
                         inputMode="numeric"
                         placeholder={t("不限")}
-                        aria-label={t("最多下载多少张已有的图")}
+                        aria-label={t(subscribing.sites.some((site) => site.source === "fanbox") ? "最多下载多少项已有的文件" : "最多下载多少张已有的图")}
                         value={subscribing.max}
                         onFocus={() => setSubscribing((current) => current && { ...current, existing: true })}
                         onChange={(event) => {
@@ -1061,7 +1069,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             {subscribing.error && <p className="form-error">{subscribing.error}</p>}
             <p className="dialog-note">
               {sentences(
-                t("以后按设定的间隔检查，有新图就自动下载。"),
+                t(subscribing.sites.some((site) => site.source === "fanbox") ? "以后按设定的间隔检查，有新文件就自动下载。" : "以后按设定的间隔检查，有新图就自动下载。"),
                 subscribing.sites.length > 1 && t("每个平台各建一个订阅。"),
                 subscribing.criteria.sort !== "newest" &&
                   t("订阅按上传先后找新图，不使用「{sort}」排序。", { sort: remoteSortLabel(subscribing.criteria.sort) }),

@@ -6,6 +6,7 @@ import {
   goldOnly,
   hasSize,
   imageSrc,
+  isFanboxFile,
   localFileSrc,
   originalIsImage,
   originalSrc,
@@ -133,8 +134,10 @@ function scaleAt(rect: Rect, scale: number, box: Rect): string {
 const radiusOf = (element: Element) => parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0;
 
 /** 图片查看器。关闭时先播完缩回卡片的动画再移除。 */
-export function ImageViewer({ post, ...props }: ImageViewerProps) {
-  return <AnimatePresence>{post && <Viewer key="viewer" post={post} {...props} />}</AnimatePresence>;
+export function ImageViewer({ post, posts, ...props }: ImageViewerProps) {
+  return <AnimatePresence>{post && !isFanboxFile(post) && (
+    <Viewer key="viewer" post={post} posts={posts.filter((item) => !isFanboxFile(item))} {...props} />
+  )}</AnimatePresence>;
 }
 
 function Viewer({ post, posts, onClose, onChange, local = false, downloaded, cardOf }: ViewerProps) {

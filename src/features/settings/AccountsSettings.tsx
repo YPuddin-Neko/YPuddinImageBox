@@ -12,6 +12,8 @@ import {
   accountRemove,
   accountSave,
   accountsInfo,
+  fanboxLoginCheck,
+  fanboxLoginOpen,
   kemonoLoginCheck,
   kemonoLoginOpen,
   pixivLoginCheck,
@@ -32,7 +34,7 @@ interface SiteText {
   helpLink: Msg;
 }
 
-/** 填用户名和 API Key 的站点。Pixiv、Kemono 用 Cookie 登录（见 LoginCard），Yande.re 只填用户名（见 NameCard）。 */
+/** 填用户名和 API Key 的站点。Cookie 登录见 LoginCard，Yande.re 只填用户名（见 NameCard）。 */
 const SITES: Partial<Record<Source, SiteText>> = {
   danbooru: {
     nameLabel: "用户名",
@@ -242,6 +244,13 @@ const LOGIN_SITES: Partial<Record<Source, LoginText>> = {
     open: pixivLoginOpen,
     check: pixivLoginCheck,
   },
+  fanbox: {
+    description: "公开帖子的图片和附件无需登录。登录后可下载有权访问的内容，并查看关注和赞助的创作者。",
+    cookie: "FANBOXSESSID",
+    browserUrl: "https://www.fanbox.cc/",
+    open: fanboxLoginOpen,
+    check: fanboxLoginCheck,
+  },
   kemono: {
     description: "不登录也能搜索和下载。登录后可以在「收藏」里看你收藏的帖子和作者。",
     cookie: "session",
@@ -252,7 +261,7 @@ const LOGIN_SITES: Partial<Record<Source, LoginText>> = {
 };
 
 /**
- * Pixiv、Kemono：推荐在系统浏览器里登录后粘贴 Cookie；也可以在软件窗口里登录，登录好后自动保存。
+ * 推荐在系统浏览器里登录后粘贴 Cookie；也可以在软件窗口里登录，登录好后自动保存。
  */
 function LoginCard({
   site,

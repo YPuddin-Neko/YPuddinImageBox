@@ -102,6 +102,9 @@ pub struct AccountNames {
     /// Pixiv 的名字是账号昵称，「Key」是登录后的 PHPSESSID。
     #[serde(default)]
     pub pixiv: Option<SavedAccount>,
+    /// FANBOX 的名字是账号昵称，「Key」是登录后的 FANBOXSESSID。
+    #[serde(default)]
+    pub fanbox: Option<SavedAccount>,
     /// Kemono 的名字是用户名，「Key」是登录后的 session Cookie。
     #[serde(default)]
     pub kemono: Option<SavedAccount>,
@@ -118,6 +121,7 @@ impl AccountNames {
             Source::E621 => self.e621.as_ref(),
             Source::Rule34 => self.rule34.as_ref(),
             Source::Pixiv => self.pixiv.as_ref(),
+            Source::Fanbox => self.fanbox.as_ref(),
             Source::Kemono => self.kemono.as_ref(),
             Source::Yandere => self.yandere.as_ref(),
             Source::X => None,
@@ -132,6 +136,7 @@ impl AccountNames {
             Source::E621 => self.e621.as_mut(),
             Source::Rule34 => self.rule34.as_mut(),
             Source::Pixiv => self.pixiv.as_mut(),
+            Source::Fanbox => self.fanbox.as_mut(),
             Source::Kemono => self.kemono.as_mut(),
             Source::Yandere => self.yandere.as_mut(),
             Source::X => None,
@@ -146,6 +151,7 @@ impl AccountNames {
             Source::E621 => self.e621 = account,
             Source::Rule34 => self.rule34 = account,
             Source::Pixiv => self.pixiv = account,
+            Source::Fanbox => self.fanbox = account,
             Source::Kemono => self.kemono = account,
             Source::Yandere => self.yandere = account,
             // 不用登录的站点没有账号可存。
@@ -252,6 +258,7 @@ mod tests {
                 e621: None,
                 rule34: None,
                 pixiv: None,
+                fanbox: Some(SavedAccount { name: "creator".into(), level: None, sealed_key: Some("v1.fanbox".into()) }),
                 kemono: None,
                 yandere: Some(SavedAccount { name: "yuki".into(), level: None, sealed_key: None }),
             },
@@ -262,6 +269,14 @@ mod tests {
         };
         settings.save(&dir.path().join("nested")).unwrap();
         assert_eq!(Settings::load(&dir.path().join("nested")), settings);
+    }
+
+    #[test]
+    fn older_accounts_keep_their_names_without_fanbox() {
+        let accounts: AccountNames = serde_json::from_str(r#"{"pixiv":{"name":"existing","sealedKey":"v1.pixiv"}}"#).unwrap();
+        assert_eq!(accounts.pixiv.as_ref().unwrap().name, "existing");
+        assert_eq!(accounts.pixiv.as_ref().unwrap().sealed_key.as_deref(), Some("v1.pixiv"));
+        assert!(accounts.fanbox.is_none());
     }
 
     #[test]

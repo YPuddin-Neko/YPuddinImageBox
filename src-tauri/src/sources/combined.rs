@@ -161,6 +161,8 @@ mod tests {
             score,
             fav_count: None,
             file_ext: "jpg".into(),
+            file_name: None,
+            title: None,
             file_size: None,
             file_url: None,
             sample_url: None,

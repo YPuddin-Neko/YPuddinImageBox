@@ -20,7 +20,7 @@ use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{AppHandle, Manager, Runtime};
 use url::Url;
 
-use crate::sources::{self, Source};
+use crate::sources::{self, fanbox, Source};
 use crate::storage::StorageKind;
 use crate::{thumbs, AppState};
 
@@ -34,12 +34,13 @@ type Failure = (StatusCode, String);
 
 pub async fn serve<R: Runtime>(app: &AppHandle<R>, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let result = load(app, request.uri().path()).await;
+    let cache_control = if is_fanbox_path(request.uri().path()) { "no-store" } else { "private, max-age=604800" };
     let builder = Response::builder();
     match result {
         Ok((bytes, mime)) => builder
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, mime)
-            .header(header::CACHE_CONTROL, "private, max-age=604800")
+            .header(header::CACHE_CONTROL, cache_control)
             .body(bytes),
         Err((status, message)) => {
             if status.is_server_error() {
@@ -70,16 +71,23 @@ async fn load<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<(Vec<u8>, &'
     let source =
         sources::source_for_url(&url).ok_or((StatusCode::FORBIDDEN, "只能加载已接入站点的图片".to_string()))?;
 
-    // 每次请求都读取当前的缓存位置，修改位置后立即生效。
-    let cache = cache_path(app, &url);
+    let state = app.state::<AppState>();
+    let accounts = state.accounts.get();
+    let session = (source == Source::Fanbox).then(|| accounts.fanbox.as_ref().map(|c| c.session.as_str())).flatten();
+    // FANBOX 预览按会话分开缓存，切换账号后重新检查图片访问权限。
+    let cache = cache_path(app, &url, session);
     if let Some(bytes) = read_fresh(cache.as_deref()).await {
         if let Some(mime) = sniff(&bytes) {
             return Ok((bytes, mime));
         }
     }
 
-    let state = app.state::<AppState>();
-    let mut request = state.net.client().get(url.clone()).header(REFERER, source.referer());
+    let mut request = if source == Source::Fanbox {
+        fanbox::media_request(&state.net, url.clone(), accounts.fanbox.as_ref())
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+    } else {
+        state.net.client().get(url.clone()).header(REFERER, source.referer())
+    };
     if full {
         request = request.timeout(FULL_TIMEOUT);
     }
@@ -187,9 +195,24 @@ async fn load_local<R: Runtime>(app: &AppHandle<R>, route: &str) -> Result<(Vec<
     Ok((bytes, mime))
 }
 
-fn cache_path<R: Runtime>(app: &AppHandle<R>, url: &Url) -> Option<PathBuf> {
-    let digest = Md5::digest(url.as_str().as_bytes());
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+fn is_fanbox_path(path: &str) -> bool {
+    let Ok(raw) = percent_decode_str(path.trim_start_matches('/')).decode_utf8() else { return false };
+    let raw = raw.strip_prefix("full/").unwrap_or(&raw);
+    Url::parse(raw).ok().and_then(|url| sources::source_for_url(&url)) == Some(Source::Fanbox)
+}
+
+fn cache_key(url: &Url, session: Option<&str>) -> String {
+    let mut digest = Md5::new();
+    digest.update(url.as_str().as_bytes());
+    if let Some(session) = session {
+        digest.update([0]);
+        digest.update(session.as_bytes());
+    }
+    digest.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn cache_path<R: Runtime>(app: &AppHandle<R>, url: &Url, session: Option<&str>) -> Option<PathBuf> {
+    let hex = cache_key(url, session);
     let root = app.state::<AppState>().storage().path(StorageKind::Cache);
     Some(root.join("remote").join(&hex[..2]).join(hex))
 }
@@ -231,6 +254,16 @@ pub(crate) fn sniff(bytes: &[u8]) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fanbox_remote_cache_is_separated_by_session() {
+        let url = Url::parse("https://downloads.fanbox.cc/images/post/1/a.jpeg").unwrap();
+        assert_ne!(cache_key(&url, Some("first")), cache_key(&url, Some("second")));
+        assert_ne!(cache_key(&url, Some("first")), cache_key(&url, None));
+        assert!(is_fanbox_path("/full%2Fhttps%3A%2F%2Fdownloads.fanbox.cc%2Fimages%2Fa.jpeg"));
+        assert!(!is_fanbox_path("/local/file/fanbox/1000"));
+        assert!(!is_fanbox_path("/https%3A%2F%2Fdownloads.fanbox.cc.evil.test%2Fa.jpeg"));
+    }
 
     #[test]
     fn parses_local_routes_strictly() {

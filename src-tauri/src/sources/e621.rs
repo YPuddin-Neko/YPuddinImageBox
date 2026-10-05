@@ -189,6 +189,8 @@ fn normalize(raw: RawPost) -> Option<Post> {
         score: raw.score.and_then(|score| score.total).unwrap_or(0),
         fav_count: raw.fav_count,
         file_ext: file.ext.unwrap_or_default().to_ascii_lowercase(),
+        file_name: None,
+        title: None,
         file_size: file.size,
         file_url,
         sample_url,

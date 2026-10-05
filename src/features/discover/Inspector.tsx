@@ -6,7 +6,7 @@ import { Icon } from "../../components/Icon";
 import { ShimmerImage } from "../../components/ShimmerImage";
 import { formatBytes } from "../../lib/format";
 import { t, type Msg } from "../../lib/i18n";
-import { hasSize, imageSrc, postNumber, ratingLabel, SOURCE_LABEL, type Post, type PostTags } from "../../lib/ipc";
+import { hasSize, imageSrc, isFanboxFile, postNumber, ratingLabel, SOURCE_LABEL, type Post, type PostTags } from "../../lib/ipc";
 import { PANEL_ENTER } from "../../lib/motion";
 
 const TAG_GROUPS: { key: keyof PostTags; label: Msg }[] = [
@@ -51,6 +51,8 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice, o
   }
 
   const allTags = TAG_GROUPS.flatMap(({ key }) => post.tags[key]);
+  const fanbox = post.source === "fanbox";
+  const file = isFanboxFile(post);
   const copyTags = async () => {
     try {
       await navigator.clipboard.writeText(allTags.join(", "));
@@ -65,13 +67,13 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice, o
     <aside className="insp" aria-label={t("详情")}>
       <motion.div className="insp-body" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} transition={PANEL_ENTER}>
         <figure className="insp-figure">
-          <div className="insp-pv">
-            <ShimmerImage
+          <div className={`insp-pv${file ? " insp-file" : ""}`}>
+            {file ? <Icon name="file" size={48} /> : <ShimmerImage
               src={imageSrc(post.sampleUrl ?? post.thumbUrl)}
               alt={`#${postNumber(post)}`}
               loading="eager"
               fit="contain"
-            />
+            />}
           </div>
           <figcaption className="insp-res">
             {[
@@ -90,27 +92,35 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice, o
           {post.rating && <span className="badge">{ratingLabel(post.rating)}</span>}
         </div>
         <dl className="insp-meta">
+          {fanbox && post.title && (
+            <div className="wide"><dt>{t("标题")}</dt><dd>{post.title}</dd></div>
+          )}
+          {fanbox && post.fileName && (
+            <div className="wide"><dt>{t("文件名")}</dt><dd>{post.fileName}</dd></div>
+          )}
           <div>
             <dt>{t("大小")}</dt>
             <dd>{formatBytes(post.fileSize)}</dd>
           </div>
-          <div>
+          {fanbox ? <>
+            <div><dt>{t("格式")}</dt><dd>{post.fileExt.toUpperCase() || "—"}</dd></div>
+            <div><dt>{t("作者")}</dt><dd>{post.tags.artist.join(", ") || "—"}</dd></div>
+          </> : <><div>
             <dt>{t("分数")}</dt>
-            {/* Pixiv 的作品列表、Kemono 的帖子不给分数。 */}
             <dd>{post.source === "pixiv" || post.source === "kemono" ? "—" : post.score}</dd>
           </div>
           <div>
             <dt>{t("收藏")}</dt>
             <dd>{post.favCount ?? "—"}</dd>
-          </div>
+          </div></>}
           <div>
             <dt>{t("发布")}</dt>
             <dd>{formatDate(post.createdAt)}</dd>
           </div>
-          <div className="wide">
+          {!fanbox && <div className="wide">
             <dt>md5</dt>
             <dd className="mono">{post.md5 ?? "—"}</dd>
-          </div>
+          </div>}
           {localPath && (
             <div className="wide">
               <dt>{t("保存位置")}</dt>
@@ -121,7 +131,7 @@ export function Inspector({ post, emptyText, localPath, primaryAction, notice, o
           )}
         </dl>
         <div className="insp-tags">
-          {TAG_GROUPS.filter(({ key }) => post.tags[key].length > 0).map(({ key, label }) => (
+          {TAG_GROUPS.filter(({ key }) => post.tags[key].length > 0 && !(fanbox && key === "artist")).map(({ key, label }) => (
             <section key={key}>
               <h3>{t(label)}</h3>
               <ul className={`tags tag-${key}`}>

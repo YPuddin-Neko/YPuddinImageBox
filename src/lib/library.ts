@@ -17,6 +17,9 @@ export interface PostRef {
   postId: number;
 }
 
+export const libraryOpenFile = (post: PostRef) =>
+  invoke<void>("library_open_file", { source: post.source, id: post.postId });
+
 export interface DeleteOutcome {
   removed: PostRef[];
   failed: { postId: number; message: string }[];
@@ -128,6 +131,7 @@ const SOURCE_GROUP_KINDS: Record<Source, GroupKind[]> = {
   kemono: ["artist"],
   yandere: ["general"],
   pixiv: ["artist", "general"],
+  fanbox: ["artist", "general"],
   x: ["artist", "general"],
   custom: ["artist", "general"],
 };

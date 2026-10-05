@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use tauri::webview::NewWindowResponse;
+use tauri_plugin_opener::OpenerExt;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::error::AppError;
@@ -15,7 +16,7 @@ use crate::settings::{parse_proxy_url, KeyStorage, ProxyMode, ProxySettings, Sav
 use crate::sources::filter::{self, QueryPlan};
 use crate::sources::x::Capture;
 use crate::sources::{
-    self, combined, danbooru, e621, gelbooru, kemono, moebooru, pixiv, rule34, Page, Post, Rating, SearchPage, SearchParams, Sort, Source,
+    self, combined, danbooru, e621, fanbox, gelbooru, kemono, moebooru, pixiv, rule34, Page, Post, Rating, SearchPage, SearchParams, Sort, Source,
 };
 use crate::storage::{self, ChangeMode, StorageInfo, StorageKind};
 use crate::{keys, net, secrets, thumbs, x_bridge, AppState};
@@ -31,12 +32,20 @@ fn tag_limit(state: &AppState, source: Source) -> Option<usize> {
             let level = state.settings().accounts.danbooru.as_ref().and_then(|a| a.level.clone());
             Some(filter::danbooru_tag_limit(if signed_in { level.as_deref() } else { None }))
         }
-        Source::Gelbooru | Source::E621 | Source::Rule34 | Source::Kemono | Source::Yandere | Source::Pixiv | Source::X | Source::Custom => None,
+        Source::Gelbooru | Source::E621 | Source::Rule34 | Source::Kemono | Source::Yandere | Source::Pixiv | Source::Fanbox | Source::X | Source::Custom => None,
     }
 }
 
 /// 超出 tag 上限时一次最多往下翻几页找够一页结果，免得条件太严时一直翻。
 const MAX_FILTERED_PAGES: usize = 5;
+
+fn search_page_size(source: Source, requested: u32) -> u32 {
+    if source == Source::Fanbox { fanbox::PAGE_SIZE } else { requested }
+}
+
+fn next_search_page(source: Source, page: u32, requested: u32, fetched: usize) -> Option<String> {
+    (fetched >= search_page_size(source, requested) as usize).then(|| (page + 1).to_string())
+}
 
 /// 搜一个站点一页的结果。
 struct SiteResults {
@@ -61,7 +70,7 @@ async fn search_with_plan(
         let (posts, fetched) =
             sources::fetch(&state.net, &accounts, params.source, query, &Page::Number(page), page_size).await?;
         let reached = combined::lowest(&posts, params.sort);
-        (posts, (fetched >= page_size as usize).then(|| (page + 1).to_string()), reached)
+        (posts, next_search_page(params.source, page, page_size, fetched), reached)
     } else {
         // 按站点每页最多的条数往下翻，本地筛到够一页或翻满几页就先返回，剩下的下次接着翻。
         let mut page = params.cursor.as_deref().and_then(Page::parse).unwrap_or(Page::Number(1));
@@ -91,6 +100,7 @@ async fn search_with_plan(
 
 /// 搜一个站点的一页，每页 `page_size` 张。
 async fn search_site(state: &AppState, params: &SearchParams, page_size: u32) -> Result<SiteResults, AppError> {
+    let page_size = search_page_size(params.source, page_size);
     let tags = params.tags_with_sort()?;
     let mut limit = tag_limit(state, params.source);
     // 站点实际的上限比按账号等级算的小时（例如等级刚变），按站点给的数字重新拆一次。
@@ -353,6 +363,17 @@ pub async fn clear_finished_jobs(state: State<'_, AppState>) -> Result<(), AppEr
 }
 
 #[tauri::command]
+pub async fn library_open_file(app: AppHandle, state: State<'_, AppState>, source: Source, id: u64) -> Result<(), AppError> {
+    let path = state.library.local_path(source, id).await?
+        .ok_or_else(|| AppError::InvalidInput(tr!("图库里没有这个文件", "This file is not in the library")))?;
+    if !path.is_file() {
+        return Err(AppError::InvalidInput(tr!("文件已移动或删除", "The file was moved or deleted")));
+    }
+    app.opener().open_path(path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|err| AppError::Internal(err.to_string()))
+}
+
+#[tauri::command]
 pub async fn library_list(state: State<'_, AppState>, query: LibraryQuery) -> Result<LibraryPage, AppError> {
     let mut page = state.library.list(&query).await?;
     for post in &mut page.posts {
@@ -435,6 +456,8 @@ fn import_files(paths: Vec<PathBuf>, root: PathBuf, classify: bool) -> Result<(V
                 score: 0,
                 fav_count: None,
                 file_ext: ext,
+                file_name: None,
+                title: None,
                 file_size: Some(bytes.len() as u64),
                 file_url: None,
                 sample_url: None,
@@ -812,6 +835,7 @@ fn accounts_info_of(state: &AppState) -> AccountsInfo {
             view(Source::E621, &settings.accounts.e621, accounts.e621.is_some()),
             view(Source::Rule34, &settings.accounts.rule34, accounts.rule34.is_some()),
             view(Source::Pixiv, &settings.accounts.pixiv, accounts.pixiv.is_some()),
+            view(Source::Fanbox, &settings.accounts.fanbox, accounts.fanbox.is_some()),
             view(Source::Kemono, &settings.accounts.kemono, accounts.kemono.is_some()),
             // Yande.re 只存用户名，没有要读取的 Key。
             view(Source::Yandere, &settings.accounts.yandere, settings.accounts.yandere.is_some()),
@@ -833,7 +857,7 @@ pub fn accounts_info(state: State<'_, AppState>) -> AccountsInfo {
 }
 
 /// 先用填写的账号访问一次站点，通过了才把 API Key 存进钥匙串。
-/// Pixiv、Kemono 填的是登录后的 Cookie，账号名从站点取，不用填；Yande.re 只填用户名。
+/// Pixiv、FANBOX、Kemono 填的是登录后的 Cookie，账号名从站点取，不用填；Yande.re 只填用户名。
 #[tauri::command]
 pub async fn account_save(
     state: State<'_, AppState>,
@@ -882,6 +906,8 @@ async fn save_account(state: &AppState, source: Source, name: String, api_key: S
     if api_key.is_empty() {
         return Err(AppError::InvalidInput(if source == Source::Pixiv {
             tr!("请粘贴 PHPSESSID", "Paste your PHPSESSID")
+        } else if source == Source::Fanbox {
+            tr!("请粘贴 FANBOXSESSID", "Paste your FANBOXSESSID")
         } else if source == Source::Kemono {
             tr!("请粘贴 session", "Paste your session cookie")
         } else {
@@ -924,6 +950,13 @@ async fn save_account(state: &AppState, source: Source, name: String, api_key: S
             let user = kemono::verify(&state.net, &creds).await?;
             (user, None, api_key)
         }
+        Source::Fanbox => {
+            let creds = fanbox::Credentials::from_session(&api_key).ok_or_else(|| {
+                AppError::InvalidInput(tr!("FANBOXSESSID 格式无效", "The FANBOXSESSID format is invalid"))
+            })?;
+            let user = fanbox::verify(&state.net, &creds).await?;
+            (user, None, creds.session)
+        }
         Source::Yandere => unreachable!("Yande.re 在前面按只存用户名处理"),
         Source::X => {
             return Err(AppError::InvalidInput(tr!("X 的登录在媒体采集窗口里完成", "Sign in to X in the media capture window")))
@@ -964,7 +997,7 @@ fn save_name(state: &AppState, source: Source, name: String) -> Result<AccountsI
     Ok(accounts_info_of(state))
 }
 
-/// 退出登录：删掉保存的 API Key 和设置里的用户名。Pixiv、Kemono 还要清掉登录窗口留下的 Cookie，
+/// 退出登录：删掉保存的 API Key 和设置里的用户名。Cookie 登录的站点还要清掉登录窗口留下的 Cookie，
 /// 不然下次点「登录」会直接用上一个账号登录。
 #[tauri::command]
 pub async fn account_remove(app: AppHandle, state: State<'_, AppState>, source: Source) -> Result<AccountsInfo, AppError> {
@@ -980,7 +1013,7 @@ pub async fn account_remove(app: AppHandle, state: State<'_, AppState>, source: 
     Ok(accounts_info_of(&state))
 }
 
-/// 在站点自己的登录页里登录的窗口（Pixiv、Kemono）。账号密码只在站点的页面里输入，窗口没有调用软件功能的权限；
+/// 在站点自己的登录页里登录的窗口。账号密码只在站点的页面里输入，窗口没有调用软件功能的权限；
 /// 登录成功后由 [`check_login`] 从窗口的 Cookie 里取出登录状态。所有窗口共用一份 Cookie。
 #[derive(Clone, Copy)]
 struct LoginSite {
@@ -1008,11 +1041,19 @@ impl LoginSite {
         site_url: "https://kemono.cr/",
         cookie: "session",
     };
+    const FANBOX: LoginSite = LoginSite {
+        source: Source::Fanbox,
+        window: "fanbox-login",
+        login_url: "https://www.fanbox.cc/",
+        site_url: "https://www.fanbox.cc/",
+        cookie: "FANBOXSESSID",
+    };
 
     fn of(source: Source) -> Option<LoginSite> {
         match source {
             Source::Pixiv => Some(Self::PIXIV),
             Source::Kemono => Some(Self::KEMONO),
+            Source::Fanbox => Some(Self::FANBOX),
             _ => None,
         }
     }
@@ -1025,6 +1066,7 @@ impl LoginSite {
     fn accepts(&self, value: &str) -> bool {
         match self.source {
             Source::Pixiv => pixiv::Credentials::from_session(value).is_some(),
+            Source::Fanbox => fanbox::Credentials::from_session(value).is_some(),
             _ => !value.is_empty(),
         }
     }
@@ -1039,7 +1081,7 @@ pub struct PopupOpen {
     pub proxy_fallback: bool,
 }
 
-/// 弹出的站点窗口（Pixiv、Kemono 登录，X 采集）使用「设置 → 网络」里的代理，代理用不上时退回直连。
+/// 弹出的站点窗口使用「设置 → 网络」里的代理，代理用不上时退回直连。
 ///
 /// Windows 的 WebView2 把代理写在浏览器进程的启动参数里，同一个数据目录只能有一套启动参数；主窗口不带代理、
 /// 占着默认目录，带代理的窗口在那里建不起来，所以弹出窗口各用自己的数据目录。macOS 的代理设在每个窗口
@@ -1182,6 +1224,7 @@ async fn open_login(app: &AppHandle, state: &AppState, login: LoginSite) -> Resu
     let url: url::Url = login.login_url.parse().map_err(|err: url::ParseError| AppError::Internal(err.to_string()))?;
     let title = match login.source {
         Source::Kemono => tr!("登录 Kemono", "Sign in to Kemono"),
+        Source::Fanbox => tr!("登录 FANBOX", "Sign in to FANBOX"),
         _ => tr!("登录 Pixiv", "Sign in to Pixiv"),
     };
     // 登录窗口不留 Cookie：登录状态由软件保存，退出登录后再打开就是干净的登录页。
@@ -1251,6 +1294,21 @@ pub async fn kemono_login_open(app: AppHandle, state: State<'_, AppState>) -> Re
 #[tauri::command]
 pub async fn kemono_login_check(app: AppHandle, state: State<'_, AppState>) -> Result<LoginCheck, AppError> {
     check_login(&app, &state, LoginSite::KEMONO).await
+}
+
+#[tauri::command]
+pub async fn fanbox_login_open(app: AppHandle, state: State<'_, AppState>) -> Result<PopupOpen, AppError> {
+    open_login(&app, &state, LoginSite::FANBOX).await
+}
+
+#[tauri::command]
+pub async fn fanbox_login_check(app: AppHandle, state: State<'_, AppState>) -> Result<LoginCheck, AppError> {
+    check_login(&app, &state, LoginSite::FANBOX).await
+}
+
+#[tauri::command]
+pub async fn fanbox_favorite_creators(state: State<'_, AppState>, mode: String) -> Result<Vec<fanbox::FavoriteCreator>, AppError> {
+    fanbox::favorite_creators(&state.net, state.accounts.get().fanbox.as_ref(), &mode).await
 }
 
 /// Kemono 上收藏的作者，后收藏的在前。
@@ -1405,6 +1463,28 @@ mod tests {
     use crate::settings::Settings;
     use crate::sources::AccountStore;
     use crate::storage::{Defaults, Storage};
+
+    #[test]
+    fn fanbox_pages_continue_at_the_site_page_size() {
+        for requested in [40, 20, 5] {
+            assert_eq!(search_page_size(Source::Fanbox, requested), 10);
+            assert_eq!(next_search_page(Source::Fanbox, 1, requested, 10).as_deref(), Some("2"));
+            assert_eq!(next_search_page(Source::Fanbox, 2, requested, 9), None);
+            assert_eq!(next_search_page(Source::Fanbox, 3, requested, 0), None);
+        }
+        assert_eq!(next_search_page(Source::Danbooru, 1, 40, 10), None);
+        assert_eq!(next_search_page(Source::Danbooru, 1, 40, 40).as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn fanbox_login_reads_its_own_cookie() {
+        let login = LoginSite::of(Source::Fanbox).unwrap();
+        assert_eq!(login.window, "fanbox-login");
+        assert_eq!(login.login_url, "https://www.fanbox.cc/");
+        assert_eq!(login.site().host_str(), Some("www.fanbox.cc"));
+        assert_eq!(login.cookie, "FANBOXSESSID");
+        assert!(!login.accepts(""));
+    }
 
     #[test]
     fn splits_pasted_credentials() {

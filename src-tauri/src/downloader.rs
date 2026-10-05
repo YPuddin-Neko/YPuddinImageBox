@@ -23,7 +23,7 @@ use crate::library::{now_ms, ItemStatus, JobInfo, JobItem, JobKind, JobStatus, L
 use crate::net::Net;
 use crate::protocol::sniff;
 use crate::sources::filter::LocalFilter;
-use crate::sources::{self, kemono, pixiv, AccountStore, Page, Post, Source};
+use crate::sources::{self, fanbox, kemono, pixiv, AccountStore, Page, Post, Source};
 use crate::storage::{Storage, StorageKind};
 use crate::thumbs;
 
@@ -578,7 +578,7 @@ impl Downloader {
                 return Ok(Outcome::Skipped(note_owned()));
             }
         }
-        let Some(ext) = image_ext(post) else { return Ok(Outcome::Skipped(note_not_image())) };
+        let Some(ext) = download_ext(post) else { return Ok(Outcome::Skipped(note_not_image())) };
         let Some(url) = post.file_url.as_deref() else { return Ok(Outcome::Failed(note_no_file(post).into())) };
         let url = match Url::parse(url) {
             // 只从帖子所属站点的域名下载。
@@ -598,7 +598,7 @@ impl Downloader {
         let target = target_path(&root, post, &ext);
         let mut attempt = 1;
         loop {
-            match fetch_file(&self.net, &url, post, &target).await {
+            match fetch_file(&self.net, &url, post, &target, self.accounts.get().fanbox.as_ref()).await {
                 Ok(()) => break,
                 Err(err) if err.retryable() && attempt < ATTEMPTS => {
                     tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
@@ -608,7 +608,7 @@ impl Downloader {
             }
         }
         // 站点没给尺寸（Kemono、部分 X 图片记为 1 × 1）：按下载好的文件补上，图库里的比例才对。
-        let sized = if post.width <= 1 || post.height <= 1 {
+        let sized = if image_ext(post).is_some() && (post.width <= 1 || post.height <= 1) {
             image_size(target.clone()).await.map(|(width, height)| Post { width, height, ..post.clone() })
         } else {
             None
@@ -618,7 +618,9 @@ impl Downloader {
 
         // 缩略图生成失败不影响下载结果，浏览图库时会再生成。
         let cache = read(&self.storage).path(StorageKind::Cache);
-        let _ = thumbs::generate(target, thumbs::path(&cache, post.source, post.id)).await;
+        if image_ext(post).is_some() {
+            let _ = thumbs::generate(target, thumbs::path(&cache, post.source, post.id)).await;
+        }
         Ok(Outcome::Saved)
     }
 }
@@ -646,8 +648,20 @@ fn image_ext(post: &Post) -> Option<String> {
     IMAGE_EXTS.contains(&ext.as_str()).then_some(ext)
 }
 
+fn is_attachment(post: &Post) -> bool {
+    post.source == Source::Fanbox && post.file_name.as_deref().is_some_and(|name| !name.trim().is_empty())
+}
+
+fn download_ext(post: &Post) -> Option<String> {
+    image_ext(post).or_else(|| {
+        let ext = post.file_ext.to_ascii_lowercase();
+        (is_attachment(post) && !ext.is_empty() && ext.len() <= 16 && ext.bytes().all(|b| b.is_ascii_alphanumeric()))
+            .then_some(ext)
+    })
+}
+
 /// 保存位置：`图片位置/站点/画师/帖子id.扩展名`；没有画师 tag 时直接放在站点目录下。
-/// Pixiv 的文件名和原图一样是「作品id_p页码」，Kemono 是「帖子id_p第几张」。
+/// 多图投稿用「帖子id_p第几张」命名，避免同一投稿的图片互相覆盖。
 pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
     let mut dir = root.join(post.source.site_name());
     if let Some(artist) = post.tags.artist.first() {
@@ -662,9 +676,19 @@ pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
             let (id, index) = kemono::split_id(post.id);
             format!("{id}_p{index}")
         }
+        Source::Fanbox => {
+            let (id, index) = fanbox::split_id(post.id);
+            format!("{id}_p{index}")
+        }
         _ => post.id.to_string(),
     };
-    dir.join(format!("{name}.{ext}"))
+    if is_attachment(post) {
+        let original = post.file_name.as_deref().unwrap_or_default();
+        let stem = original.rsplit_once('.').map_or(original, |(stem, _)| stem);
+        dir.join(format!("{name}_{}.{ext}", safe_name(stem)))
+    } else {
+        dir.join(format!("{name}.{ext}"))
+    }
 }
 
 /// 把 tag 变成 Windows 和 macOS 都能用的文件夹名。
@@ -761,8 +785,32 @@ impl Drop for PartFile {
     }
 }
 
-async fn fetch_file(net: &Net, url: &Url, post: &Post, target: &Path) -> Result<(), FetchError> {
-    let request = net.client().get(url.clone()).header(REFERER, post.source.referer()).timeout(FILE_TIMEOUT);
+fn validate_download(post: &Post, head: &[u8], content_type: &str) -> Result<(), FetchError> {
+    if !is_attachment(post) || image_ext(post).is_some() {
+        return sniff(head).map(|_| ()).ok_or(FetchError::NotImage);
+    }
+    let ext = post.file_ext.to_ascii_lowercase();
+    let wrong_type = match ext.as_str() {
+        "zip" => ![b"PK\x03\x04".as_slice(), b"PK\x05\x06".as_slice(), b"PK\x07\x08".as_slice()].iter().any(|magic| head.starts_with(magic)),
+        "psd" | "psb" => !head.starts_with(b"8BPS"),
+        "pdf" => !head.starts_with(b"%PDF-"),
+        _ => head.is_empty() || (!matches!(ext.as_str(), "html" | "htm") && content_type.starts_with("text/html")),
+    };
+    if wrong_type {
+        Err(FetchError::Other(tr!("返回内容不是预期的附件文件", "The response is not the expected attachment file")))
+    } else {
+        Ok(())
+    }
+}
+
+async fn fetch_file(
+    net: &Net, url: &Url, post: &Post, target: &Path, fanbox_credentials: Option<&fanbox::Credentials>,
+) -> Result<(), FetchError> {
+    let request = if post.source == Source::Fanbox {
+        fanbox::media_request(net, url.clone(), fanbox_credentials).map_err(|err| FetchError::Other(err.to_string()))?
+    } else {
+        net.client().get(url.clone()).header(REFERER, post.source.referer())
+    }.timeout(FILE_TIMEOUT);
     let mut response = net.file.send(request).await.map_err(|err| match err {
         AppError::Network(err) => FetchError::Network(err),
         other => FetchError::Other(other.to_string()),
@@ -770,6 +818,8 @@ async fn fetch_file(net: &Net, url: &Url, post: &Post, target: &Path) -> Result<
     if !response.status().is_success() {
         return Err(FetchError::Status(response.status().as_u16()));
     }
+    let content_type = response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok()).unwrap_or_default().to_string();
     if let Some(parent) = target.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(FetchError::Io)?;
     }
@@ -789,9 +839,7 @@ async fn fetch_file(net: &Net, url: &Url, post: &Post, target: &Path) -> Result<
     file.flush().await.map_err(FetchError::Io)?;
     drop(file);
 
-    if sniff(&head).is_none() {
-        return Err(FetchError::NotImage);
-    }
+    validate_download(post, &head, &content_type)?;
     if post.file_size.is_some_and(|expected| expected != size) {
         return Err(FetchError::Incomplete);
     }
@@ -824,6 +872,8 @@ mod tests {
             score: 0,
             fav_count: None,
             file_ext: ext.into(),
+            file_name: None,
+            title: None,
             file_size: None,
             file_url: file_url.map(str::to_string),
             sample_url: None,
@@ -855,6 +905,45 @@ mod tests {
         assert_eq!(target_path(root, &p, "png"), PathBuf::from("/pics/Danbooru/alice/42.png"));
         p.tags.artist.clear();
         assert_eq!(target_path(root, &p, "png"), PathBuf::from("/pics/Danbooru/42.png"));
+    }
+
+    #[test]
+    fn fanbox_images_keep_post_and_image_numbers_in_paths() {
+        let root = Path::new("/pics");
+        let mut p = post(12_560_223_001, "jpeg", None);
+        p.source = Source::Fanbox;
+        assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/FANBOX/alice/12560223_p1.jpeg"));
+        assert_eq!(p.label(), "#12560223 p2");
+    }
+
+    #[test]
+    fn fanbox_attachments_keep_safe_names_and_reject_login_pages() {
+        let mut p = post(42_001, "zip", Some("https://downloads.fanbox.cc/files/post/42/a.zip"));
+        p.source = Source::Fanbox;
+        p.file_name = Some("../同名源文件.zip".into());
+        assert_eq!(download_ext(&p).as_deref(), Some("zip"));
+        assert_eq!(target_path(Path::new("/pics"), &p, "zip"), PathBuf::from("/pics/FANBOX/alice/42_p1__._同名源文件.zip"));
+        assert!(validate_download(&p, b"PK\x03\x04some-file", "application/zip").is_ok());
+        assert!(validate_download(&p, b"<!DOCTYPE html>", "text/html").is_err());
+        p.file_ext = "psd".into();
+        assert!(validate_download(&p, b"8BPS\0\x01", "application/octet-stream").is_ok());
+        assert!(validate_download(&p, b"PK\x03\x04", "application/octet-stream").is_err());
+        p.source = Source::Kemono;
+        assert!(download_ext(&p).is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires public FANBOX network access"]
+    async fn downloads_public_fanbox_image_into_library() {
+        let h = harness().await;
+        let (posts, _) = fanbox::search(&h.downloader.net, None, "post:12560223", &Page::Number(1)).await.unwrap();
+        let post = posts.first().expect("public example has an image");
+        assert!(matches!(h.downloader.save(post).await.unwrap(), Outcome::Saved));
+        let path = h.library.local_path(Source::Fanbox, post.id).await.unwrap().unwrap();
+        let bytes = tokio::fs::read(&path).await.unwrap();
+        assert!(sniff(&bytes).is_some());
+        assert!(!bytes.is_empty());
+        assert!(matches!(h.downloader.save(post).await.unwrap(), Outcome::Skipped(_)));
     }
 
     #[test]

@@ -65,6 +65,7 @@ export function Library({ active, onNavigate }: { active: boolean; onNavigate: N
     kemono: "artist",
     yandere: "general",
     pixiv: "artist",
+    fanbox: "artist",
     x: "artist",
     custom: "artist",
   });
@@ -148,6 +149,7 @@ function FolderShelf({
   useLibraryChanges(load);
 
   const total = folders?.reduce((sum, folder) => sum + folder.count, 0) ?? 0;
+  const fileUnits = folders?.some((folder) => folder.source === "fanbox" && folder.count > 0) ?? false;
   const importImages = async () => {
     try {
       const selected = await open({
@@ -184,11 +186,11 @@ function FolderShelf({
       <header className="page-head library-page-head" data-tauri-drag-region>
         <div className="page-title">
           <h1>{t("图库")}</h1>
-          <p>{folders ? t("{n} 张图，按来源分成文件夹，封面是最近下载的几张。", { n: formatCount(total) }) : " "}</p>
+          <p>{folders ? t(fileUnits ? "{n} 项，按来源分成文件夹，封面是最近下载的图片。" : "{n} 张图，按来源分成文件夹，封面是最近下载的几张。", { n: formatCount(total) }) : " "}</p>
         </div>
         <button type="button" className="btn ghost" onClick={onAll} disabled={total === 0}>
           <Icon name="grid" size={15} />
-          {t("全部图片")}
+          {t(fileUnits ? "全部文件" : "全部图片")}
         </button>
       </header>
 
@@ -210,11 +212,11 @@ function FolderShelf({
                 <FanStack covers={folder.covers} max={FOLDER_COVERS} />
                 <span className="stack-meta">
                   <span className="stack-title">{SOURCE_LABEL[folder.source]}</span>
-                  <span className="stack-count">{t("{n} 张", { n: formatCount(folder.count) })}</span>
+                  <span className="stack-count">{t(folder.source === "fanbox" ? "{n} 项" : "{n} 张", { n: formatCount(folder.count) })}</span>
                 </span>
                 <span className="stack-sub">
                   {folder.latestAt === null
-                    ? folder.source === "custom" ? t("还没有导入的图片") : t("还没有下载的图片")
+                    ? folder.source === "custom" ? t("还没有导入的图片") : t(folder.source === "fanbox" ? "还没有下载的文件" : "还没有下载的图片")
                     : t("最近下载 {time}", { time: formatTime(folder.latestAt) })}
                 </span>
               </>
@@ -368,7 +370,7 @@ function GroupShelf({
             </h1>
             <p>
               {folder
-                ? `${t("{n} 张", { n: formatCount(folder.count) })} · ${groupTotal(kind, total)}`
+                ? `${t(folder.source === "fanbox" ? "{n} 项" : "{n} 张", { n: formatCount(folder.count) })} · ${groupTotal(kind, total)}`
                 : " "}
             </p>
           </div>

@@ -132,6 +132,7 @@ mod tests {
                 e621: None,
                 rule34: None,
                 pixiv: None,
+                fanbox: None,
                 kemono: None,
                 yandere: None,
             },

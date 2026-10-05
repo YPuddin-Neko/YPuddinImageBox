@@ -25,9 +25,9 @@ import {
 } from "../../lib/subscriptions";
 
 function lastResult(sub: Subscription): string {
-  if (sub.activeJob !== null) return t("正在检查新图…");
+  if (sub.activeJob !== null) return t(sub.source === "fanbox" ? "正在检查新文件…" : "正在检查新图…");
   if (sub.lastCheckedAt === null) return t("还没检查过");
-  const found = sub.lastNew > 0 ? t("找到 {n} 张新图", { n: formatCount(sub.lastNew) }) : t("没有新图");
+  const found = sub.lastNew > 0 ? t(sub.source === "fanbox" ? "找到 {n} 项新文件" : "找到 {n} 张新图", { n: formatCount(sub.lastNew) }) : t(sub.source === "fanbox" ? "没有新文件" : "没有新图");
   return t("{time} 检查，{found}", { time: formatTime(sub.lastCheckedAt), found });
 }
 
@@ -219,7 +219,7 @@ export function Subscriptions({ onNavigate }: { onNavigate: Navigate }) {
         }
       >
         <p className="dialog-note">
-          {t("以后不再检查「{title}」的新图。已经下载的图和进行中的下载都保留。", {
+          {t(deleting?.source === "fanbox" ? "以后不再检查「{title}」的新文件。已经下载的文件和进行中的下载都保留。" : "以后不再检查「{title}」的新图。已经下载的图和进行中的下载都保留。", {
             title: deleting ? subscriptionTitle(deleting) : "",
           })}
         </p>

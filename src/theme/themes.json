@@ -29,7 +29,8 @@
       "site-danbooru": "#6aaeff",
       "site-gelbooru": "#5fd6ae",
       "site-yandere": "#ffb35c",
-      "site-pixiv": "#b996ff"
+      "site-pixiv": "#b996ff",
+      "site-fanbox": "#ffcf66"
     },
     "light": {
       "shimmer": "rgba(255,255,255,.72)",
@@ -39,7 +40,8 @@
       "site-danbooru": "#6aaeff",
       "site-gelbooru": "#5fd6ae",
       "site-yandere": "#ffb35c",
-      "site-pixiv": "#b996ff"
+      "site-pixiv": "#b996ff",
+      "site-fanbox": "#a66d00"
     }
   },
   "themes": [

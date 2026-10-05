@@ -4,6 +4,7 @@ pub mod combined;
 pub mod danbooru;
 pub mod e621;
 pub mod filter;
+pub mod fanbox;
 pub mod gelbooru;
 pub mod kemono;
 pub mod moebooru;
@@ -31,12 +32,13 @@ pub enum Source {
     Kemono,
     Yandere,
     Pixiv,
+    Fanbox,
     X,
     Custom,
 }
 
 impl Source {
-    pub const ALL: [Source; 9] = [
+    pub const ALL: [Source; 10] = [
         Source::Danbooru,
         Source::Gelbooru,
         Source::E621,
@@ -44,10 +46,11 @@ impl Source {
         Source::Kemono,
         Source::Yandere,
         Source::Pixiv,
+        Source::Fanbox,
         Source::X,
         Source::Custom,
     ];
-    pub const REMOTE: [Source; 7] = [
+    pub const REMOTE: [Source; 8] = [
         Source::Danbooru,
         Source::Gelbooru,
         Source::E621,
@@ -55,6 +58,7 @@ impl Source {
         Source::Kemono,
         Source::Yandere,
         Source::Pixiv,
+        Source::Fanbox,
     ];
 
     /// 数据库、文件夹名和图片路由里用的小写名称。
@@ -67,6 +71,7 @@ impl Source {
             Source::Kemono => "kemono",
             Source::Yandere => "yandere",
             Source::Pixiv => "pixiv",
+            Source::Fanbox => "fanbox",
             Source::X => "x",
             Source::Custom => "custom",
         }
@@ -85,6 +90,7 @@ impl Source {
             Source::Kemono => "Kemono",
             Source::Yandere => "Yande.re",
             Source::Pixiv => "Pixiv",
+            Source::Fanbox => "FANBOX",
             Source::X => "X",
             Source::Custom => "自定义导入",
         }
@@ -101,6 +107,7 @@ impl Source {
             Source::Yandere => &["yande.re"],
             // 网页和接口在 pixiv.net，图片在 i.pximg.net。
             Source::Pixiv => &["pixiv.net", "pximg.net"],
+            Source::Fanbox => &["downloads.fanbox.cc"],
             Source::X => &["x.com", "twitter.com", "twimg.com"],
             Source::Custom => &[],
         }
@@ -115,6 +122,7 @@ impl Source {
             Source::Kemono => "https://kemono.cr/",
             Source::Yandere => "https://yande.re/",
             Source::Pixiv => pixiv::REFERER_URL,
+            Source::Fanbox => "https://www.fanbox.cc/",
             Source::X => "https://x.com/",
             Source::Custom => "file://",
         }
@@ -144,6 +152,7 @@ impl Source {
             Source::Rule34 => 100,
             Source::Kemono => 50,
             Source::Pixiv => pixiv::PAGE_SIZE,
+            Source::Fanbox => fanbox::PAGE_SIZE,
             Source::X => 40,
             Source::Custom => 40,
         }
@@ -277,7 +286,7 @@ impl Sort {
             (Source::Yandere, Sort::Resolution) => "order:mpixels",
             // Pixiv 的适配器自己认这个条件（换成 order=date），不是站点的语法。
             (Source::Pixiv, Sort::Oldest) => "order:date",
-            (Source::Kemono, _) => {
+            (Source::Kemono | Source::Fanbox, _) => {
                 let site = source.site_name();
                 return Err(AppError::InvalidInput(tr!("{site} 只支持按最新上传排序", "{site} only supports sorting by newest")));
             }
@@ -343,6 +352,10 @@ pub struct Post {
     pub fav_count: Option<i64>,
     pub file_ext: String,
     pub file_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// 原图。站点不对当前账号开放原图时为空，见 [`Post::gold_only`]。
     pub file_url: Option<String>,
     /// 详情面板用的中等尺寸图。
@@ -369,6 +382,10 @@ impl Post {
                 (illust, page) => format!("#{illust} p{}", page + 1),
             },
             Source::Kemono => match kemono::split_id(self.id) {
+                (post, 0) => format!("#{post}"),
+                (post, index) => format!("#{post} p{}", index + 1),
+            },
+            Source::Fanbox => match fanbox::split_id(self.id) {
                 (post, 0) => format!("#{post}"),
                 (post, index) => format!("#{post} p{}", index + 1),
             },
@@ -503,6 +520,7 @@ pub struct Accounts {
     pub pixiv: Option<pixiv::Credentials>,
     /// 不登录也能搜；登录后才能看自己的收藏。
     pub kemono: Option<kemono::Credentials>,
+    pub fanbox: Option<fanbox::Credentials>,
 }
 
 impl Accounts {
@@ -523,6 +541,7 @@ impl Accounts {
             Source::Kemono => self.kemono.as_ref().map(|c| c.session.as_str()),
             Source::Yandere => None,
             Source::Pixiv => self.pixiv.as_ref().map(|c| c.session.as_str()),
+            Source::Fanbox => self.fanbox.as_ref().map(|c| c.session.as_str()),
             Source::X => None,
             Source::Custom => None,
         }
@@ -549,6 +568,7 @@ impl Accounts {
             Source::Yandere => {}
             // Pixiv 存的「Key」是登录后的 PHPSESSID，账号的用户 id 从里面取。
             Source::Pixiv => self.pixiv = account.and_then(|(_, session)| pixiv::Credentials::from_session(&session)),
+            Source::Fanbox => self.fanbox = account.and_then(|(_, session)| fanbox::Credentials::from_session(&session)),
             Source::X => {}
             Source::Custom => {}
         }
@@ -617,6 +637,7 @@ pub async fn fetch(
             Page::After(id) => moebooru::search(net, format!("{query} id:>{id} order:id").trim(), 1, limit).await,
         },
         Source::Pixiv => pixiv::search(net, accounts.pixiv.as_ref(), query, page).await,
+        Source::Fanbox => fanbox::search(net, accounts.fanbox.as_ref(), query, page).await,
         Source::X => Err(AppError::InvalidInput(tr!("X 通过媒体采集窗口使用", "Use X through the media capture window"))),
         Source::Custom => Err(AppError::InvalidInput(tr!("自定义导入不能用于站点搜索", "Custom imports can't be used for site searches"))),
     }
@@ -632,6 +653,7 @@ pub async fn count(net: &Net, accounts: &Accounts, source: Source, query: &str) 
         Source::Kemono => kemono::count(net, query, accounts.kemono.as_ref()).await,
         Source::Yandere => moebooru::count(net, query).await,
         Source::Pixiv => pixiv::count(net, accounts.pixiv.as_ref(), query).await,
+        Source::Fanbox => fanbox::count(net, accounts.fanbox.as_ref(), query).await,
         Source::X => Err(AppError::InvalidInput(tr!("X 通过媒体采集窗口使用", "Use X through the media capture window"))),
         Source::Custom => Err(AppError::InvalidInput(tr!("自定义导入不能用于站点搜索", "Custom imports can't be used for site searches"))),
     }
@@ -668,7 +690,7 @@ pub fn build_query(source: Source, tags: &str, ratings: &[Rating]) -> String {
             Source::Kemono => {}
             Source::Yandere => parts.extend(moebooru::rating_term(&selected)),
             // Pixiv 的适配器自己认这个条件：换成搜索的 mode，再在本地按分级筛。
-            Source::Pixiv => {
+            Source::Pixiv | Source::Fanbox => {
                 let names: Vec<&str> = selected.iter().map(|r| r.as_str()).collect();
                 parts.push(format!("rating:{}", names.join(",")));
             }
@@ -715,6 +737,7 @@ mod tests {
         assert_eq!(build_query(Source::E621, "anthro", &[Rating::General]), "anthro rating:s");
         assert_eq!(build_query(Source::Rule34, "character", &[Rating::Explicit]), "character rating:explicit");
         assert_eq!(build_query(Source::Kemono, "creator:patreon/123", &[Rating::General]), "creator:patreon/123");
+        assert_eq!(build_query(Source::Fanbox, "creator:alice", &[Rating::General]), "creator:alice rating:general");
         assert_eq!(
             build_query(Source::Gelbooru, "scenery", &ratings),
             "scenery {rating:general ~ rating:sensitive}"
@@ -772,6 +795,8 @@ mod tests {
         assert_eq!(source_for_url(&url("https://static1.e621.net/data/a.jpg")), Some(Source::E621));
         assert_eq!(source_for_url(&url("https://us.rule34.xxx/images/a.jpg")), Some(Source::Rule34));
         assert_eq!(source_for_url(&url("https://kemono.cr/data/a.jpg")), Some(Source::Kemono));
+        assert_eq!(source_for_url(&url("https://downloads.fanbox.cc/images/a.jpg")), Some(Source::Fanbox));
+        assert_eq!(source_for_url(&url("https://downloads.fanbox.cc.evil.test/a.jpg")), None);
         assert_eq!(source_for_url(&url("https://user:pw@cdn.donmai.us/a.png")), None);
         assert_eq!(source_for_url(&url("https://cdn.donmai.us:8443/a.png")), None);
         assert_eq!(source_for_url(&url("file:///etc/passwd")), None);

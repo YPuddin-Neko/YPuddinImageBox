@@ -36,7 +36,7 @@ export const accountRemove = (source: Source) => invoke<AccountsInfo>("account_r
 /** 切换保存方式，已保存的 Key 一起搬过去。 */
 export const accountKeyStorage = (storage: KeyStorage) => invoke<AccountsInfo>("account_key_storage", { storage });
 
-/** 登录窗口（Pixiv、Kemono）的情况：还在等、被关掉了，或者已经登录（账号已保存）。 */
+/** 登录窗口的情况：还在等、被关掉了，或者已经登录（账号已保存）。 */
 export type LoginCheck = { status: "waiting" } | { status: "closed" } | { status: "signedIn"; info: AccountsInfo };
 
 /** 打开弹出窗口（登录页、X 采集）的结果；已经开着时切到前面。 */
@@ -48,6 +48,8 @@ export interface PopupOpen {
 
 export const pixivLoginOpen = () => invoke<PopupOpen>("pixiv_login_open");
 export const pixivLoginCheck = () => invoke<LoginCheck>("pixiv_login_check");
+export const fanboxLoginOpen = () => invoke<PopupOpen>("fanbox_login_open");
+export const fanboxLoginCheck = () => invoke<LoginCheck>("fanbox_login_check");
 export const kemonoLoginOpen = () => invoke<PopupOpen>("kemono_login_open");
 export const kemonoLoginCheck = () => invoke<LoginCheck>("kemono_login_check");
 

@@ -443,7 +443,12 @@ fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
     let post_id: i64 = row.try_get("post_id")?;
     let rating: Option<String> = row.try_get("rating")?;
     let file_size: Option<i64> = row.try_get("file_size")?;
-    let route = |kind: &str| Some(local_route(kind, source, post_id as u64));
+    let file_ext: String = row.try_get("file_ext")?;
+    let file_name: Option<String> = row.try_get("file_name")?;
+    let attachment = source == Source::Fanbox
+        && file_name.as_deref().is_some_and(|name| !name.trim().is_empty())
+        && !matches!(file_ext.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif");
+    let route = |kind: &str| (!attachment).then(|| local_route(kind, source, post_id as u64));
     Ok(LocalPost {
         post: Post {
             source,
@@ -454,8 +459,10 @@ fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
             rating: rating.as_deref().and_then(Rating::parse),
             score: row.try_get("score")?,
             fav_count: row.try_get("fav_count")?,
-            file_ext: row.try_get("file_ext")?,
+            file_ext,
             file_size: file_size.map(|size| size as u64),
+            file_name,
+            title: row.try_get("title")?,
             file_url: row.try_get("file_url")?,
             sample_url: route("file"),
             thumb_url: route("thumb"),
@@ -617,14 +624,14 @@ impl Library {
         let mut tx = self.pool.begin().await?;
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO posts (source, post_id, md5, width, height, rating, score, fav_count, file_ext, file_size,
-                                file_url, created_at, posted_at, post_url, local_path, downloaded_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                file_url, created_at, posted_at, post_url, local_path, downloaded_at, file_name, title)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (source, post_id) DO UPDATE SET
                 md5 = excluded.md5, width = excluded.width, height = excluded.height, rating = excluded.rating,
                 score = excluded.score, fav_count = excluded.fav_count, file_ext = excluded.file_ext,
                 file_size = excluded.file_size, file_url = excluded.file_url, created_at = excluded.created_at,
                 posted_at = excluded.posted_at, post_url = excluded.post_url, local_path = excluded.local_path,
-                downloaded_at = excluded.downloaded_at
+                downloaded_at = excluded.downloaded_at, file_name = excluded.file_name, title = excluded.title
              RETURNING id",
         )
         .bind(post.source.as_str())
@@ -643,6 +650,8 @@ impl Library {
         .bind(&post.post_url)
         .bind(path.to_string_lossy().into_owned())
         .bind(downloaded_at)
+        .bind(&post.file_name)
+        .bind(&post.title)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -763,17 +772,23 @@ impl Library {
 
     /// 按来源分的文件夹，每个带张数和最近下载的几张封面。没有图的来源也列出来。
     pub async fn folders(&self) -> Result<Vec<Folder>, sqlx::Error> {
-        // 张数只数来源索引就够了；最近下载时间就是第一张封面的时间，不用再把整张表扫一遍。
-        let counts: Vec<(String, i64)> =
-            sqlx::query_as("SELECT source, COUNT(*) FROM posts GROUP BY source").fetch_all(&self.pool).await?;
+        // 附件计入数量和最近下载时间，封面只取图片。
+        let counts: Vec<(String, i64, i64)> =
+            sqlx::query_as("SELECT source, COUNT(*), MAX(downloaded_at) FROM posts GROUP BY source")
+                .fetch_all(&self.pool)
+                .await?;
         let mut folders = Vec::with_capacity(Source::ALL.len());
         for source in Source::ALL {
-            let count = counts.iter().find(|(name, _)| name == source.as_str()).map_or(0, |(_, count)| *count);
-            let rows: Vec<(i64, u32, u32, i64)> = if count == 0 {
+            let (count, latest_at) = counts
+                .iter()
+                .find(|(name, _, _)| name == source.as_str())
+                .map_or((0, None), |(_, count, latest)| (*count, Some(*latest)));
+            let rows: Vec<(i64, u32, u32)> = if count == 0 {
                 Vec::new()
             } else {
                 sqlx::query_as(
-                    "SELECT post_id, width, height, downloaded_at FROM posts WHERE source = ? \
+                    "SELECT post_id, width, height FROM posts WHERE source = ? \
+                     AND LOWER(file_ext) IN ('jpg', 'jpeg', 'png', 'gif', 'webp', 'avif') \
                      ORDER BY downloaded_at DESC, id DESC LIMIT ?",
                 )
                 .bind(source.as_str())
@@ -781,8 +796,7 @@ impl Library {
                 .fetch_all(&self.pool)
                 .await?
             };
-            let latest_at = rows.first().map(|row| row.3);
-            let covers = rows.into_iter().map(|(id, width, height, _)| cover(source, id, width, height)).collect();
+            let covers = rows.into_iter().map(|(id, width, height)| cover(source, id, width, height)).collect();
             folders.push(Folder { source, count, latest_at, covers });
         }
         Ok(folders)
@@ -834,7 +848,8 @@ impl Library {
                    FROM post_tags pt CROSS JOIN posts p ON p.id = pt.post_id
                    WHERE p.source = ",
             );
-            sql.push_bind(query.source.as_str()).push(" AND pt.tag_id IN (");
+            sql.push_bind(query.source.as_str())
+                .push(" AND LOWER(p.file_ext) IN ('jpg', 'jpeg', 'png', 'gif', 'webp', 'avif') AND pt.tag_id IN (");
             let mut ids = sql.separated(", ");
             for row in &rows {
                 ids.push_bind(row.0);
@@ -1408,6 +1423,8 @@ mod tests {
             score: 5,
             fav_count: Some(3),
             file_ext: "png".into(),
+            file_name: None,
+            title: None,
             file_size: Some(1234),
             file_url: Some(format!("https://cdn.donmai.us/original/{id}.png")),
             sample_url: None,
@@ -1578,6 +1595,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migrates_post_names_and_round_trips_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(dir.path().join(DB_FILE)).create_if_missing(true))
+            .await
+            .unwrap();
+        let migrations = sqlx::migrate!("./migrations");
+        let previous = sqlx::migrate::Migrator::with_migrations(
+            migrations.iter().filter(|migration| migration.version < 8).cloned().collect(),
+        );
+        previous.run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO posts (source, post_id, width, height, file_ext, post_url, local_path, downloaded_at)
+             VALUES ('danbooru', 1, 800, 600, 'png', 'https://danbooru.donmai.us/posts/1', '/images/legacy.png', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let lib = Library::open(dir.path()).await.unwrap();
+        let existing = lib.list(&LibraryQuery::default()).await.unwrap();
+        assert_eq!(existing.total, 1);
+        assert_eq!(existing.posts[0].path, "/images/legacy.png");
+        assert!(existing.posts[0].post.file_name.is_none());
+        assert!(existing.posts[0].post.title.is_none());
+
+        let mut attachment = post(Source::Fanbox, 2000, tags(&["creator"], &[]));
+        attachment.file_ext = "zip".into();
+        attachment.file_name = Some("原稿.zip".into());
+        attachment.title = Some("作品标题".into());
+        lib.save_post(&attachment, Path::new("/images/original.zip"), 2).await.unwrap();
+        let query = LibraryQuery { source: Some(Source::Fanbox), ..LibraryQuery::default() };
+        let saved = lib.list(&query).await.unwrap();
+        assert_eq!(saved.posts[0].post.file_name, attachment.file_name);
+        assert_eq!(saved.posts[0].post.title, attachment.title);
+
+        attachment.file_name = Some("原稿修订.zip".into());
+        attachment.title = Some("作品标题修订".into());
+        lib.save_post(&attachment, Path::new("/images/revised.zip"), 3).await.unwrap();
+        lib.pool.close().await;
+        let lib = Library::open(dir.path()).await.unwrap();
+        let saved = lib.list(&query).await.unwrap();
+        assert_eq!(saved.total, 1);
+        assert_eq!(saved.posts[0].post.file_name, attachment.file_name);
+        assert_eq!(saved.posts[0].post.title, attachment.title);
+        assert_eq!(saved.posts[0].path, "/images/revised.zip");
+    }
+
+    #[tokio::test]
+    async fn queued_posts_preserve_names_and_accept_legacy_json() {
+        let lib = Library::in_memory().await;
+        let legacy = post(Source::Danbooru, 1, PostTags::default());
+        let json = serde_json::to_value(&legacy).unwrap();
+        assert!(json.get("fileName").is_none());
+        assert!(json.get("title").is_none());
+        let old: Post = serde_json::from_value(json).unwrap();
+        assert!(old.file_name.is_none());
+        assert!(old.title.is_none());
+        let named = Post {
+            id: 2,
+            file_name: Some("原稿.psd".into()),
+            title: Some("作品标题".into()),
+            ..legacy.clone()
+        };
+        let job = lib.create_posts_job(Source::Danbooru, "files", &[old, named.clone()]).await.unwrap();
+        let pending = lib.pending_items(job.id, -1, 10).await.unwrap();
+        assert_eq!(pending.len(), 2);
+        assert!(pending[0].post.file_name.is_none());
+        assert!(pending[0].post.title.is_none());
+        assert_eq!(pending[1].post.file_name, named.file_name);
+        assert_eq!(pending[1].post.title, named.title);
+    }
+
+    #[tokio::test]
     async fn backfills_posted_at_for_old_rows() {
         let lib = Library::in_memory().await;
         lib.save_post(&post(Source::Danbooru, 1, PostTags::default()), Path::new("/i/1.png"), 1).await.unwrap();
@@ -1615,6 +1708,7 @@ mod tests {
                 (Source::Kemono, 0),
                 (Source::Yandere, 0),
                 (Source::Pixiv, 0),
+                (Source::Fanbox, 0),
                 (Source::X, 0),
                 (Source::Custom, 0),
             ]
@@ -1643,6 +1737,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((second.groups.len(), second.total, second.has_more), (1, 2, false));
+    }
+
+    #[tokio::test]
+    async fn attachment_counts_and_dates_do_not_become_image_covers() {
+        let lib = Library::in_memory().await;
+        let make = |id, artist, ext: &str, name: Option<&str>| Post {
+            file_ext: ext.into(),
+            file_name: name.map(str::to_string),
+            ..post(Source::Fanbox, id, tags(&[artist], &[]))
+        };
+        let files = make(1000, "files", "zip", Some("originals.zip"));
+        lib.save_post(&files, Path::new("/files/originals.zip"), 10).await.unwrap();
+        let folders = lib.folders().await.unwrap();
+        let folder = folders.iter().find(|folder| folder.source == Source::Fanbox).unwrap();
+        assert_eq!((folder.count, folder.latest_at), (1, Some(10)));
+        assert!(folder.covers.is_empty());
+        let query = GroupQuery { source: Source::Fanbox, kind: GroupKind::Artist, sort: GroupSort::Recent, offset: 0, limit: 0 };
+        let groups = lib.groups(&query).await.unwrap();
+        assert_eq!((groups.groups[0].count, groups.groups[0].latest_at), (1, 10));
+        assert!(groups.groups[0].covers.is_empty());
+
+        for (id, ext, name) in [(2000, "PNG", Some("drawing.PNG")), (3000, "avif", None)] {
+            lib.save_post(&make(id, "mixed", ext, name), Path::new("/files/image"), (id / 100) as i64).await.unwrap();
+        }
+        for id in 4..=9 {
+            let ext = if id % 2 == 0 { "zip" } else { "psd" };
+            let file = make(id * 1000, "mixed", ext, Some("attachment"));
+            lib.save_post(&file, Path::new("/files/attachment"), (id * 10) as i64).await.unwrap();
+        }
+        let folders = lib.folders().await.unwrap();
+        let folder = folders.iter().find(|folder| folder.source == Source::Fanbox).unwrap();
+        assert_eq!((folder.count, folder.latest_at), (9, Some(90)));
+        assert_eq!(folder.covers.iter().map(|cover| cover.post_id).collect::<Vec<_>>(), [3000, 2000]);
+        let groups = lib.groups(&query).await.unwrap();
+        let mixed = groups.groups.iter().find(|group| group.name == "mixed").unwrap();
+        assert_eq!((mixed.count, mixed.latest_at), (8, 90));
+        assert_eq!(mixed.covers.iter().map(|cover| cover.post_id).collect::<Vec<_>>(), [3000, 2000]);
+        let files = groups.groups.iter().find(|group| group.name == "files").unwrap();
+        assert_eq!((files.count, files.latest_at), (1, 10));
+        assert!(files.covers.is_empty());
+
+        let listed = lib.list(&LibraryQuery { source: Some(Source::Fanbox), ..LibraryQuery::default() }).await.unwrap();
+        assert_eq!(listed.total, 9);
+        for item in listed.posts {
+            let image = [2000, 3000].contains(&item.post.id);
+            assert_eq!(item.post.sample_url.is_some(), image);
+            assert_eq!(item.post.thumb_url.is_some(), image);
+        }
     }
 
     #[tokio::test]

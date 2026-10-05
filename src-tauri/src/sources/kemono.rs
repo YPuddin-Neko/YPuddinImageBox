@@ -365,6 +365,8 @@ fn normalize(raw: RawPost) -> Vec<Post> {
                 score: 0,
                 fav_count: None,
                 file_ext: ext,
+                file_name: None,
+                title: None,
                 file_size: None,
                 file_url: Some(url),
                 sample_url: Some(thumb.clone()),

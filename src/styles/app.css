@@ -611,6 +611,36 @@ button:disabled {
   outline-offset: -3px;
 }
 
+.card-file {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  padding: 36px 18px 14px;
+  text-align: left;
+}
+
+.card-file-kind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-2);
+}
+
+.card-file-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.card-file-size {
+  color: var(--fg-3);
+}
+
 .card .shimmer-img {
   position: absolute;
   inset: 0;
@@ -750,6 +780,10 @@ button:disabled {
 
 .card-source[data-source="pixiv"] {
   --site-color: var(--site-pixiv);
+}
+
+.card-source[data-source="fanbox"] {
+  --site-color: var(--site-fanbox);
 }
 
 .card-source[data-source="x"] {
@@ -1242,6 +1276,12 @@ code {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: center;
+}
+
+.insp-file {
+  display: grid;
+  place-items: center;
+  color: var(--fg-3);
 }
 
 .insp-id {

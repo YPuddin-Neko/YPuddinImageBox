@@ -475,6 +475,8 @@ fn work_post(value: Value) -> Option<Post> {
         fav_count: None,
         // 动图（ugoira）是压缩包，和其他站点的动图一样不下载；其余作品的扩展名要取到原图地址才知道。
         file_ext: if raw.illust_type == Some(2) { UGOIRA.into() } else { String::new() },
+        file_name: None,
+        title: None,
         file_size: None,
         // 原图下载时才按页取，这里放作品页，表示这个作品能下载。
         file_url: Some(post_url.clone()),

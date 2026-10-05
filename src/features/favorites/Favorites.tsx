@@ -14,6 +14,7 @@ import { useTauriEvent } from "../../lib/events";
 import {
   FAVORITE_MODES,
   FAVORITE_SITES,
+  fanboxFavoriteCreators,
   favoritesQuery,
   kemonoFavoriteCreators,
   RATED_FAVORITES,
@@ -30,6 +31,7 @@ import {
   errorCode,
   errorMessage,
   goldOnly,
+  isFanboxFile,
   postKey,
   postNumber,
   ratingOptions,
@@ -54,7 +56,7 @@ const SITE_KEY = "imagebox:favorites-site";
 const X_HANDLE_KEY = "imagebox:x-handle";
 
 const SITE_OPTIONS = FAVORITE_SITES.map((site) => ({ value: site, label: SOURCE_LABEL[site] }));
-const DEFAULT_MODES: Partial<Record<FavoriteSite, FavoriteMode>> = { pixiv: "public", kemono: "posts", x: "likes" };
+const DEFAULT_MODES: Partial<Record<FavoriteSite, FavoriteMode>> = { pixiv: "public", fanbox: "following", kemono: "posts", x: "likes" };
 
 function stored(key: string): string | null {
   try {
@@ -82,7 +84,7 @@ function appendNew(prev: Post[], incoming: Post[]): Post[] {
 
 /** 没填账号时，去「设置 → 账号」要做什么。 */
 function signInText(site: FavoriteSite): string {
-  if (site === "pixiv" || site === "kemono") return t("在「设置 → 账号」里登录 {site}。", { site: SOURCE_LABEL[site] });
+  if (site === "pixiv" || site === "kemono" || site === "fanbox") return t("在「设置 → 账号」里登录 {site}。", { site: SOURCE_LABEL[site] });
   if (site === "yandere") return t("在「设置 → 账号」里填写 Yande.re 用户名。");
   if (site === "gelbooru") return t("在「设置 → 账号」里填写 User ID 和 API Key。");
   return t("在「设置 → 账号」里填写用户名和 API Key。");
@@ -116,8 +118,8 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ message: string; link?: boolean } | null>(null);
   const [bulk, setBulk] = useState<{ params: SearchParams; count: Count; max: string } | null>(null);
-  /** Kemono 收藏的作者；点开一个作者时看他的帖子。 */
-  const [creators, setCreators] = useState<FavoriteCreator[] | null>(null);
+  /** 按平台、类型和账号区分作者列表；点开作者时看他的帖子。 */
+  const [creatorList, setCreatorList] = useState<{ key: string; items: FavoriteCreator[] } | null>(null);
   const [creator, setCreator] = useState<FavoriteCreator | null>(null);
   /** X 采集窗口收集到的喜欢和书签。 */
   const [xPosts, setXPosts] = useState<{ likes: Post[]; bookmarks: Post[] }>({ likes: [], bookmarks: [] });
@@ -125,17 +127,22 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const requestId = useRef(0);
   /** 已经加载过的条件，回到这一页时不再重新加载。 */
   const loadedKey = useRef<string | null>(null);
+  const loadedCreatorsKey = useRef<string | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const center = useRef<HTMLDivElement>(null);
 
   const mode = modes[site] ?? "posts";
   const account = info?.accounts.find((item) => item.source === site);
   const isX = site === "x";
+  const fileUnits = site === "fanbox";
   const xKind = mode === "bookmarks" ? "bookmarks" : "likes";
-  const showCreators = site === "kemono" && mode === "creators" && !creator;
+  const showCreators = (site === "fanbox" || (site === "kemono" && mode === "creators")) && !creator;
+  const creatorMode = mode === "supporting" ? "supporting" : "following";
+  const creatorsKey = `${site}:${mode}:${account?.name ?? ""}`;
+  const creators = creatorList?.key === creatorsKey ? creatorList.items : null;
   const rated = RATED_FAVORITES.includes(site);
   const query = creator
-    ? `creator:${creator.service}/${creator.id}`
+    ? site === "fanbox" ? `creator:${creator.id}` : `creator:${creator.service}/${creator.id}`
     : showCreators
       ? null
       : favoritesQuery(site, account, mode);
@@ -185,6 +192,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     if (!paramsKey || !params) {
       requestId.current++;
       loadedKey.current = null;
+      loadedCreatorsKey.current = null;
       setResults(null);
       setLoading(false);
       return;
@@ -196,24 +204,27 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     // params 由 paramsKey 决定。
   }, [active, paramsKey, load]);
 
-  // Kemono 收藏的作者：切到「作者」时读一次，刷新时重读。
+  // 作者列表按当前平台和类型加载，过期请求不写入新列表。
   const loadCreators = useCallback(async () => {
     const id = ++requestId.current;
+    loadedCreatorsKey.current = creatorsKey;
     setLoading(true);
     setError(null);
     try {
-      const list = await kemonoFavoriteCreators();
-      if (id === requestId.current) setCreators(list);
+      const list = site === "fanbox" ? await fanboxFavoriteCreators(creatorMode) : await kemonoFavoriteCreators();
+      if (id === requestId.current) setCreatorList({ key: creatorsKey, items: list });
     } catch (err) {
       if (id === requestId.current) setError({ message: errorMessage(err), code: errorCode(err) });
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, []);
+  }, [site, creatorMode, creatorsKey]);
 
   useEffect(() => {
-    if (active && showCreators && signedIn(account) && creators === null) void loadCreators();
-  }, [active, showCreators, account, creators, loadCreators]);
+    if (active && showCreators && signedIn(account) && creators === null && loadedCreatorsKey.current !== creatorsKey) {
+      void loadCreators();
+    }
+  }, [active, showCreators, account, creators, creatorsKey, loadCreators]);
 
   const loadMore = useCallback(() => {
     if (isX || !params || !results?.next || loading || error) return;
@@ -262,21 +273,31 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   }, [toast]);
 
   const changeSite = (next: FavoriteSite) => {
+    requestId.current++;
+    loadedCreatorsKey.current = null;
+    setLoading(false);
     setSite(next);
     setCreator(null);
+    clearPicks();
+    setViewerPost(null);
     setError(null);
     remember(SITE_KEY, next);
   };
 
   const changeMode = (next: FavoriteMode) => {
+    requestId.current++;
+    loadedCreatorsKey.current = null;
+    setLoading(false);
     setModes((prev) => ({ ...prev, [site]: next }));
     setCreator(null);
+    clearPicks();
+    setViewerPost(null);
     setError(null);
   };
 
   const refresh = () => {
     if (showCreators) {
-      setCreators(null);
+      void loadCreators();
       return;
     }
     if (!params) return;
@@ -320,7 +341,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   };
 
   const downloadPicked = async () => {
-    if (await enqueue(pickedPosts, t("已加入下载队列：{n} 张", { n: formatCount(pickedPosts.length) }))) clearPicks();
+    if (await enqueue(pickedPosts, t(fileUnits ? "已加入下载队列：{n} 项" : "已加入下载队列：{n} 张", { n: formatCount(pickedPosts.length) }))) clearPicks();
   };
 
   const openBulk = () => {
@@ -404,7 +425,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
         onClick={() => void enqueue([selectedPost], t("已加入下载队列：#{id}", { id: postNumber(selectedPost) }))}
       >
         <Icon name="download" size={15} />
-        {t("下载原图")}
+        {t(isFanboxFile(selectedPost) ? "下载文件" : "下载原图")}
       </button>
     ) : (
       <button
@@ -423,9 +444,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   ) : undefined;
 
   const modeOptions = FAVORITE_MODES[site]?.map((option) => ({ value: option.value, label: t(option.label) }));
-  const who = creator
-    ? creator.name
-    : isX
+  const who = isX
       ? null
       : signedIn(account)
         ? t("{name} 的收藏", { name: account?.name ?? "" })
@@ -436,14 +455,23 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
       <div ref={center} className="center" data-picking={picked.size > 0 || undefined}>
         <div className="topbar" data-tauri-drag-region>
           <form className="search" onSubmit={(event) => (isX ? void openX(event) : event.preventDefault())}>
-            <Select
+            {creator ? (
+              <button type="button" className="search-back" title={t("返回上一层")} onClick={() => {
+                setCreator(null);
+                clearPicks();
+                setError(null);
+              }}>
+                <Icon name="back" size={15} />
+                <span>{creator.name || creator.id}</span>
+              </button>
+            ) : <Select
               id="favorites-site"
               className="search-source"
               name={t("平台")}
               value={site}
               options={SITE_OPTIONS}
               onChange={changeSite}
-            />
+            />}
             {isX ? (
               <input
                 className="search-input"
@@ -485,13 +513,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
           </form>
         </div>
         <div className="filters">
-          {creator ? (
-            <button type="button" className="btn sm" onClick={() => setCreator(null)}>
-              <Icon name="back" size={14} />
-              {t("收藏的作者")}
-            </button>
-          ) : (
-            modeOptions && (
+          {!creator && modeOptions && (
               <Select
                 className="filter-select"
                 name={t("类型")}
@@ -500,9 +522,8 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
                 options={modeOptions}
                 onChange={changeMode}
               />
-            )
           )}
-          {rated && (
+          {rated && !showCreators && (
             <MultiSelect
               className="filter-select"
               name={t("分级")}
@@ -517,18 +538,18 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
             <span className="count">
               {showCreators
                 ? t("{n} 位作者", { n: formatCount(creators?.length ?? 0) })
-                : t("{n} 张", { n: formatCount(posts.length) })}
+                : t(fileUnits ? "{n} 项" : "{n} 张", { n: formatCount(posts.length) })}
             </span>
             {!isX && !showCreators && (
               <button
                 type="button"
                 className="btn sm collapsible"
-                title={collapsedTitle(creator ? t("下载这位作者的全部帖子") : t("下载全部收藏"))}
+                title={collapsedTitle(creator ? t(fileUnits ? "下载全部文件" : "下载这位作者的全部帖子") : t("下载全部收藏"))}
                 onClick={openBulk}
                 disabled={!params || posts.length === 0 || loading}
               >
                 <Icon name="download" size={14} />
-                <span className="btn-text">{creator ? t("下载这位作者的全部帖子") : t("下载全部收藏")}</span>
+                <span className="btn-text">{creator ? t(fileUnits ? "下载全部文件" : "下载这位作者的全部帖子") : t("下载全部收藏")}</span>
               </button>
             )}
           </div>
@@ -553,7 +574,9 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
 
           {needsAccount ? (
             <div className="empty">
-              <p className="empty-title">{t("登录 {site} 后，这里会显示你的收藏", { site: SOURCE_LABEL[site] })}</p>
+              <p className="empty-title">{site === "fanbox"
+                ? t("登录 FANBOX 后查看关注和赞助的创作者")
+                : t("登录 {site} 后，这里会显示你的收藏", { site: SOURCE_LABEL[site] })}</p>
               <p>{signInText(site)}</p>
               <button type="button" className="btn primary" onClick={() => onNavigate("settings", "accounts")}>
                 <Icon name="user" size={15} />
@@ -572,15 +595,21 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
             </div>
           ) : showCreators ? (
             creators && creators.length === 0 && !loading ? (
-              <p className="hint">{t("还没有收藏作者。")}</p>
+              <p className="hint">{site === "fanbox"
+                ? creatorMode === "supporting" ? t("还没有赞助的创作者。") : t("还没有关注的创作者。")
+                : t("还没有收藏作者。")}</p>
             ) : (
               <ul className="creator-list">
                 {creators?.map((item) => (
                   <li key={`${item.service}/${item.id}`}>
-                    <button type="button" className="creator-card" onClick={() => setCreator(item)}>
+                    <button type="button" className="creator-card" onClick={() => {
+                      setCreator(item);
+                      setError(null);
+                      clearPicks();
+                    }}>
                       <span className="creator-name">{item.name || `${item.service}/${item.id}`}</span>
                       <span className="creator-meta">
-                        {item.service}
+                        {site === "fanbox" ? item.id : item.service}
                         {item.updated ? ` · ${t("更新于 {date}", { date: item.updated.slice(0, 10) })}` : ""}
                       </span>
                     </button>
@@ -597,7 +626,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
               <p className="hint">
                 {site === "danbooru"
                   ? t("没有找到收藏。收藏设为私密时，要填写这个账号的 API Key 才能看到。")
-                  : t("还没有收藏。")}
+                  : t(fileUnits ? "没有找到可访问的图片或附件。" : "还没有收藏。")}
               </p>
             )
           )}
@@ -608,6 +637,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
               selected={selectedKey}
               onSelect={selectCard}
               onView={(post) => {
+                if (isFanboxFile(post)) return;
                 setSelected(postKey(post));
                 setViewerPost(post);
               }}
@@ -627,7 +657,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
 
         <LoadingPill loading={loading} />
 
-        <SelectionDock count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
+        <SelectionDock unit={fileUnits ? "items" : "images"} count={picked.size} total={posts.length} onPickAll={pickAll} onClear={clearPicks}>
           <button type="button" className="btn primary" onClick={() => void downloadPicked()} disabled={busy}>
             <Icon name="download" size={15} />
             {t("下载")}
@@ -669,7 +699,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
 
       <Dialog
         open={bulk !== null}
-        title={creator ? t("下载这位作者的全部帖子？") : t("下载全部收藏？")}
+        title={creator ? t(fileUnits ? "下载这位作者的图片和附件？" : "下载这位作者的全部帖子？") : t("下载全部收藏？")}
         onClose={() => setBulk(null)}
         actions={
           <>
@@ -708,11 +738,11 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
                     setBulk((current) => current && { ...current, max });
                   }}
                 />
-                <span>{t("张，留空表示全部下载")}</span>
+                <span>{t(fileUnits ? "项，留空表示全部下载" : "张，留空表示全部下载")}</span>
               </dd>
             </dl>
             <p className="dialog-note">
-              {t("已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。")}
+              {t(fileUnits ? "已在图库里的文件会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。" : "已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。")}
             </p>
           </>
         )}

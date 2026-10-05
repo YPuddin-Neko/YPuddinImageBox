@@ -2,7 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 import { t, type Msg } from "./i18n";
 
-export type Source = "danbooru" | "gelbooru" | "e621" | "rule34" | "kemono" | "yandere" | "pixiv" | "x" | "custom";
+export type Source = "danbooru" | "gelbooru" | "e621" | "rule34" | "kemono" | "yandere" | "pixiv" | "fanbox" | "x" | "custom";
 export type Rating = "general" | "sensitive" | "questionable" | "explicit";
 
 export const RATINGS: Rating[] = ["general", "sensitive", "questionable", "explicit"];
@@ -24,12 +24,13 @@ export const SOURCE_LABEL: Record<Source, string> = {
   kemono: "Kemono",
   yandere: "Yande.re",
   pixiv: "Pixiv",
+  fanbox: "FANBOX",
   x: "X",
   custom: "自定义导入",
 };
 
 /** 可直接请求接口的来源；X 使用单独的浏览器采集窗口。 */
-export const SOURCES: Source[] = ["danbooru", "gelbooru", "e621", "rule34", "kemono", "yandere", "pixiv"];
+export const SOURCES: Source[] = ["danbooru", "gelbooru", "e621", "rule34", "kemono", "yandere", "pixiv", "fanbox"];
 export const SOURCE_OPTIONS = SOURCES.map((value) => ({ value, label: SOURCE_LABEL[value] }));
 
 /** 几个站点的名字：全部站点时写「全部平台」，否则按固定顺序写站点名。 */
@@ -63,6 +64,7 @@ const SITE_SORTS: Record<Source, RemoteSort[]> = {
   kemono: ["newest"],
   yandere: ["newest", "oldest", "score", "resolution"],
   pixiv: ["newest", "oldest"],
+  fanbox: ["newest"],
   x: [],
   custom: [],
 };
@@ -110,6 +112,8 @@ export interface Post {
   thumbUrl: string | null;
   createdAt: string | null;
   postUrl: string;
+  fileName?: string | null;
+  title?: string | null;
   tags: PostTags;
   /** Pixiv 的多页作品有几页；只有一张图时没有。 */
   pages?: number | null;
@@ -187,20 +191,20 @@ const GOLD_ONLY_TAGS = ["loli", "shota", "toddlercon"];
 export const goldOnly = (post: Post) =>
   post.source === "danbooru" && post.tags.general.some((tag) => GOLD_ONLY_TAGS.includes(tag));
 
-/** Pixiv 的帖子 id 是「作品 id × 1000 + 页码」（和 Rust 端的 `pixiv::post_id` 一致）。 */
-const PIXIV_PAGE_FACTOR = 1000;
+/** Pixiv、FANBOX 的图片 id 是「帖子 id × 1000 + 页码」，页码从 0 开始。 */
+const PAGE_FACTOR = 1000;
 /** Kemono 的帖子 id 是「服务序号 × 10¹³ + 帖子 id × 1000 + 第几张」（和 Rust 端的 `kemono::split_id` 一致）。 */
 const KEMONO_SERVICE_FACTOR = 10_000_000_000_000;
 
 /**
  * 界面上显示的编号（前面的 # 由文案自己写），和 Rust 端的 `Post::label` 一致：
- * Pixiv 显示作品 id、Kemono 显示帖子 id，第二页（张）起再写页码。`grouped` 时数字带千位分隔（详情面板的标题用）。
+ * Pixiv、FANBOX、Kemono 显示帖子 id，第二页（张）起再写页码。`grouped` 时数字带千位分隔（详情面板的标题用）。
  */
 export function postNumber(post: Pick<Post, "source" | "id">, { grouped = false } = {}): string {
   if (post.source === "x") return `x-${post.id.toString(16).padStart(16, "0")}`;
   const [id, page] =
-    post.source === "pixiv"
-      ? [Math.floor(post.id / PIXIV_PAGE_FACTOR), post.id % PIXIV_PAGE_FACTOR]
+    post.source === "pixiv" || post.source === "fanbox"
+      ? [Math.floor(post.id / PAGE_FACTOR), post.id % PAGE_FACTOR]
       : post.source === "kemono"
         ? [Math.floor((post.id % KEMONO_SERVICE_FACTOR) / 1000), post.id % 1000]
         : [post.id, 0];
@@ -242,6 +246,10 @@ export function originalIsImage(post: Pick<Post, "fileExt" | "fileUrl">): boolea
   const ext = post.fileExt || (name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "");
   return IMAGE_EXTS.includes(ext.toLowerCase());
 }
+
+/** FANBOX 的附件保留文件名，以文件操作打开，不送入图片查看器。 */
+export const isFanboxFile = (post: Pick<Post, "source" | "fileName" | "fileExt" | "fileUrl">): boolean =>
+  post.source === "fanbox" && !!post.fileName && !originalIsImage(post);
 
 /** Rust 端错误的类别，例如 credentials_missing、bad_credentials。 */
 export function errorCode(error: unknown): string | null {

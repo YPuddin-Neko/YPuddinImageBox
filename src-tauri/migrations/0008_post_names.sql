@@ -1,0 +1,2 @@
+ALTER TABLE posts ADD COLUMN file_name TEXT;
+ALTER TABLE posts ADD COLUMN title TEXT;

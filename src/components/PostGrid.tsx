@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { motion } from "motion/react";
 
 import { t } from "../lib/i18n";
-import { hasSize, imageSrc, postKey, postNumber, SOURCE_LABEL, type Post } from "../lib/ipc";
+import { hasSize, imageSrc, isFanboxFile, postKey, postNumber, SOURCE_LABEL, type Post } from "../lib/ipc";
+import { formatBytes } from "../lib/format";
 import { cardEnter } from "../lib/motion";
 import { Icon } from "./Icon";
 import { ShimmerImage } from "./ShimmerImage";
@@ -15,10 +16,12 @@ const OVERSCAN = 900;
 /** 可见范围按这个步长取整，滚动时不必每一帧都重新渲染。 */
 const STEP = 300;
 
-/** 极端长宽比的图在瀑布流里按限定比例占位，图片本身居中裁切。没有尺寸信息时按竖图常见的 4:5。 */
-function cardRatio(post: Post): number {
-  if (!hasSize(post)) return 0.8;
-  return Math.min(2.4, Math.max(0.42, post.width / post.height));
+const previewKey = (post: Post) => `${postKey(post)}/${post.thumbUrl ?? ""}`;
+
+/** 未知尺寸先按 4:5 占位，加载后使用预览比例；原图尺寸优先，极端比例仍按原范围居中裁切。 */
+function cardRatio(post: Post, measured: ReadonlyMap<string, number>): number {
+  const ratio = hasSize(post) ? post.width / post.height : measured.get(previewKey(post)) ?? 0.8;
+  return Math.min(2.4, Math.max(0.42, ratio));
 }
 
 /** 瀑布流里这张图的卡片，至少露出一半时才返回。查看器打开时从这里放大出来，关闭时缩回这里。 */
@@ -67,14 +70,14 @@ function anchorAt(posts: Post[], layout: Layout, viewTop: number, atTop: boolean
 }
 
 /** 依次放进当前最矮的一列。追加新的一页时前面的卡片位置不变。 */
-function computeLayout(posts: Post[], width: number): Layout {
+function computeLayout(posts: Post[], width: number, measured: ReadonlyMap<string, number>): Layout {
   const columns = Math.max(1, Math.floor((width + GAP) / (COLUMN_MIN + GAP)));
   const columnWidth = (width - GAP * (columns - 1)) / columns;
   const heights = new Array<number>(columns).fill(0);
   const boxes = posts.map((post) => {
     let column = 0;
     for (let i = 1; i < columns; i++) if (heights[i] < heights[column]) column = i;
-    const box = { x: column * (columnWidth + GAP), y: heights[column], height: Math.round(columnWidth / cardRatio(post)) };
+    const box = { x: column * (columnWidth + GAP), y: heights[column], height: Math.round(columnWidth / cardRatio(post, measured)) };
     heights[column] += box.height + GAP;
     return box;
   });
@@ -118,12 +121,17 @@ export function PostGrid<T extends Post>({
 }: PostGridProps<T>) {
   const grid = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+  const [measured, setMeasured] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const measuredRef = useRef(measured);
+  measuredRef.current = measured;
+  const pendingSizes = useRef(new Map<string, number>());
+  const sizeFrame = useRef(0);
   const [range, setRange] = useState({ top: 0, bottom: 0 });
   /** 已经播过入场动画的卡片；滚出去再滚回来时直接显示。 */
   const entered = useRef(new Set<string>());
   const firstKey = posts[0] ? postKey(posts[0]) : null;
 
-  const layout = useMemo(() => computeLayout(posts, width), [posts, width]);
+  const layout = useMemo(() => computeLayout(posts, width, measured), [posts, width, measured]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const postsRef = useRef(posts);
@@ -134,6 +142,44 @@ export function PostGrid<T extends Post>({
   const restoredTop = useRef<number | null>(null);
   /** 按当前滚动位置重算可见范围，由下面的效果提供。 */
   const measure = useRef(() => {});
+
+  const rememberSize = useCallback((post: Post, imageWidth: number, imageHeight: number) => {
+    if (hasSize(post) || imageWidth <= 0 || imageHeight <= 0) return;
+    const key = previewKey(post);
+    const ratio = imageWidth / imageHeight;
+    if (measuredRef.current.get(key) === ratio || pendingSizes.current.get(key) === ratio) return;
+    pendingSizes.current.set(key, ratio);
+    if (sizeFrame.current) return;
+    sizeFrame.current = requestAnimationFrame(() => {
+      sizeFrame.current = 0;
+      const currentKeys = new Set(postsRef.current.map(previewKey));
+      const sizes = [...pendingSizes.current].filter(([item]) => currentKeys.has(item));
+      pendingSizes.current.clear();
+      if (!sizes.length) return;
+      const el = grid.current;
+      const scroller = el?.closest<HTMLElement>(".scroll");
+      if (el && scroller) {
+        const viewTop = scroller.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        anchor.current = anchorAt(postsRef.current, layoutRef.current, viewTop, scroller.scrollTop <= 0);
+      }
+      postsRef.current.forEach((item) => entered.current.add(postKey(item)));
+      setMeasured((previous) => new Map([...previous, ...sizes]));
+    });
+  }, []);
+
+  useEffect(() => () => {
+    cancelAnimationFrame(sizeFrame.current);
+    sizeFrame.current = 0;
+    pendingSizes.current.clear();
+  }, []);
+
+  useEffect(() => {
+    const keys = new Set(posts.map(previewKey));
+    setMeasured((previous) => {
+      if ([...previous.keys()].every((key) => keys.has(key))) return previous;
+      return new Map([...previous].filter(([key]) => keys.has(key)));
+    });
+  }, [posts]);
 
   useLayoutEffect(() => {
     const el = grid.current;
@@ -188,20 +234,24 @@ export function PostGrid<T extends Post>({
     };
   }, []);
 
-  // 宽度变了（拖动窗口、开关侧边面板）重新排过：锚点卡片回到视口里原来的位置，绘制前连可见范围一起算好。
+  // 宽度或图片比例变了重新排过：锚点卡片回到视口里原来的位置，绘制前连可见范围一起算好。
   // 不然同一个滚动位置上换成了别处的卡片，整屏一跳。追加一页、换一批结果时只记下现在的位置。
   const laidOutWidth = useRef(0);
+  const laidOutSizes = useRef(measured);
   useLayoutEffect(() => {
     const el = grid.current;
     const scroller = el?.closest<HTMLElement>(".scroll");
     const previous = laidOutWidth.current;
+    const sizesChanged = laidOutSizes.current !== measured;
     laidOutWidth.current = width;
+    laidOutSizes.current = measured;
     if (!el || !scroller || width <= 0) return;
     const gridTop = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
-    const saved = previous > 0 && previous !== width ? anchor.current : null;
+    const saved = previous > 0 && (previous !== width || sizesChanged) ? anchor.current : null;
     const box = saved ? layout.boxes[posts.findIndex((post) => postKey(post) === saved.key)] : undefined;
     if (!saved || !box) {
       anchor.current = anchorAt(posts, layout, scroller.scrollTop - gridTop, scroller.scrollTop <= 0);
+      measure.current();
       return;
     }
     const before = scroller.scrollTop;
@@ -260,6 +310,8 @@ export function PostGrid<T extends Post>({
         const isPicked = picked?.has(key) ?? false;
         const animate = !entered.current.has(key);
         const about = { id: postNumber(post), width: post.width, height: post.height };
+        const file = isFanboxFile(post);
+        const title = post.source === "fanbox" ? post.title : null;
         const state = missing?.has(key) ? (
           <span className="card-owned is-missing">{t("文件缺失")}</span>
         ) : (
@@ -278,6 +330,7 @@ export function PostGrid<T extends Post>({
             style={{ left: box.x, top: box.y, width: layout.columnWidth, height: box.height }}
             data-selected={key === selected || undefined}
             data-picked={isPicked || undefined}
+            data-file={file || undefined}
             initial={animate ? { opacity: 0, y: 8 } : false}
             animate={{ opacity: 1, y: 0 }}
             transition={cardEnter(index, pageSize)}
@@ -288,7 +341,7 @@ export function PostGrid<T extends Post>({
               className="card-hit"
               aria-pressed={key === selected}
               aria-label={
-                !hasSize(post)
+                file ? post.fileName! : title ? `${title} · #${about.id}` : !hasSize(post)
                   ? `#${about.id}`
                   : post.pages
                     ? t("#{id}，{width} × {height}，{n} 页", { ...about, n: post.pages })
@@ -296,7 +349,13 @@ export function PostGrid<T extends Post>({
               }
               onClick={(event) => onSelect(post, event)}
             >
-              <ShimmerImage src={imageSrc(post.thumbUrl)} alt="" />
+              {file ? (
+                <span className="card-file">
+                  <span className="card-file-kind"><Icon name="file" size={24} />{post.fileExt.toUpperCase()}</span>
+                  <span className="card-file-name" title={post.fileName ?? undefined}>{post.fileName}</span>
+                  <span className="card-file-size">{formatBytes(post.fileSize)}</span>
+                </span>
+              ) : <ShimmerImage key={post.thumbUrl} src={imageSrc(post.thumbUrl)} alt="" onNaturalSize={hasSize(post) ? undefined : (w, h) => rememberSize(post, w, h)} />}
             </button>
             {onPick && (
               <button
@@ -310,7 +369,7 @@ export function PostGrid<T extends Post>({
                 <Icon name="check" size={13} />
               </button>
             )}
-            {onView && (
+            {onView && !file && (
               <button
                 type="button"
                 className="card-view"

@@ -42,6 +42,9 @@ impl std::fmt::Display for AppError {
             AppError::CredentialsMissing("Pixiv") => {
                 tr!("看 Pixiv 的 R-18 作品需要先登录 Pixiv", "Sign in to Pixiv to see R-18 works")
             }
+            AppError::CredentialsMissing("FANBOX") => {
+                tr!("请先在「设置 → 账号」里登录 FANBOX", "Sign in to FANBOX in Settings → Accounts")
+            }
             AppError::CredentialsMissing(site) => {
                 tr!("{site} 需要账号和 API Key", "{site} requires an account and an API key")
             }
@@ -55,6 +58,9 @@ impl std::fmt::Display for AppError {
             AppError::Storage(err) => err.to_string(),
             AppError::Database(err) => tr!("图库数据库出错：{err}", "Library database error: {err}"),
             AppError::InvalidInput(message) | AppError::Internal(message) => message.clone(),
+            AppError::BadCredentials { site: "FANBOX" } => {
+                tr!("FANBOX 登录状态无效，请重新登录", "Your FANBOX session is invalid. Sign in again")
+            }
             AppError::BadCredentials { site } => {
                 tr!("{site} 的账号或 API Key 不对", "The {site} account or API key is incorrect")
             }

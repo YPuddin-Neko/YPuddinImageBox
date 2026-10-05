@@ -125,6 +125,8 @@ mod tests {
             score: 0,
             fav_count: None,
             file_ext: "png".into(),
+            file_name: None,
+            title: None,
             file_size: None,
             file_url: None,
             sample_url: None,
