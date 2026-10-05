@@ -7,6 +7,7 @@ import { LoadingPill } from "../../components/LoadingPill";
 import { PostGrid, visibleCard } from "../../components/PostGrid";
 import { MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
+import { ShimmerImage } from "../../components/ShimmerImage";
 import { Toast } from "../../components/Toast";
 import { usePicker } from "../../components/usePicker";
 import { EVENTS, type SavedPayload } from "../../lib/downloads";
@@ -31,6 +32,7 @@ import {
   errorCode,
   errorMessage,
   goldOnly,
+  imageSrc,
   isFanboxFile,
   postKey,
   postNumber,
@@ -607,10 +609,17 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
                       setError(null);
                       clearPicks();
                     }}>
-                      <span className="creator-name">{item.name || `${item.service}/${item.id}`}</span>
-                      <span className="creator-meta">
-                        {site === "fanbox" ? item.id : item.service}
-                        {item.updated ? ` · ${t("更新于 {date}", { date: item.updated.slice(0, 10) })}` : ""}
+                      {(site === "fanbox" || item.avatarUrl) && (
+                        <ShimmerImage key={item.avatarUrl} className="creator-avatar" src={imageSrc(item.avatarUrl)} alt="" />
+                      )}
+                      <span className="creator-info">
+                        <span className="creator-name" title={item.name || `${item.service}/${item.id}`}>
+                          {item.name || `${item.service}/${item.id}`}
+                        </span>
+                        <span className="creator-meta">
+                          {site === "fanbox" ? item.id : item.service}
+                          {item.updated ? ` · ${t("更新于 {date}", { date: item.updated.slice(0, 10) })}` : ""}
+                        </span>
                       </span>
                     </button>
                   </li>

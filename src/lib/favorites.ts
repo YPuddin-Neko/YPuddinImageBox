@@ -59,6 +59,7 @@ export interface FavoriteCreator {
   id: string;
   name: string;
   service: string;
+  avatarUrl?: string | null;
   /** 最近更新的时间（不带时区的 UTC）。 */
   updated: string | null;
 }

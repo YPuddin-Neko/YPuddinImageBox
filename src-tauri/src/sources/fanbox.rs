@@ -711,6 +711,8 @@ pub struct FavoriteCreator {
     pub name: String,
     pub service: String,
     pub updated: Option<String>,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
 }
 
 pub async fn favorite_creators(
@@ -759,6 +761,12 @@ fn creators(body: Value, field: &str) -> Result<Vec<FavoriteCreator>, AppError> 
                     .into(),
                 service: "fanbox".into(),
                 updated: None,
+                avatar_url: entry
+                    .pointer("/user/iconUrl")
+                    .and_then(Value::as_str)
+                    .and_then(|value| Url::parse(value.trim()).ok())
+                    .filter(|url| trusted_url(url, "pixiv.pximg.net") || trusted_url(url, MEDIA_HOST))
+                    .map(|url| url.to_string()),
             });
         }
     }
@@ -1168,16 +1176,58 @@ mod tests {
 
     #[test]
     fn creators_deduplicate_plans_without_accepting_malformed_lists() {
-        let values = json!({"plans":[{"creatorId":"a","user":{"name":"A"}},{"creatorId":"a","user":{"name":"A"}},{"creatorId":"b","user":{"name":"B"}}]});
+        let first_avatar = "https://pixiv.pximg.net/c/160x160/fanbox/public/images/user/1/icon/a.jpeg";
+        let values = json!({"plans":[
+            {"creatorId":"a","user":{"name":"A","iconUrl":first_avatar}},
+            {"creatorId":"a","user":{"name":"A","iconUrl":"https://pixiv.pximg.net/duplicate.jpeg"}},
+            {"creatorId":"b","user":{"name":"B"}}
+        ]});
+        let result = creators(values, "plans").unwrap();
         assert_eq!(
-            creators(values, "plans")
-                .unwrap()
+            result
                 .iter()
                 .map(|c| c.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["a", "b"]
         );
+        assert_eq!(result[0].avatar_url.as_deref(), Some(first_avatar));
+        assert!(result[1].avatar_url.is_none());
         assert!(creators(json!({}), "plans").is_err());
+    }
+
+    #[test]
+    fn followed_creators_keep_public_avatars_in_both_response_formats() {
+        let avatar = "https://pixiv.pximg.net/c/160x160_90_a2_g5/fanbox/public/images/user/1/icon/a.jpeg";
+        let entries = json!([{"creatorId":"artist","user":{"name":"Artist","iconUrl":avatar}}]);
+        for body in [json!({"creators":entries.clone()}), entries] {
+            let result = creators(body, "creators").unwrap();
+            assert_eq!(result[0].avatar_url.as_deref(), Some(avatar));
+            assert_eq!(serde_json::to_value(&result[0]).unwrap()["avatarUrl"], avatar);
+        }
+    }
+
+    #[test]
+    fn creator_avatars_are_optional_and_only_use_known_https_media_hosts() {
+        for field in ["creators", "plans"] {
+            for icon in [
+                Value::Null,
+                json!(""),
+                json!("   "),
+                json!("http://pixiv.pximg.net/icon.jpeg"),
+                json!("https://pixiv.pximg.net.evil.test/icon.jpeg"),
+                json!("https://user:secret@pixiv.pximg.net/icon.jpeg"),
+                json!("https://pixiv.pximg.net:8443/icon.jpeg"),
+                json!("data:image/png;base64,AAAA"),
+            ] {
+                let entries = json!([{"creatorId":"artist","user":{"name":"Artist","iconUrl":icon}}]);
+                assert!(creators(entries, field).unwrap()[0].avatar_url.is_none());
+            }
+            let entries = json!([{"creatorId":"artist","user":{"name":"Artist"}}]);
+            assert!(creators(entries, field).unwrap()[0].avatar_url.is_none());
+            let avatar = "https://downloads.fanbox.cc/images/user/1/icon/a.jpeg";
+            let entries = json!([{"creatorId":"artist","user":{"name":"Artist","iconUrl":avatar}}]);
+            assert_eq!(creators(entries, field).unwrap()[0].avatar_url.as_deref(), Some(avatar));
+        }
     }
 
     #[tokio::test]
