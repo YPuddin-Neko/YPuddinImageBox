@@ -109,7 +109,8 @@ function creatorSupport(creator: FavoriteCreator) {
   const amount = supported && fee != null && Number.isSafeInteger(fee) && fee >= 0 ? formatCount(fee) : null;
   const details = [status, supported && creator.support?.planTitle, amount !== null && t("{amount} 日元/月", { amount })]
     .filter(Boolean).join(" · ");
-  return { supported, details, text: `${status}${amount !== null ? ` · ${t("¥{amount}/月", { amount })}` : ""}` };
+  const state = supported ? "supporting" : creator.supportStatus === false ? "inactive" : "unknown";
+  return { state, details, text: `${status}${amount !== null ? ` · ${t("¥{amount}/月", { amount })}` : ""}` };
 }
 
 export function Favorites({ active, onNavigate }: { active: boolean; onNavigate: Navigate }) {
@@ -633,8 +634,8 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
                             {item.updated ? ` · ${t("更新于 {date}", { date: item.updated.slice(0, 10) })}` : ""}
                           </span>
                           {support && (
-                            <span className="creator-support" data-supported={support.supported || undefined} title={support.details}>
-                              {support.text}
+                            <span className="badge creator-support" data-state={support.state} title={support.details}>
+                              <span>{support.text}</span>
                             </span>
                           )}
                         </span>

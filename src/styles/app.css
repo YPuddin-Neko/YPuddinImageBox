@@ -1746,15 +1746,27 @@ code {
 }
 
 .creator-support {
+  --support-tone: var(--fg-2);
+  align-self: flex-start;
+  max-width: 100%;
+  min-width: 0;
+  background: color-mix(in srgb, var(--support-tone) 12%, var(--raised));
+  color: color-mix(in srgb, var(--support-tone) 65%, var(--fg-1));
+}
+
+.creator-support > span {
+  min-width: 0;
   overflow: hidden;
-  color: var(--fg-2);
-  font-size: 12px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.creator-support[data-supported] {
-  color: color-mix(in srgb, var(--ok) 75%, var(--fg-1));
+.creator-support[data-state="supporting"] {
+  --support-tone: var(--ok);
+}
+
+.creator-support[data-state="unknown"] {
+  --support-tone: var(--warn);
 }
 
 /* ---------- 设置 ---------- */
