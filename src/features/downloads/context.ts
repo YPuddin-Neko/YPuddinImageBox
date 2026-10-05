@@ -17,7 +17,7 @@ export interface DownloadsValue {
   clearFinished: () => Promise<void>;
   /** 来自几个站点的图（聚合搜索）每个站点各建一个任务。 */
   addPosts: (posts: Post[]) => Promise<Job[]>;
-  addQuery: (params: SearchParams, maxPosts: number | null) => Promise<Job>;
+  addQuery: (params: SearchParams, maxPosts: number | null, title?: string) => Promise<Job>;
 }
 
 export const DownloadsContext = createContext<DownloadsValue | null>(null);

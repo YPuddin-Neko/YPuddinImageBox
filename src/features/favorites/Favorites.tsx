@@ -16,6 +16,7 @@ import {
   FAVORITE_MODES,
   FAVORITE_SITES,
   fanboxFavoriteCreators,
+  fanboxSavedCreators,
   favoritesQuery,
   kemonoFavoriteCreators,
   RATED_FAVORITES,
@@ -44,12 +45,14 @@ import {
   type Rating,
   type SearchParams,
 } from "../../lib/ipc";
-import type { PostRef } from "../../lib/library";
+import { libraryOpenFile, type PostRef } from "../../lib/library";
 import type { Navigate } from "../../lib/nav";
 import { accountsInfo, type AccountsInfo } from "../../lib/settings";
 import { xCaptureOpen, type XPostsPayload } from "../../lib/x";
 import { useDownloads } from "../downloads/context";
 import { Inspector } from "../discover/Inspector";
+import { localRecord } from "./creatorFeed";
+import { useCreatorFeed } from "./useCreatorFeed";
 
 /** 与 Rust 端每页条数一致，用于卡片入场错开。 */
 const PAGE_SIZE = 40;
@@ -120,17 +123,17 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const [ratings, setRatings] = useState<Rating[]>([...RATINGS]);
   const [info, setInfo] = useState<AccountsInfo | null>(null);
   const [results, setResults] = useState<{ posts: Post[]; next: string | null } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<{ message: string; code: string | null } | null>(null);
+  const [remoteLoading, setLoading] = useState(false);
+  const [pageError, setError] = useState<{ message: string; code: string | null } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [viewerPost, setViewerPost] = useState<Post | null>(null);
-  /** 已在图库中的帖子。只增不减：下载完成的事件也会加进来。 */
+  /** 已在图库中的帖子，随下载和删除事件更新。 */
   const [owned, setOwned] = useState<Set<string>>(() => new Set());
   /** 这次打开软件后加入过下载队列、还没下载完的帖子。 */
   const [queued, setQueued] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ message: string; link?: boolean } | null>(null);
-  const [bulk, setBulk] = useState<{ params: SearchParams; count: Count; max: string } | null>(null);
+  const [bulk, setBulk] = useState<{ params: SearchParams; count: Count; max: string; title?: string } | null>(null);
   /** 按平台、类型和账号区分作者列表；点开作者时看他的帖子。 */
   const [creatorList, setCreatorList] = useState<{ key: string; items: FavoriteCreator[] } | null>(null);
   const [creator, setCreator] = useState<FavoriteCreator | null>(null);
@@ -151,7 +154,8 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const xKind = mode === "bookmarks" ? "bookmarks" : "likes";
   const showCreators = (site === "fanbox" || (site === "kemono" && mode === "creators")) && !creator;
   const creatorMode = mode === "supporting" ? "supporting" : "following";
-  const creatorsKey = `${site}:${mode}:${account?.name ?? ""}`;
+  const savedCreators = site === "fanbox" && mode === "saved";
+  const creatorsKey = `${site}:${mode}:${account?.name ?? ""}:${signedIn(account)}`;
   const creators = creatorList?.key === creatorsKey ? creatorList.items : null;
   const rated = RATED_FAVORITES.includes(site);
   const query = creator
@@ -163,8 +167,21 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     ? { source: site, tags: query, ratings: rated && ratings.length < RATINGS.length ? ratings : [], sort: "newest" }
     : null;
   const paramsKey = params ? JSON.stringify(params) : null;
-  const needsAccount = !isX && info !== null && !signedIn(account);
-  const posts = isX ? xPosts[xKind] : showCreators ? [] : (results?.posts ?? []);
+  const fanboxAuthor = site === "fanbox" && creator !== null;
+  const archive = useCreatorFeed(active, fanboxAuthor ? creator.id : null, ratings,
+    !savedCreators && signedIn(account) ? account!.name : null);
+  const loading = fanboxAuthor ? archive.loading : remoteLoading;
+  const archiveError = archive.errors[0];
+  const error = fanboxAuthor
+    ? archiveError ? { message: errorMessage(archiveError), code: errorCode(archiveError) } : null
+    : pageError;
+  const needsAccount = !isX && !savedCreators && !fanboxAuthor && info !== null && !signedIn(account);
+  const posts = isX ? xPosts[xKind] : showCreators ? [] : fanboxAuthor ? archive.posts : (results?.posts ?? []);
+  const displayedOwned = fanboxAuthor
+    ? new Set([...owned, ...[...archive.owned].map((id) => postKey({ source: "fanbox", id }))]) : owned;
+  const missing = new Set(posts.filter((post) => localRecord(post)?.missing).map(postKey));
+  missing.forEach((key) => displayedOwned.delete(key));
+  const hasMore = fanboxAuthor ? archive.hasMore : !!results?.next;
   const { picked, pickedPosts, toggle: togglePick, clear: clearPicks, pickAll } = usePicker(posts);
 
   // 每次回到这一页都重新读一遍账号：可能刚在设置里登录或退出。
@@ -202,7 +219,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
 
   // 换站点、换类型、换分级时重新加载第一页；只在这一页打开时加载，启动软件时不去访问各个站点。
   useEffect(() => {
-    if (!paramsKey || !params) {
+    if (fanboxAuthor || !paramsKey || !params) {
       requestId.current++;
       loadedKey.current = null;
       loadedCreatorsKey.current = null;
@@ -215,7 +232,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     setResults(null);
     void load(params, null);
     // params 由 paramsKey 决定。
-  }, [active, paramsKey, load]);
+  }, [active, paramsKey, fanboxAuthor, load]);
 
   // 作者列表按当前平台和类型加载，过期请求不写入新列表。
   const loadCreators = useCallback(async () => {
@@ -224,26 +241,30 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     setLoading(true);
     setError(null);
     try {
-      const list = site === "fanbox" ? await fanboxFavoriteCreators(creatorMode) : await kemonoFavoriteCreators();
+      const list = savedCreators ? await fanboxSavedCreators() : site === "fanbox" ? await fanboxFavoriteCreators(creatorMode) : await kemonoFavoriteCreators();
       if (id === requestId.current) setCreatorList({ key: creatorsKey, items: list });
     } catch (err) {
       if (id === requestId.current) setError({ message: errorMessage(err), code: errorCode(err) });
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, [site, creatorMode, creatorsKey]);
+  }, [site, savedCreators, creatorMode, creatorsKey]);
 
   useEffect(() => {
-    if (active && showCreators && signedIn(account) && creators === null && loadedCreatorsKey.current !== creatorsKey) {
+    if (active && showCreators && (savedCreators || signedIn(account)) && creators === null && loadedCreatorsKey.current !== creatorsKey) {
       void loadCreators();
     }
-  }, [active, showCreators, account, creators, creatorsKey, loadCreators]);
+  }, [active, showCreators, savedCreators, account, creators, creatorsKey, loadCreators]);
 
   const loadMore = useCallback(() => {
+    if (fanboxAuthor) {
+      if (archive.hasMore && !archive.loading) archive.loadMore();
+      return;
+    }
     if (isX || !params || !results?.next || loading || error) return;
     void load(params, results.next);
     // 同上，params 由 paramsKey 决定。
-  }, [isX, paramsKey, results, loading, error, load]);
+  }, [isX, paramsKey, results, loading, error, load, fanboxAuthor, archive.hasMore, archive.loading, archive.loadMore]);
 
   useEffect(() => {
     const target = sentinel.current;
@@ -260,15 +281,23 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     setXPosts((prev) => ({ ...prev, [kind]: appendNew(prev[kind], incoming) }));
   });
 
-  useTauriEvent<PostRef[]>(EVENTS.libraryRemoved, (removed) =>
+  useTauriEvent<PostRef[]>(EVENTS.libraryRemoved, (removed) => {
+    if (removed.some((post) => post.source === "fanbox")) {
+      loadedCreatorsKey.current = null;
+      if (savedCreators) setCreatorList(null);
+    }
     setOwned((prev) => {
       const next = new Set(prev);
       removed.forEach((post) => next.delete(postKey({ source: post.source, id: post.postId })));
       return next;
-    }),
-  );
+    });
+  });
 
   useTauriEvent<SavedPayload>(EVENTS.librarySaved, (saved) => {
+    if (saved.source === "fanbox") {
+      loadedCreatorsKey.current = null;
+      if (savedCreators) setCreatorList(null);
+    }
     const key = postKey({ source: saved.source, id: saved.postId });
     setOwned((prev) => new Set(prev).add(key));
     setQueued((prev) => {
@@ -284,6 +313,14 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     const timer = window.setTimeout(() => setToast(null), 3600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (fanboxAuthor) {
+      setViewerPost(null);
+      setSelected(null);
+      clearPicks();
+    }
+  }, [fanboxAuthor, creator?.id, paramsKey, creatorsKey, clearPicks]);
 
   const changeSite = (next: FavoriteSite) => {
     requestId.current++;
@@ -309,6 +346,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   };
 
   const refresh = () => {
+    if (fanboxAuthor) { archive.refresh(); return; }
     if (showCreators) {
       void loadCreators();
       return;
@@ -359,7 +397,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
 
   const openBulk = () => {
     if (!params) return;
-    setBulk({ params, count: "loading", max: "" });
+    setBulk({ params, count: "loading", max: "", title: creator?.name || creator?.id });
     countRemote(params).then(
       (count) => setBulk((current) => current && { ...current, count }),
       () => setBulk((current) => current && { ...current, count: "failed" }),
@@ -372,7 +410,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : null;
     setBulk(null);
     try {
-      await addQuery(bulk.params, limit);
+      await addQuery(bulk.params, limit, bulk.title);
       setToast({ message: t("已加入下载队列"), link: true });
     } catch (err) {
       setToast({ message: errorMessage(err) });
@@ -384,7 +422,8 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     else setSelected(postKey(post));
   };
 
-  const selectedPost = posts.find((post) => postKey(post) === selected) ?? null;
+  const selectedPost = posts.find((post) => postKey(post) === selected) ?? (fanboxAuthor ? posts[0] : null) ?? null;
+  const selectedLocal = selectedPost ? localRecord(selectedPost) : null;
   const selectedKey = selectedPost ? postKey(selectedPost) : null;
 
   // 和发现页一样的列表快捷键：←/→ 上一张、下一张，空格勾选，⌘/Ctrl + A 全选，Esc 取消勾选，⌘/Ctrl + D 下载。
@@ -411,7 +450,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     if (hasMod(event) && key === "d") {
       if (picked.size > 0) {
         if (!busy) void downloadPicked();
-      } else if (selectedPost?.fileUrl && selectedKey && !owned.has(selectedKey) && !queued.has(selectedKey) && !busy) {
+      } else if (selectedPost?.fileUrl && selectedKey && !displayedOwned.has(selectedKey) && !queued.has(selectedKey) && !busy) {
         void enqueue([selectedPost], t("已加入下载队列：#{id}", { id: postNumber(selectedPost) }));
       }
       return true;
@@ -420,7 +459,12 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   });
 
   const primaryAction = selectedPost ? (
-    owned.has(postKey(selectedPost)) ? (
+    selectedLocal && !selectedLocal.missing && isFanboxFile(selectedPost) ? (
+      <button type="button" className="btn primary" onClick={() => {
+        void libraryOpenFile({ source: selectedPost.source, postId: selectedPost.id })
+          .catch((err) => setToast({ message: errorMessage(err) }));
+      }}><Icon name="file" size={15} />{t("打开文件")}</button>
+    ) : displayedOwned.has(postKey(selectedPost)) ? (
       <button type="button" className="btn" disabled>
         <Icon name="check" size={15} />
         {t("已在图库中")}
@@ -457,7 +501,9 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   ) : undefined;
 
   const modeOptions = FAVORITE_MODES[site]?.map((option) => ({ value: option.value, label: t(option.label) }));
-  const who = isX
+  const who = savedCreators
+      ? t("已保存的创作者")
+      : isX
       ? null
       : signedIn(account)
         ? t("{name} 的收藏", { name: account?.name ?? "" })
@@ -559,7 +605,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
                 className="btn sm collapsible"
                 title={collapsedTitle(creator ? t(fileUnits ? "下载全部文件" : "下载这位作者的全部帖子") : t("下载全部收藏"))}
                 onClick={openBulk}
-                disabled={!params || posts.length === 0 || loading}
+                disabled={!params || posts.length === 0 || loading || savedCreators || (fanboxAuthor && !signedIn(account))}
               >
                 <Icon name="download" size={14} />
                 <span className="btn-text">{creator ? t(fileUnits ? "下载全部文件" : "下载这位作者的全部帖子") : t("下载全部收藏")}</span>
@@ -609,12 +655,12 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
           ) : showCreators ? (
             creators && creators.length === 0 && !loading ? (
               <p className="hint">{site === "fanbox"
-                ? creatorMode === "supporting" ? t("还没有赞助的创作者。") : t("还没有关注的创作者。")
+                ? savedCreators ? t("还没有保存这类内容。") : creatorMode === "supporting" ? t("还没有赞助的创作者。") : t("还没有关注的创作者。")
                 : t("还没有收藏作者。")}</p>
             ) : (
               <ul className="creator-list">
                 {creators?.map((item) => {
-                  const support = site === "fanbox" ? creatorSupport(item) : null;
+                  const support = site === "fanbox" && !savedCreators ? creatorSupport(item) : null;
                   return (
                     <li key={`${item.service}/${item.id}`}>
                       <button type="button" className="creator-card" aria-description={support?.details} onClick={() => {
@@ -646,9 +692,9 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
               </ul>
             )
           ) : (
-            results &&
+            (fanboxAuthor || results) &&
             posts.length === 0 &&
-            !results.next &&
+            !hasMore &&
             !loading &&
             !error && (
               <p className="hint">
@@ -666,17 +712,22 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
               onSelect={selectCard}
               onView={(post) => {
                 if (isFanboxFile(post)) return;
+                if (localRecord(post)?.missing && post.sampleUrl?.startsWith("local/")) {
+                  setToast({ message: t("文件不在记录的位置，可能已被移动或删除。可以重新下载。") });
+                  return;
+                }
                 setSelected(postKey(post));
                 setViewerPost(post);
               }}
               pageSize={PAGE_SIZE}
-              owned={owned}
+              owned={displayedOwned}
+              missing={missing}
               picked={picked}
               onPick={togglePick}
             />
           )}
           <div ref={sentinel} className="sentinel" aria-hidden="true" />
-          {!isX && !showCreators && results?.next && !error && (
+          {!isX && !showCreators && hasMore && (fanboxAuthor || !error) && (
             <button type="button" className="btn more" onClick={loadMore} disabled={loading} data-busy={loading || undefined}>
               {t("加载更多")}
             </button>
@@ -711,12 +762,15 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
         />
       </div>
 
-      <Inspector key={selectedKey ?? "none"} post={selectedPost} primaryAction={primaryAction} />
+      <Inspector key={selectedKey ?? "none"} post={selectedPost} primaryAction={primaryAction}
+        localPath={selectedLocal?.path}
+        notice={selectedLocal?.missing ? t("文件不在记录的位置，可能已被移动或删除。可以重新下载。") : undefined} />
 
       <ImageViewer
         post={viewerPost}
         posts={posts}
-        downloaded={owned}
+        downloaded={displayedOwned}
+        local={!!viewerPost && !!localRecord(viewerPost) && !localRecord(viewerPost)?.missing}
         onClose={() => setViewerPost(null)}
         cardOf={(post) => visibleCard(center.current, post)}
         onChange={(post) => {

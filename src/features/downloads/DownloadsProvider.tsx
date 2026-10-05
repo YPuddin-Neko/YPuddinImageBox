@@ -56,8 +56,8 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
     return added;
   }, []);
 
-  const addQuery = useCallback(async (params: SearchParams, maxPosts: number | null) => {
-    const job = await downloadQuery(params, maxPosts);
+  const addQuery = useCallback(async (params: SearchParams, maxPosts: number | null, title?: string) => {
+    const job = await downloadQuery(params, maxPosts, title);
     setJobs((prev) => upsert(prev, job));
     return job;
   }, []);

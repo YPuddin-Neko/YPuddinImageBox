@@ -549,5 +549,11 @@
   "正在检查新文件…": "Checking for new files…",
   "找到 {n} 项新文件": "Found {n} new {n|file|files}",
   "没有新文件": "no new files",
-  "以后不再检查「{title}」的新文件。已经下载的文件和进行中的下载都保留。": "Stop checking for new files matching “{title}”. Downloaded files and ongoing downloads are kept."
+  "以后不再检查「{title}」的新文件。已经下载的文件和进行中的下载都保留。": "Stop checking for new files matching “{title}”. Downloaded files and ongoing downloads are kept.",
+  "已保存的创作者": "Saved creators",
+  "还没有保存这类内容。": "No saved content yet.",
+  "已处理 {done} · 已读取 {discovered}": "{done} processed · {discovered} found",
+  "正在读取列表…": "Reading list…",
+  "列表未读完": "List incomplete",
+  "下载进度": "Download progress"
 }

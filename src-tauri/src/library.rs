@@ -100,6 +100,9 @@ impl LibrarySort {
 pub struct LibraryQuery {
     #[serde(default)]
     pub source: Option<Source>,
+    /// 按已保存的 FANBOX 投稿地址匹配作者，不受当前账号和赞助状态影响。
+    #[serde(default)]
+    pub fanbox_creator: Option<String>,
     /// 空格分隔；每个 tag 都要有，`-tag` 表示排除。
     #[serde(default)]
     pub tags: String,
@@ -121,6 +124,14 @@ pub struct LibraryPage {
     pub total: i64,
     pub offset: u32,
     pub has_more: bool,
+}
+
+impl LibraryPage {
+    pub async fn check_files(&mut self) {
+        for post in &mut self.posts {
+            post.missing = !tokio::fs::metadata(&post.path).await.is_ok_and(|metadata| metadata.is_file());
+        }
+    }
 }
 
 /// 文件夹和分组卡片上扇形展开的封面，按下载时间从新到旧。
@@ -285,6 +296,8 @@ pub struct JobInfo {
     pub status: JobStatus,
     /// 总张数。按条件下载时先是站点给的估计值，翻完后改成实际张数。
     pub total: Option<i64>,
+    /// 已读入任务的资源数；还有下一页时不是最终总数。
+    pub discovered: i64,
     pub saved: i64,
     pub skipped: i64,
     pub failed: i64,
@@ -390,6 +403,7 @@ fn job_from_row(row: &SqliteRow) -> Result<JobInfo, sqlx::Error> {
         status: JobStatus::parse(&status)
             .ok_or_else(|| db_err(tr!("未知的任务状态 {status}", "Unknown job status {status}")))?,
         total: row.try_get("total")?,
+        discovered: row.try_get("discovered")?,
         saved: row.try_get("saved")?,
         skipped: row.try_get("skipped")?,
         failed: row.try_get("failed")?,
@@ -478,7 +492,18 @@ fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
 }
 
 const JOB_COLUMNS: &str = "id, kind, source, title, query, max_posts, status, total, saved, skipped, failed, \
-                           cursor, error, created_at, updated_at, subscription_id, local_filter";
+                           cursor, error, created_at, updated_at, subscription_id, local_filter, \
+                           (SELECT COUNT(*) FROM job_items WHERE job_id = jobs.id) AS discovered";
+
+fn valid_fanbox_creator(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn saved_fanbox_creator(post_url: &str, resource_id: i64) -> Option<&str> {
+    let (creator, post_id) = post_url.strip_prefix(fanbox::REFERER_URL)?.strip_prefix('@')?.split_once("/posts/")?;
+    (resource_id >= 1000 && valid_fanbox_creator(creator) && post_id == (resource_id / 1000).to_string())
+        .then_some(creator)
+}
 
 const SUBSCRIPTION_COLUMNS: &str = "s.id, s.source, s.tags, s.ratings, s.query, s.enabled, s.interval_minutes, \
      s.last_seen_id, s.last_checked_at, s.last_new, s.last_error, s.created_at, s.updated_at, s.local_filter, \
@@ -746,17 +771,23 @@ impl Library {
         let total: i64 = count.build_query_scalar().fetch_one(&self.pool).await?;
 
         // 先只按排序取出这一页的 id，再取整行：排序时不用搬动几万行完整记录，热门 tag 这类结果多的查询快几倍。
+        // FANBOX 作者页和远程投稿流按资源编号归并，分页必须使用相同的顺序。
+        let order = if query.fanbox_creator.is_some() && query.sort == LibrarySort::Newest {
+            "p.post_id DESC, p.id DESC"
+        } else {
+            query.sort.order_by()
+        };
         let mut select = QueryBuilder::<Sqlite>::new("SELECT p.* FROM posts p WHERE p.id IN (SELECT p.id FROM posts p");
         push_filter(&mut select, query, &tags);
         select
             .push(" ORDER BY ")
-            .push(query.sort.order_by())
+            .push(order)
             .push(" LIMIT ")
             .push_bind(limit as i64)
             .push(" OFFSET ")
             .push_bind(query.offset as i64)
             .push(") ORDER BY ")
-            .push(query.sort.order_by());
+            .push(order);
         let rows = select.build().fetch_all(&self.pool).await?;
         let mut posts = Vec::with_capacity(rows.len());
         let mut row_ids = Vec::with_capacity(rows.len());
@@ -788,6 +819,36 @@ impl Library {
 
         let has_more = (query.offset as i64 + posts.len() as i64) < total;
         Ok(LibraryPage { posts, total, offset: query.offset, has_more })
+    }
+
+    /// 本地保存过资源的作者。作者身份只来自投稿地址，标签仅用作显示名称。
+    pub async fn fanbox_creators(&self) -> Result<Vec<fanbox::FavoriteCreator>, sqlx::Error> {
+        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+            "SELECT p.post_id, p.post_url,
+                (SELECT t.name FROM post_tags pt JOIN tags t ON t.id = pt.tag_id
+                 WHERE pt.post_id = p.id AND t.category = 'artist' ORDER BY t.name LIMIT 1)
+             FROM posts p WHERE p.source = 'fanbox' ORDER BY p.downloaded_at DESC, p.id DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut seen = HashSet::new();
+        let mut creators = Vec::new();
+        for (post_id, post_url, name) in rows {
+            let Some(id) = saved_fanbox_creator(&post_url, post_id) else { continue };
+            if !seen.insert(id.to_string()) {
+                continue;
+            }
+            creators.push(fanbox::FavoriteCreator {
+                id: id.to_string(),
+                name: name.filter(|name| !name.trim().is_empty()).unwrap_or_else(|| id.to_string()),
+                service: "fanbox".into(),
+                updated: None,
+                avatar_url: None,
+                support: None,
+                support_status: None,
+            });
+        }
+        Ok(creators)
     }
 
     // ---------- 文件夹视图 ----------
@@ -1410,6 +1471,18 @@ fn push_filter(query: &mut QueryBuilder<Sqlite>, filter: &LibraryQuery, tags: &T
         and(query);
         query.push("p.source = ").push_bind(source.as_str());
     }
+    if let Some(creator) = &filter.fanbox_creator {
+        and(query);
+        if valid_fanbox_creator(creator) {
+            // 精确匹配完整地址及投稿编号，避免作者前缀、通配符和伪造域名混入。
+            query
+                .push("p.source = 'fanbox' AND p.post_id >= 1000 AND p.post_url = ")
+                .push_bind(format!("{}@{creator}/posts/", fanbox::REFERER_URL))
+                .push(" || CAST(p.post_id / 1000 AS TEXT)");
+        } else {
+            query.push("0");
+        }
+    }
     let ratings: Vec<Rating> = Rating::ALL.into_iter().filter(|r| filter.ratings.contains(r)).collect();
     if !ratings.is_empty() && ratings.len() < Rating::ALL.len() {
         and(query);
@@ -1464,6 +1537,117 @@ mod tests {
             general: general.iter().map(|s| s.to_string()).collect(),
             ..PostTags::default()
         }
+    }
+
+    fn fanbox_post(id: u64, creator: &str, name: &str) -> Post {
+        Post {
+            post_url: format!("https://www.fanbox.cc/@{creator}/posts/{}", id / 1000),
+            ..post(Source::Fanbox, id, tags(&[name], &[]))
+        }
+    }
+
+    #[tokio::test]
+    async fn fanbox_creator_identity_requires_the_exact_saved_post_address() {
+        let lib = Library::in_memory().await;
+        for (id, creator) in [(42_000, "artist"), (43_000, "artist-more"), (44_000, "artist_other")] {
+            lib.save_post(&fanbox_post(id, creator, "Same display name"), Path::new("/saved.png"), 1).await.unwrap();
+        }
+        let malformed = [
+            "http://www.fanbox.cc/@artist/posts/{post}",
+            "https://www.fanbox.cc.evil.test/@artist/posts/{post}",
+            "https://www.fanbox.cc@evil.test/@artist/posts/{post}",
+            "https://evil.test/@artist/posts/{post}",
+            "https://www.fanbox.cc:444/@artist/posts/{post}",
+            "https://www.fanbox.cc/@artist/posts/{post}?next=1",
+            "https://www.fanbox.cc/@artist/posts/{post}#fragment",
+            "https://www.fanbox.cc/@artist/posts/{post}/file",
+            "https://www.fanbox.cc/@artist/posts/0{post}",
+            "https://www.fanbox.cc/@artist/posts/not-a-number",
+            "https://www.fanbox.cc/@artist/posts/999999",
+            "https://www.fanbox.cc/@artist%2Fother/posts/{post}",
+            "https://www.fanbox.cc/@artist/posts/../{post}",
+        ];
+        for (index, raw) in malformed.iter().enumerate() {
+            let id = (100 + index as u64) * 1000;
+            let mut item = fanbox_post(id, "artist", "Same display name");
+            item.post_url = raw.replace("{post}", &(id / 1000).to_string());
+            lib.save_post(&item, Path::new("/invalid.png"), 2).await.unwrap();
+        }
+        let wrong_source = Post { source: Source::Pixiv, ..fanbox_post(45_000, "artist", "Same display name") };
+        lib.save_post(&wrong_source, Path::new("/other.png"), 3).await.unwrap();
+
+        let query = LibraryQuery { fanbox_creator: Some("artist".into()), ..LibraryQuery::default() };
+        let page = lib.list(&query).await.unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.posts[0].post.id, 42_000);
+        let creators = lib.fanbox_creators().await.unwrap();
+        assert_eq!(creators.iter().map(|creator| creator.id.as_str()).collect::<Vec<_>>(), ["artist_other", "artist-more", "artist"]);
+        assert!(creators.iter().all(|creator| creator.support_status.is_none() && creator.support.is_none()));
+        for invalid in ["", "art", "Artist", "artist%", "artist_", "artist/posts/42", "artist' OR 1=1 --"] {
+            assert_eq!(lib.list(&LibraryQuery { fanbox_creator: Some(invalid.into()), ..query.clone() }).await.unwrap().total, 0);
+        }
+        assert_eq!(lib.list(&LibraryQuery { source: Some(Source::Pixiv), ..query }).await.unwrap().total, 0);
+    }
+
+    #[tokio::test]
+    async fn saved_fanbox_resources_survive_reopen_and_paginate_with_attachments() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("saved.png");
+        let attachment = dir.path().join("original.psd");
+        std::fs::write(&image, b"saved image").unwrap();
+        std::fs::write(&attachment, b"saved attachment").unwrap();
+        let lib = Library::open(dir.path()).await.unwrap();
+        // 插入次序和发布时间刻意与资源编号不同，作者页仍能和远程投稿流归并。
+        for (id, name, downloaded) in [(93_000, "Old name", 1), (91_000, "Old name", 2), (93_999, "New name", 4)] {
+            let mut item = fanbox_post(id, "author", name);
+            item.created_at = Some(if id == 91_000 { "2026-10-05T00:00:00Z" } else { "2026-10-01T00:00:00Z" }.into());
+            lib.save_post(&item, &image, downloaded).await.unwrap();
+        }
+        let mut item = fanbox_post(92_000, "author", "Old name");
+        item.file_name = Some("original.psd".into());
+        item.file_ext = "psd".into();
+        item.rating = Some(Rating::Explicit);
+        lib.save_post(&item, &attachment, 3).await.unwrap();
+        lib.pool.close().await;
+
+        let lib = Library::open(dir.path()).await.unwrap();
+        let creators = lib.fanbox_creators().await.unwrap();
+        assert_eq!(creators.len(), 1);
+        assert_eq!((creators[0].id.as_str(), creators[0].name.as_str()), ("author", "New name"));
+        assert!(creators[0].avatar_url.is_none() && creators[0].updated.is_none() && creators[0].support_status.is_none());
+        let query = LibraryQuery {
+            source: Some(Source::Fanbox), fanbox_creator: Some("author".into()), sort: LibrarySort::Newest,
+            limit: 2, ..LibraryQuery::default()
+        };
+        let mut first = lib.list(&query).await.unwrap();
+        first.check_files().await;
+        assert_eq!((first.total, first.has_more), (4, true));
+        assert_eq!(first.posts.iter().map(|item| item.post.id).collect::<Vec<_>>(), [93_999, 93_000]);
+        assert!(first.posts.iter().all(|item| !item.missing));
+        assert_eq!(first.posts[0].post.thumb_url.as_deref(), Some("local/thumb/fanbox/93999"));
+        assert_eq!(first.posts[0].post.sample_url.as_deref(), Some("local/file/fanbox/93999"));
+        let mut second = lib.list(&LibraryQuery { offset: 2, ..query.clone() }).await.unwrap();
+        second.check_files().await;
+        assert_eq!((second.total, second.offset, second.has_more), (4, 2, false));
+        assert_eq!(second.posts.iter().map(|item| item.post.id).collect::<Vec<_>>(), [92_000, 91_000]);
+        assert_eq!(second.posts[0].post.file_name.as_deref(), Some("original.psd"));
+        assert!(second.posts[0].post.thumb_url.is_none() && second.posts[0].post.sample_url.is_none());
+        let general = lib.list(&LibraryQuery { ratings: vec![Rating::General], limit: 20, ..query.clone() }).await.unwrap();
+        assert_eq!(general.total, 3);
+        assert!(general.posts.iter().all(|item| item.post.rating == Some(Rating::General)));
+
+        std::fs::remove_file(&attachment).unwrap();
+        std::fs::create_dir(&attachment).unwrap();
+        second.check_files().await;
+        assert!(second.posts[0].missing);
+        assert!(!second.posts[1].missing);
+        // 文件丢失时保留记录；用户从图库删除后，作者入口和分页计数随之更新。
+        assert_eq!(lib.fanbox_creators().await.unwrap().len(), 1);
+        lib.remove_posts(&[(Source::Fanbox, 92_000)]).await.unwrap();
+        assert_eq!(lib.list(&query).await.unwrap().total, 3);
+        lib.remove_posts(&[(Source::Fanbox, 91_000), (Source::Fanbox, 93_000), (Source::Fanbox, 93_999)]).await.unwrap();
+        assert!(lib.fanbox_creators().await.unwrap().is_empty());
+        assert_eq!(lib.list(&query).await.unwrap().total, 0);
     }
 
     #[tokio::test]
@@ -2005,5 +2189,42 @@ mod tests {
         assert_eq!(job.total, None);
         let job = lib.append_items(job.id, &[], None, None).await.unwrap();
         assert_eq!(job.total, Some(3));
+    }
+
+    #[tokio::test]
+    async fn discovered_tracks_paged_resources_through_pause_failure_and_retry() {
+        let lib = Library::in_memory().await;
+        let job = lib.create_query_job(Source::Fanbox, "Artist", "creator:artist", None, Some(3), None).await.unwrap();
+        assert_eq!((job.discovered, job.total), (0, None));
+        let job = lib.transition(job.id, &[JobStatus::Queued], JobStatus::Running, None).await.unwrap().unwrap();
+        let page = [fanbox_post(42_000, "artist", "Artist"), fanbox_post(42_001, "artist", "Artist")];
+        let job = lib.append_items(job.id, &page, Some("2".into()), None).await.unwrap();
+        assert_eq!((job.discovered, job.total), (2, None));
+        let job = lib.finish_item(job.id, 0, ItemStatus::Saved, None).await.unwrap().unwrap();
+        assert_eq!((job.discovered, job.saved), (2, 1));
+        let job = lib.finish_item(job.id, 1, ItemStatus::Failed, Some("timeout")).await.unwrap().unwrap();
+        assert_eq!((job.discovered, job.failed), (2, 1));
+        // 权限或分级过滤后的空页仍有下一页时，既不伪造总数，也不丢失已读数量。
+        let job = lib.append_items(job.id, &[], Some("3".into()), None).await.unwrap();
+        assert_eq!((job.discovered, job.total, job.cursor.as_deref()), (2, None, Some("3")));
+        let job = lib.transition(job.id, &[JobStatus::Running], JobStatus::Paused, None).await.unwrap().unwrap();
+        assert_eq!(job.discovered, 2);
+        let job = lib.retry_failed(job.id).await.unwrap().unwrap();
+        assert_eq!((job.discovered, job.failed, job.saved), (2, 0, 1));
+        let job = lib.finish_item(job.id, 1, ItemStatus::Skipped, Some("already saved")).await.unwrap().unwrap();
+        assert_eq!((job.discovered, job.skipped), (2, 1));
+        // 下载器达到上限后传入截断后的末页。
+        let job = lib.append_items(job.id, &page[..1], None, None).await.unwrap();
+        assert_eq!((job.discovered, job.total, job.max_posts), (3, Some(3), Some(3)));
+        let job = lib.finish_item(job.id, 2, ItemStatus::Saved, None).await.unwrap().unwrap();
+        let job = lib.transition(job.id, &[JobStatus::Queued], JobStatus::Done, None).await.unwrap().unwrap();
+        assert_eq!((job.discovered, job.total, job.saved + job.skipped + job.failed), (3, Some(3), 3));
+        assert_eq!(lib.jobs().await.unwrap()[0].discovered, 3);
+
+        let empty = lib.create_query_job(Source::Fanbox, "Empty", "creator:empty", None, None, None).await.unwrap();
+        let empty = lib.append_items(empty.id, &[], None, None).await.unwrap();
+        assert_eq!((empty.discovered, empty.total), (0, Some(0)));
+        let selected = lib.create_posts_job(Source::Fanbox, "Selected", &page).await.unwrap();
+        assert_eq!((selected.discovered, selected.total), (2, Some(2)));
     }
 }

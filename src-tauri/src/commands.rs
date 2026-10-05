@@ -304,19 +304,27 @@ pub async fn download_posts(state: State<'_, AppState>, posts: Vec<Post>) -> Res
     Ok(jobs)
 }
 
+fn query_job_title(tags: &str, title: Option<&str>) -> String {
+    if let Some(title) = title.map(str::trim).filter(|title| !title.is_empty()) {
+        return title.to_string();
+    }
+    let words = tags.split_whitespace().collect::<Vec<_>>().join(" ");
+    if words.is_empty() { text("全部帖子", "All posts").to_string() } else { words }
+}
+
 /// 按条件下载全部结果；`max_posts` 限制最多下载前多少张。
 #[tauri::command]
 pub async fn download_query(
     state: State<'_, AppState>,
     params: SearchParams,
     max_posts: Option<u32>,
+    title: Option<String>,
 ) -> Result<JobInfo, AppError> {
     // 按所选排序翻页，设了上限时就是「排在前面的 N 张」。
     let tags = params.tags_with_sort()?;
     let plan = filter::plan_query(params.source, &tags, &params.ratings, tag_limit(&state, params.source))?;
     let count_query = sources::build_query(params.source, &params.tags_for_count()?, &params.ratings);
-    let words = params.tags.split_whitespace().collect::<Vec<_>>().join(" ");
-    let title = if words.is_empty() { text("全部帖子", "All posts").to_string() } else { words };
+    let title = query_job_title(&params.tags, title.as_deref());
     let local = plan.local.to_query();
     state
         .downloader
@@ -376,10 +384,13 @@ pub async fn library_open_file(app: AppHandle, state: State<'_, AppState>, sourc
 #[tauri::command]
 pub async fn library_list(state: State<'_, AppState>, query: LibraryQuery) -> Result<LibraryPage, AppError> {
     let mut page = state.library.list(&query).await?;
-    for post in &mut page.posts {
-        post.missing = !tokio::fs::try_exists(&post.path).await.unwrap_or(false);
-    }
+    page.check_files().await;
     Ok(page)
+}
+
+#[tauri::command]
+pub async fn library_fanbox_creators(state: State<'_, AppState>) -> Result<Vec<fanbox::FavoriteCreator>, AppError> {
+    Ok(state.library.fanbox_creators().await?)
 }
 
 /// 图库首页的文件夹（按来源）。
@@ -1463,6 +1474,14 @@ mod tests {
     use crate::settings::Settings;
     use crate::sources::AccountStore;
     use crate::storage::{Defaults, Storage};
+
+    #[test]
+    fn query_job_titles_accept_creator_names_and_preserve_legacy_fallbacks() {
+        assert_eq!(query_job_title("creator:artist", Some("  Artist name  ")), "Artist name");
+        assert_eq!(query_job_title("  sky   cloud  ", None), "sky cloud");
+        assert_eq!(query_job_title("creator:artist", Some("  \n  ")), "creator:artist");
+        assert_eq!(query_job_title("", Some("Artist")), "Artist");
+    }
 
     #[test]
     fn fanbox_pages_continue_at_the_site_page_size() {

@@ -56,6 +56,9 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
 
+      - name: 前端回归测试
+        run: node --test tests/*.test.mjs
+
       - name: 测试
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib --test language
 

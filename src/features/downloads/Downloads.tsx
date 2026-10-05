@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 
 import { Icon, type IconName } from "../../components/Icon";
+import { SwapLabel } from "../../components/SwapLabel";
 import {
   isActive,
   jobNotes,
@@ -17,6 +18,7 @@ import { errorMessage, postNumber, SOURCE_LABEL, type Source } from "../../lib/i
 import { EASE_OUT } from "../../lib/motion";
 import type { Navigate } from "../../lib/nav";
 import { useDownloads } from "./context";
+import { jobHeading, jobProgress, jobQueryDetails } from "./presentation";
 
 type Notes = ItemNote[] | "loading" | "failed";
 
@@ -70,10 +72,8 @@ function summary(jobs: Job[]): string {
 }
 
 function Progress({ job }: { job: Job }) {
-  const done = processed(job);
-  // 按条件下载且站点没给总数时，下载中显示来回滑动的进度条。
-  const indeterminate = job.total == null && job.status === "running";
-  // 已处理的部分和右下角的张数一致（跳过的也算），里面按已保存、跳过、失败的张数分段。
+  const progress = jobProgress(job);
+  // 未知总数时，分段只表示已读取资源的处理情况；滑动提示保留列表尚未读完的状态。
   const parts = [
     { className: "bar-saved", n: job.saved },
     { className: "bar-skipped", n: job.skipped },
@@ -81,28 +81,39 @@ function Progress({ job }: { job: Job }) {
   ];
   return (
     <div
-      className={`bar${indeterminate ? " is-indeterminate" : ""}`}
+      className={`bar${progress.reading ? " is-indeterminate" : ""}`}
       role="progressbar"
+      aria-label={t("下载进度")}
       aria-valuemin={0}
       aria-valuemax={job.total ?? undefined}
-      aria-valuenow={done}
+      aria-valuenow={progress.knownTotal ? progress.done : undefined}
+      aria-valuetext={progress.knownTotal ? countLabel(job) : `${countLabel(job)} · ${listStatus(job)}`}
     >
-      {indeterminate ? (
-        <i className="bar-indeterminate" />
-      ) : (
-        <i className="bar-fill" style={{ width: `${job.total ? Math.min(100, (done / job.total) * 100) : 0}%` }}>
-          {parts.map(
-            ({ className, n }) => n > 0 && <i key={className} className={className} style={{ flexGrow: n }} />,
-          )}
-        </i>
-      )}
+      <i className="bar-fill" style={{ width: `${progress.width}%` }}>
+        {parts.map(
+          ({ className, n }) => n > 0 && <i key={className} className={className} style={{ flexGrow: n }} />,
+        )}
+      </i>
+      {progress.reading && <i className="bar-indeterminate" />}
     </div>
   );
 }
 
 function countLabel(job: Job): string {
   const done = formatCount(processed(job));
-  return job.total != null ? `${done} / ${formatCount(job.total)}` : t(job.source === "fanbox" ? "{n} 项" : "{n} 张", { n: done });
+  return job.total != null
+    ? `${done} / ${formatCount(job.total)}`
+    : t("已处理 {done} · 已读取 {discovered}", { done, discovered: formatCount(job.discovered) });
+}
+
+const listStatus = (job: Job) => t(job.status === "running" ? "正在读取列表…" : "列表未读完");
+
+function queryDetails(job: Job): string {
+  return [
+    jobQueryDetails(job),
+    job.localFilter ? t("本地筛选 {filter}", { filter: job.localFilter }) : "",
+    job.maxPosts ? t(job.source === "fanbox" ? " · 最多 {n} 项" : " · 最多 {n} 张", { n: formatCount(job.maxPosts) }).replace(/^ · /, "") : "",
+  ].filter(Boolean).join(" · ");
 }
 
 function NoteList({ source, notes }: { source: Source; notes: Notes | undefined }) {
@@ -206,7 +217,7 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
               <div className="job-head">
                 <div className="job-title">
                   <span className="badge">{SOURCE_LABEL[job.source]}</span>
-                  <h2 title={job.title}>{job.title}</h2>
+                  <h2 title={jobHeading(job)}>{jobHeading(job)}</h2>
                   <span className="job-status" data-status={job.status}>
                     {statusLabel(job.status)}
                   </span>
@@ -221,16 +232,16 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
                       onClick={() => void run(() => act(job.id, button.action))}
                     >
                       <Icon name={button.icon} size={15} />
-                      {button.label}
+                      {button.action === "pause" || button.action === "resume"
+                        ? <SwapLabel labels={[t("暂停"), t("继续")]} active={button.action === "pause" ? 0 : 1} />
+                        : button.label}
                     </button>
                   ))}
                 </div>
               </div>
-              {job.query !== null && (
+              {queryDetails(job) && (
                 <code className="job-query" title={t("发给站点的查询")}>
-                  {job.query || t("全部帖子")}
-                  {job.localFilter ? t(" · 本地筛选 {filter}", { filter: job.localFilter }) : ""}
-                  {job.maxPosts ? t(job.source === "fanbox" ? " · 最多 {n} 项" : " · 最多 {n} 张", { n: formatCount(job.maxPosts) }) : ""}
+                  {queryDetails(job)}
                 </code>
               )}
               <Progress job={job} />
@@ -238,6 +249,7 @@ export function Downloads({ onNavigate }: { onNavigate: Navigate }) {
                 <span>{tx("已保存 {n}", { n: <b>{formatCount(job.saved)}</b> })}</span>
                 <span>{tx("跳过 {n}", { n: <b>{formatCount(job.skipped)}</b> })}</span>
                 <span>{tx("失败 {n}", { n: <b>{formatCount(job.failed)}</b> })}</span>
+                {job.total === null && <span>{listStatus(job)}</span>}
                 <span>{t("{time} 加入", { time: formatTime(job.createdAt) })}</span>
                 {job.skipped + job.failed > 0 && (
                   <button

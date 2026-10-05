@@ -425,6 +425,7 @@ pub fn run() {
             commands::job_notes,
             commands::clear_finished_jobs,
             commands::library_list,
+            commands::library_fanbox_creators,
             commands::library_open_file,
             commands::library_folders,
             commands::library_import,

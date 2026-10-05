@@ -9,7 +9,7 @@ export const FAVORITE_SITES = ["danbooru", "gelbooru", "yandere", "e621", "pixiv
 export type FavoriteSite = (typeof FAVORITE_SITES)[number];
 
 /** 同一站点里的几种收藏；FANBOX 列出关注或赞助的创作者。 */
-export type FavoriteMode = "public" | "private" | "posts" | "creators" | "following" | "supporting" | "likes" | "bookmarks";
+export type FavoriteMode = "public" | "private" | "posts" | "creators" | "following" | "supporting" | "saved" | "likes" | "bookmarks";
 
 export const FAVORITE_MODES: Partial<Record<FavoriteSite, { value: FavoriteMode; label: Msg }[]>> = {
   pixiv: [
@@ -19,6 +19,7 @@ export const FAVORITE_MODES: Partial<Record<FavoriteSite, { value: FavoriteMode;
   fanbox: [
     { value: "following", label: "关注的创作者" },
     { value: "supporting", label: "赞助的创作者" },
+    { value: "saved", label: "已保存的创作者" },
   ],
   kemono: [
     { value: "posts", label: "帖子" },
@@ -69,3 +70,5 @@ export interface FavoriteCreator {
 export const kemonoFavoriteCreators = () => invoke<FavoriteCreator[]>("kemono_favorite_creators");
 export const fanboxFavoriteCreators = (mode: "following" | "supporting") =>
   invoke<FavoriteCreator[]>("fanbox_favorite_creators", { mode });
+
+export const fanboxSavedCreators = () => invoke<FavoriteCreator[]>("library_fanbox_creators");

@@ -55,6 +55,7 @@ const LIBRARY_SORTS: { value: LibrarySort; label: Msg }[] = [
 export const librarySorts = () => LIBRARY_SORTS.map(({ value, label }) => ({ value, label: t(label) }));
 
 export interface LibraryQuery {
+  fanboxCreator?: string;
   source: Source | null;
   /** 空格分隔，`-tag` 表示排除。 */
   tags: string;
