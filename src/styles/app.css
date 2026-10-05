@@ -2619,8 +2619,13 @@ kbd {
   max-width: 980px;
 }
 
-.x-capture-page {
+.x-capture-view {
   position: relative;
+  height: 100%;
+}
+
+.x-capture-results {
+  padding: 4px 20px 28px;
 }
 
 .x-capture-bar {
@@ -2647,7 +2652,7 @@ kbd {
   color: var(--fg-3);
 }
 
-.x-capture-page[data-picking] .scroll {
+.x-capture-view[data-picking] .x-capture-results {
   padding-bottom: 92px;
 }
 

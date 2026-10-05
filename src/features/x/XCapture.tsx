@@ -83,72 +83,74 @@ export function XCapture({ active }: { active: boolean }) {
   };
 
   return (
-    <div className="page x-capture-page" data-view-active={active || undefined} data-picking={picked.size > 0 || undefined}>
-      <header className="page-head" data-tauri-drag-region>
-        <div className="page-title">
-          <h1>{t("X 媒体采集")}</h1>
-          <p>{t("输入用户名后，在 X 的媒体页面里收集图片")}</p>
-        </div>
-      </header>
+    <div className="x-capture-view" data-view-active={active || undefined} data-picking={picked.size > 0 || undefined}>
+      <div className="page scroll x-capture-page">
+        <header className="page-head" data-tauri-drag-region>
+          <div className="page-title">
+            <h1>{t("X 媒体采集")}</h1>
+            <p>{t("输入用户名后，在 X 的媒体页面里收集图片")}</p>
+          </div>
+        </header>
 
-      <form className="x-capture-bar page-block" onSubmit={(event) => void start(event)}>
-        <label className="field x-capture-field">
-          <span>{t("X 用户名")}</span>
-          <input
-            className="field-input"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            placeholder={t("例如 artist 或 @artist")}
-            spellCheck={false}
-            autoCapitalize="off"
-          />
-        </label>
-        <button type="submit" className="btn primary" disabled={!username.trim()}>
-          <Icon name="globe" size={15} />
-          {t("开始采集")}
-        </button>
-        {opened && (
-          <button type="button" className="btn ghost" onClick={() => void close()}>
-            {t("关闭采集窗口")}
+        <form className="x-capture-bar page-block" onSubmit={(event) => void start(event)}>
+          <label className="field x-capture-field">
+            <span>{t("X 用户名")}</span>
+            <input
+              className="field-input"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder={t("例如 artist 或 @artist")}
+              spellCheck={false}
+              autoCapitalize="off"
+            />
+          </label>
+          <button type="submit" className="btn primary" disabled={!username.trim()}>
+            <Icon name="globe" size={15} />
+            {t("开始采集")}
           </button>
-        )}
-      </form>
-
-      <p className="x-capture-help page-block">
-        {t("采集窗口会使用自己的登录状态，登录 X 后打开用户的 Media 页面；只收集图片，视频暂不加入图库。")}
-      </p>
-
-      {posts.length > 0 ? (
-        <div className="scroll">
-          <div className="x-capture-count">{t("已收集 {n} 张图片", { n: formatCount(posts.length) })}</div>
-          <PostGrid
-            posts={posts}
-            selected={selected}
-            onSelect={select}
-            pageSize={40}
-            picked={picked}
-            onPick={togglePick}
-            showSource
-          />
-          <SelectionDock
-            count={picked.size}
-            total={posts.length}
-            onPickAll={pickAll}
-            onClear={clearPicks}
-          >
-            <button type="button" className="btn primary" onClick={() => void download()} disabled={busy}>
-              <Icon name="download" size={15} />
-              {busy ? t("正在加入…") : t("下载选中")}
+          {opened && (
+            <button type="button" className="btn ghost" onClick={() => void close()}>
+              {t("关闭采集窗口")}
             </button>
-          </SelectionDock>
-        </div>
-      ) : (
-        <div className="empty page-block">
-          <p className="empty-title">{t("还没有收集到图片")}</p>
-          <p>{t("开始采集后，X 页面加载到的图片会出现在这里。")}</p>
-        </div>
-      )}
-      <Toast message={notice} />
+          )}
+        </form>
+
+        <p className="x-capture-help page-block">
+          {t("采集窗口会使用自己的登录状态，登录 X 后打开用户的 Media 页面；只收集图片，视频暂不加入图库。")}
+        </p>
+
+        {posts.length > 0 ? (
+          <div className="x-capture-results">
+            <div className="x-capture-count">{t("已收集 {n} 张图片", { n: formatCount(posts.length) })}</div>
+            <PostGrid
+              posts={posts}
+              selected={selected}
+              onSelect={select}
+              pageSize={40}
+              picked={picked}
+              onPick={togglePick}
+              showSource
+            />
+          </div>
+        ) : (
+          <div className="empty page-block">
+            <p className="empty-title">{t("还没有收集到图片")}</p>
+            <p>{t("开始采集后，X 页面加载到的图片会出现在这里。")}</p>
+          </div>
+        )}
+        <Toast message={notice} />
+      </div>
+      <SelectionDock
+        count={picked.size}
+        total={posts.length}
+        onPickAll={pickAll}
+        onClear={clearPicks}
+      >
+        <button type="button" className="btn primary" onClick={() => void download()} disabled={busy}>
+          <Icon name="download" size={15} />
+          {busy ? t("正在加入…") : t("下载选中")}
+        </button>
+      </SelectionDock>
     </div>
   );
 }

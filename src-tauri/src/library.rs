@@ -669,7 +669,7 @@ impl Library {
     }
 
     /// 把筛选条件里的 tag 名换成 id。要「有」的 tag 图库里根本没有时，结果一定为空，返回 `None`。
-    async fn resolve_tags(&self, tags: &str) -> Result<Option<TagFilter>, sqlx::Error> {
+    async fn resolve_tags(&self, tags: &str, source: Option<Source>) -> Result<Option<TagFilter>, sqlx::Error> {
         let mut filter = TagFilter::default();
         let mut seen = HashSet::new();
         for tag in tags.split_whitespace().filter(|tag| seen.insert(*tag)) {
@@ -677,10 +677,21 @@ impl Library {
                 Some(name) if !name.is_empty() => (true, name),
                 _ => (false, tag),
             };
-            let id: Option<i64> = sqlx::query_scalar("SELECT id FROM tags WHERE name = ?")
-                .bind(name.to_lowercase())
-                .fetch_optional(&self.pool)
-                .await?;
+            // 在当前来源使用的标签中优先匹配原名，找不到时沿用手动搜索的小写回退。
+            let id: Option<i64> = sqlx::query_scalar(
+                "SELECT t.id FROM tags t WHERE t.name IN (?, ?)
+                 AND (? IS NULL OR EXISTS (
+                     SELECT 1 FROM post_tags pt CROSS JOIN posts p ON p.id = pt.post_id
+                     WHERE pt.tag_id = t.id AND p.source = ?
+                 )) ORDER BY t.name = ? DESC LIMIT 1",
+            )
+            .bind(name)
+            .bind(name.to_lowercase())
+            .bind(source.map(Source::as_str))
+            .bind(source.map(Source::as_str))
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
             match (id, negate) {
                 (Some(id), false) => filter.include.push(id),
                 (Some(id), true) => filter.exclude.push(id),
@@ -696,7 +707,7 @@ impl Library {
             0 => 60,
             n => n.min(MAX_PAGE),
         };
-        let Some(tags) = self.resolve_tags(&query.tags).await? else {
+        let Some(tags) = self.resolve_tags(&query.tags, query.source).await? else {
             return Ok(LibraryPage { posts: Vec::new(), total: 0, offset: query.offset, has_more: false });
         };
         let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM posts p");
@@ -1450,6 +1461,87 @@ mod tests {
         let owned = lib.owned(&probes).await.unwrap();
         assert_eq!(owned, HashSet::from([(Source::Danbooru, 1), (Source::Gelbooru, 9)]));
         assert!(lib.owned(&[]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn opens_existing_mixed_case_artist_groups() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open(dir.path()).await.unwrap();
+        let artist = "Ikanikannika09";
+        for id in 1..=105 {
+            lib.save_post(&post(Source::X, id, tags(&[artist], &["Sketch"])), Path::new("/images/x.png"), id as i64)
+                .await
+                .unwrap();
+        }
+        lib.pool.close().await;
+
+        let lib = Library::open(dir.path()).await.unwrap();
+        let groups = lib
+            .groups(&GroupQuery { source: Source::X, kind: GroupKind::Artist, sort: GroupSort::Recent, offset: 0, limit: 0 })
+            .await
+            .unwrap();
+        assert_eq!(groups.groups.len(), 1);
+        let group = &groups.groups[0];
+        assert_eq!(group.name, artist);
+        assert_eq!(group.count, 105);
+        assert_eq!(group.covers.len(), 5);
+
+        let query = LibraryQuery { source: Some(Source::X), tags: group.name.clone(), limit: 60, ..LibraryQuery::default() };
+        let first = lib.list(&query).await.unwrap();
+        assert_eq!(first.total, group.count);
+        assert_eq!(first.posts.len(), 60);
+        assert!(first.has_more);
+        assert!(first.posts.iter().all(|item| item.post.tags.artist == [artist]));
+        let second = lib.list(&LibraryQuery { offset: 60, ..query }).await.unwrap();
+        assert_eq!(second.total, group.count);
+        assert_eq!(second.posts.len(), 45);
+        assert!(!second.has_more);
+        assert!(first.posts.iter().all(|item| !second.posts.iter().any(|next| next.post.id == item.post.id)));
+    }
+
+    #[tokio::test]
+    async fn filters_exact_tag_names_before_lowercase_fallback() {
+        let lib = Library::in_memory().await;
+        for (source, id, labels) in [
+            (Source::X, 1, tags(&["ArtistCase"], &["Sketch"])),
+            (Source::X, 2, tags(&["artistcase"], &["sketch"])),
+            (Source::X, 3, tags(&["other"], &["sky"])),
+            (Source::Danbooru, 4, tags(&["ArtistCase"], &["Sketch"])),
+        ] {
+            lib.save_post(&post(source, id, labels), Path::new("/images/test.png"), id as i64).await.unwrap();
+        }
+        let query = |tags: &str| LibraryQuery { source: Some(Source::X), tags: tags.into(), ..LibraryQuery::default() };
+        let exact = lib.list(&query("ArtistCase Sketch")).await.unwrap();
+        assert_eq!(exact.total, 1);
+        assert_eq!(exact.posts[0].post.id, 1);
+        let lower = lib.list(&query("artistcase")).await.unwrap();
+        assert_eq!(lower.total, 1);
+        assert_eq!(lower.posts[0].post.id, 2);
+        let exclude = lib.list(&query("-ArtistCase")).await.unwrap();
+        assert_eq!(exclude.posts.iter().map(|item| item.post.id).collect::<Vec<_>>(), [3, 2]);
+        assert_eq!(lib.list(&query("ArtistCase -Sketch")).await.unwrap().total, 0);
+        assert_eq!(lib.list(&query("SKY")).await.unwrap().posts[0].post.id, 3);
+    }
+
+    #[tokio::test]
+    async fn resolves_tag_case_within_the_selected_source() {
+        let lib = Library::in_memory().await;
+        for (source, id, labels) in [
+            (Source::X, 1, tags(&["ArtistCase"], &["Sketch"])),
+            (Source::Danbooru, 2, tags(&["artistcase"], &["sketch"])),
+            (Source::Danbooru, 3, tags(&["other"], &["sky"])),
+        ] {
+            lib.save_post(&post(source, id, labels), Path::new("/images/test.png"), id as i64).await.unwrap();
+        }
+        let query = |source, tags: &str| LibraryQuery { source, tags: tags.into(), ..LibraryQuery::default() };
+        let include = lib.list(&query(Some(Source::Danbooru), "ArtistCase Sketch")).await.unwrap();
+        let exclude = lib.list(&query(Some(Source::Danbooru), "-ArtistCase")).await.unwrap();
+        let ids = |page: &LibraryPage| page.posts.iter().map(|item| item.post.id).collect::<Vec<_>>();
+        assert_eq!((ids(&include), ids(&exclude)), (vec![2], vec![3]));
+        for source in [Some(Source::X), None] {
+            let exact = lib.list(&query(source, "ArtistCase Sketch")).await.unwrap();
+            assert_eq!(ids(&exact), [1]);
+        }
     }
 
     #[tokio::test]
