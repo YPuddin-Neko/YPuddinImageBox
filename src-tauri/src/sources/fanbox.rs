@@ -1,6 +1,6 @@
 //! FANBOX 的作者投稿、图片与附件。每项资源独立入库，付费权限由站点当前会话决定。
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use reqwest::header::{HeaderValue, ACCEPT, COOKIE, ORIGIN, REFERER, USER_AGENT};
 use reqwest::RequestBuilder;
@@ -771,6 +771,13 @@ pub async fn count(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreatorSupport {
+    pub plan_title: Option<String>,
+    pub fee: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FavoriteCreator {
     pub id: String,
     pub name: String,
@@ -778,6 +785,10 @@ pub struct FavoriteCreator {
     pub updated: Option<String>,
     #[serde(default)]
     pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub support: Option<CreatorSupport>,
+    #[serde(default)]
+    pub support_status: Option<bool>,
 }
 
 pub async fn favorite_creators(
@@ -796,10 +807,38 @@ pub async fn favorite_creators(
             )))
         }
     };
-    creators(
+    let mut result = creators(
         get(net, Some(credentials), api_url(endpoint, &[])).await?,
         field,
-    )
+    )?;
+    if mode == "following" {
+        match get(net, Some(credentials), api_url("plan.listSupporting", &[]))
+            .await
+            .and_then(|body| creators(body, "plans"))
+        {
+            Ok(plans) => merge_support(&mut result, Some(&plans)),
+            Err(error) => {
+                log::warn!("FANBOX 赞助状态读取失败：{error}");
+                merge_support(&mut result, None);
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn merge_support(followed: &mut [FavoriteCreator], plans: Option<&[FavoriteCreator]>) {
+    let by_id = plans.map(|plans| {
+        let mut by_id = HashMap::new();
+        for plan in plans {
+            by_id.entry(plan.id.as_str()).or_insert(plan);
+        }
+        by_id
+    });
+    for creator in followed {
+        let plan = by_id.as_ref().and_then(|plans| plans.get(creator.id.as_str()));
+        creator.support_status = by_id.as_ref().map(|_| plan.is_some());
+        creator.support = plan.and_then(|plan| plan.support.clone());
+    }
 }
 
 fn creators(body: Value, field: &str) -> Result<Vec<FavoriteCreator>, AppError> {
@@ -832,6 +871,16 @@ fn creators(body: Value, field: &str) -> Result<Vec<FavoriteCreator>, AppError> 
                     .and_then(|value| Url::parse(value.trim()).ok())
                     .filter(|url| trusted_url(url, "pixiv.pximg.net") || trusted_url(url, MEDIA_HOST))
                     .map(|url| url.to_string()),
+                support: (field == "plans").then(|| CreatorSupport {
+                    plan_title: entry
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|title| !title.is_empty())
+                        .map(str::to_string),
+                    fee: entry.get("fee").and_then(Value::as_u64).filter(|fee| *fee <= MAX_SAFE_INTEGER),
+                }),
+                support_status: (field == "plans").then_some(true),
             });
         }
     }
@@ -1361,6 +1410,84 @@ mod tests {
             assert_eq!(result[0].avatar_url.as_deref(), Some(avatar));
             assert_eq!(serde_json::to_value(&result[0]).unwrap()["avatarUrl"], avatar);
         }
+    }
+
+    #[test]
+    fn current_plans_keep_first_duplicate_and_expose_zero_fee_and_title() {
+        let result = creators(json!({"plans":[
+            {"creatorId":"a","title":"  Starter  ","fee":0,"user":{"name":"A"}},
+            {"creatorId":"a","title":"Duplicate","fee":500,"user":{"name":"Other"}},
+            {"creatorId":"b","title":"Sketches","fee":1000,"user":{"name":"B"}}
+        ]}), "plans").unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "A");
+        assert_eq!(result[0].support_status, Some(true));
+        let support = result[0].support.as_ref().unwrap();
+        assert_eq!(support.plan_title.as_deref(), Some("Starter"));
+        assert_eq!(support.fee, Some(0));
+        let serialized = serde_json::to_value(&result[1]).unwrap();
+        assert_eq!(serialized["supportStatus"], true);
+        assert_eq!(serialized["support"]["planTitle"], "Sketches");
+        assert_eq!(serialized["support"]["fee"], 1000);
+    }
+
+    #[test]
+    fn following_support_comes_from_current_plans_instead_of_creator_flags() {
+        let mut followed = creators(json!({"creators":[
+            {"creatorId":"a","isSupported":false,"isStopped":true,"user":{"name":"Followed A"}},
+            {"creatorId":"b","isSupported":true,"isStopped":false,"user":{"name":"Followed B"}},
+            {"creatorId":"a","user":{"name":"Duplicate A"}}
+        ]}), "creators").unwrap();
+        assert!(followed.iter().all(|creator| creator.support_status.is_none() && creator.support.is_none()));
+        let plans = creators(json!([
+            {"creatorId":"a","title":"Art","fee":500,"user":{"name":"Plan A"}},
+            {"creatorId":"other","title":"Other","fee":1000}
+        ]), "plans").unwrap();
+        merge_support(&mut followed, Some(&plans));
+        assert_eq!(followed.len(), 2);
+        assert_eq!(followed[0].id, "a");
+        assert_eq!(followed[0].name, "Followed A");
+        assert_eq!(followed[0].support_status, Some(true));
+        assert_eq!(followed[0].support.as_ref().unwrap().fee, Some(500));
+        assert_eq!(followed[1].support_status, Some(false));
+        assert!(followed[1].support.is_none());
+    }
+
+    #[test]
+    fn empty_plan_results_mean_not_supporting_but_failed_results_remain_unknown() {
+        let mut followed = creators(json!([{"creatorId":"a","user":{"name":"A"}}]), "creators").unwrap();
+        let plans = creators(json!([{"creatorId":"a","title":"Art","fee":500}]), "plans").unwrap();
+        merge_support(&mut followed, Some(&plans));
+        assert_eq!(followed[0].support_status, Some(true));
+        let empty = creators(json!({"plans":[]}), "plans").unwrap();
+        merge_support(&mut followed, Some(&empty));
+        assert_eq!(followed[0].support_status, Some(false));
+        assert!(followed[0].support.is_none());
+        merge_support(&mut followed, Some(&plans));
+        merge_support(&mut followed, None);
+        assert_eq!(followed[0].support_status, None);
+        assert!(followed[0].support.is_none());
+        assert_eq!(followed[0].name, "A");
+        assert!(creators(json!({"error":true}), "plans").is_err());
+    }
+
+    #[test]
+    fn optional_plan_fields_reject_invalid_fees_without_changing_support_status() {
+        for title in [Value::Null, json!(""), json!("  ")] {
+            for fee in [Value::Null, json!(-1), json!(1.5), json!("500"), json!(true), json!(MAX_SAFE_INTEGER + 1)] {
+                let result = creators(json!([{"creatorId":"a","title":title,"fee":fee}]), "plans").unwrap();
+                assert_eq!(result[0].support_status, Some(true));
+                let support = result[0].support.as_ref().unwrap();
+                assert!(support.plan_title.is_none());
+                assert!(support.fee.is_none());
+            }
+        }
+        let result = creators(json!([{"creatorId":"a"},{"creatorId":"b","fee":MAX_SAFE_INTEGER}]), "plans").unwrap();
+        assert!(result[0].support.as_ref().unwrap().plan_title.is_none());
+        assert!(result[0].support.as_ref().unwrap().fee.is_none());
+        assert_eq!(result[1].support.as_ref().unwrap().fee, Some(MAX_SAFE_INTEGER));
+        let old: FavoriteCreator = serde_json::from_value(json!({"id":"a","name":"A","service":"fanbox","updated":null})).unwrap();
+        assert!(old.support_status.is_none() && old.support.is_none());
     }
 
     #[test]

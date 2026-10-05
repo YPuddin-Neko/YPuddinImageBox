@@ -60,6 +60,8 @@ export interface FavoriteCreator {
   name: string;
   service: string;
   avatarUrl?: string | null;
+  supportStatus?: boolean | null;
+  support?: { planTitle: string | null; fee: number | null } | null;
   /** 最近更新的时间（不带时区的 UTC）。 */
   updated: string | null;
 }

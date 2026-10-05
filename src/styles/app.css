@@ -1745,6 +1745,18 @@ code {
   text-overflow: ellipsis;
 }
 
+.creator-support {
+  overflow: hidden;
+  color: var(--fg-2);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.creator-support[data-supported] {
+  color: color-mix(in srgb, var(--ok) 75%, var(--fg-1));
+}
+
 /* ---------- 设置 ---------- */
 
 .settings {

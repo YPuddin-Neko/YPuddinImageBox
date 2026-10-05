@@ -102,6 +102,16 @@ function countText(count: Count, site: FavoriteSite): string {
   return t("约 {n} 张", { n: formatCount(count) });
 }
 
+function creatorSupport(creator: FavoriteCreator) {
+  const supported = creator.supportStatus === true;
+  const status = supported ? t("赞助中") : creator.supportStatus === false ? t("未赞助") : t("赞助状态未知");
+  const fee = creator.support?.fee;
+  const amount = supported && fee != null && Number.isSafeInteger(fee) && fee >= 0 ? formatCount(fee) : null;
+  const details = [status, supported && creator.support?.planTitle, amount !== null && t("{amount} 日元/月", { amount })]
+    .filter(Boolean).join(" · ");
+  return { supported, details, text: `${status}${amount !== null ? ` · ${t("¥{amount}/月", { amount })}` : ""}` };
+}
+
 export function Favorites({ active, onNavigate }: { active: boolean; onNavigate: Navigate }) {
   const { addPosts, addQuery } = useDownloads();
   const [site, setSite] = useState<FavoriteSite>(storedSite);
@@ -602,28 +612,36 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
                 : t("还没有收藏作者。")}</p>
             ) : (
               <ul className="creator-list">
-                {creators?.map((item) => (
-                  <li key={`${item.service}/${item.id}`}>
-                    <button type="button" className="creator-card" onClick={() => {
-                      setCreator(item);
-                      setError(null);
-                      clearPicks();
-                    }}>
-                      {(site === "fanbox" || item.avatarUrl) && (
-                        <ShimmerImage key={item.avatarUrl} className="creator-avatar" src={imageSrc(item.avatarUrl)} alt="" />
-                      )}
-                      <span className="creator-info">
-                        <span className="creator-name" title={item.name || `${item.service}/${item.id}`}>
-                          {item.name || `${item.service}/${item.id}`}
+                {creators?.map((item) => {
+                  const support = site === "fanbox" ? creatorSupport(item) : null;
+                  return (
+                    <li key={`${item.service}/${item.id}`}>
+                      <button type="button" className="creator-card" aria-description={support?.details} onClick={() => {
+                        setCreator(item);
+                        setError(null);
+                        clearPicks();
+                      }}>
+                        {(site === "fanbox" || item.avatarUrl) && (
+                          <ShimmerImage key={item.avatarUrl} className="creator-avatar" src={imageSrc(item.avatarUrl)} alt="" />
+                        )}
+                        <span className="creator-info">
+                          <span className="creator-name" title={item.name || `${item.service}/${item.id}`}>
+                            {item.name || `${item.service}/${item.id}`}
+                          </span>
+                          <span className="creator-meta">
+                            {site === "fanbox" ? item.id : item.service}
+                            {item.updated ? ` · ${t("更新于 {date}", { date: item.updated.slice(0, 10) })}` : ""}
+                          </span>
+                          {support && (
+                            <span className="creator-support" data-supported={support.supported || undefined} title={support.details}>
+                              {support.text}
+                            </span>
+                          )}
                         </span>
-                        <span className="creator-meta">
-                          {site === "fanbox" ? item.id : item.service}
-                          {item.updated ? ` · ${t("更新于 {date}", { date: item.updated.slice(0, 10) })}` : ""}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )
           ) : (
