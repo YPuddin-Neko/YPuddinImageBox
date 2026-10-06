@@ -1593,6 +1593,7 @@ mod tests {
         let state = state(dir.path()).await;
         let initial = state.settings().clone();
         let destination = dir.path().join("fanbox archive");
+        let default_directory = dir.path().join("images").join("fanbox");
         let requested = FanboxDownloadSettings {
             directory: Some(destination.clone()),
             folder_template: "{creator_id}/{postid}-{title}".into(),
@@ -1601,7 +1602,7 @@ mod tests {
         };
         let saved = save_fanbox_download_settings(&state, requested.clone()).unwrap();
         assert_eq!(saved.settings, requested);
-        assert_eq!(saved.default_directory, dir.path().join("images/fanbox"));
+        assert_eq!(saved.default_directory, default_directory);
         assert!(!destination.exists());
         let mut expected = initial;
         expected.fanbox_download = requested.clone();
@@ -1609,7 +1610,7 @@ mod tests {
         assert_eq!(Settings::load(&dir.path().join("data")), expected);
         let payload = serde_json::to_value(saved).unwrap();
         assert_eq!(payload["settings"]["imageTemplate"], "{postid}_{index}");
-        assert_eq!(payload["defaultDirectory"], dir.path().join("images/fanbox").to_string_lossy().as_ref());
+        assert_eq!(payload["defaultDirectory"], default_directory.to_string_lossy().as_ref());
 
         let invalid = FanboxDownloadSettings { folder_template: "../{user}".into(), ..requested.clone() };
         assert!(save_fanbox_download_settings(&state, invalid).is_err());
