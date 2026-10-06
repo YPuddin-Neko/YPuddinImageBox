@@ -3111,6 +3111,10 @@ kbd {
   color: var(--fg-2);
 }
 
+.dialog-body > .dialog-copy {
+  margin: 0;
+}
+
 .dialog-paths {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
