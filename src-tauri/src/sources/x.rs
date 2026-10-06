@@ -167,6 +167,7 @@ fn parse_tweet(tweet: &Map<String, Value>, author: Option<&str>, seen: &mut Hash
             fav_count: None,
             file_ext: ext,
             file_name: None,
+            download_index: None,
             title: None,
             file_size: media
                 .get("original_info")

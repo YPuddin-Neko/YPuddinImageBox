@@ -369,6 +369,7 @@ pub fn run() {
                 Arc::clone(&images_gate),
                 events,
             );
+            downloader.set_fanbox_settings(settings.fanbox_download.clone());
             tauri::async_runtime::spawn(Arc::clone(&downloader).run());
             tauri::async_runtime::spawn(Arc::clone(&downloader).run_schedule());
             app.manage(AppState {
@@ -431,6 +432,7 @@ pub fn run() {
             commands::library_import,
             commands::library_groups,
             commands::library_delete,
+            commands::library_delete_preview,
             commands::accounts_info,
             commands::account_save,
             commands::account_remove,
@@ -462,6 +464,8 @@ pub fn run() {
             commands::proxy_save,
             commands::proxy_test,
             commands::storage_info,
+            commands::fanbox_download_info,
+            commands::fanbox_download_save,
             commands::storage_usage,
             commands::storage_change,
             commands::storage_cancel_pending,

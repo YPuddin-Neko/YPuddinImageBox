@@ -230,6 +230,36 @@ pub struct GroupPage {
     pub has_more: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryDeleteScope {
+    pub source: Source,
+    pub group: Option<LibraryDeleteGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryDeleteGroup {
+    pub kind: GroupKind,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryDeletePost {
+    pub source: Source,
+    pub post_id: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryDeletePreview {
+    pub posts: Vec<LibraryDeletePost>,
+    pub shared_count: i64,
+    pub other_groups: Vec<String>,
+    pub other_group_count: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobKind {
@@ -476,6 +506,7 @@ fn post_from_row(row: &SqliteRow) -> Result<LocalPost, sqlx::Error> {
             file_ext,
             file_size: file_size.map(|size| size as u64),
             file_name,
+            download_index: row.try_get("download_index")?,
             title: row.try_get("title")?,
             file_url: row.try_get("file_url")?,
             sample_url: route("file"),
@@ -671,14 +702,15 @@ impl Library {
         let mut tx = self.pool.begin().await?;
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO posts (source, post_id, md5, width, height, rating, score, fav_count, file_ext, file_size,
-                                file_url, created_at, posted_at, post_url, local_path, downloaded_at, file_name, title)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                file_url, created_at, posted_at, post_url, local_path, downloaded_at, file_name, title, download_index)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (source, post_id) DO UPDATE SET
                 md5 = excluded.md5, width = excluded.width, height = excluded.height, rating = excluded.rating,
                 score = excluded.score, fav_count = excluded.fav_count, file_ext = excluded.file_ext,
                 file_size = excluded.file_size, file_url = excluded.file_url, created_at = excluded.created_at,
                 posted_at = excluded.posted_at, post_url = excluded.post_url, local_path = excluded.local_path,
-                downloaded_at = excluded.downloaded_at, file_name = excluded.file_name, title = excluded.title
+                downloaded_at = excluded.downloaded_at, file_name = excluded.file_name, title = excluded.title,
+                download_index = excluded.download_index
              RETURNING id",
         )
         .bind(post.source.as_str())
@@ -699,6 +731,7 @@ impl Library {
         .bind(downloaded_at)
         .bind(&post.file_name)
         .bind(&post.title)
+        .bind(post.download_index)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -955,6 +988,36 @@ impl Library {
             .collect();
         let has_more = i64::from(query.offset) + (groups.len() as i64) < total;
         Ok(GroupPage { groups, total, has_more })
+    }
+
+    /// 一次读取完整删除范围和交叉分组。确认后按返回的编号删除，不再扩张到新下载的记录。
+    pub async fn delete_preview(&self, scope: &LibraryDeleteScope) -> Result<LibraryDeletePreview, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        let mut select = QueryBuilder::<Sqlite>::new("SELECT p.post_id FROM posts p");
+        push_delete_scope(&mut select, scope);
+        select.push(" ORDER BY p.id");
+        let ids: Vec<i64> = select.build_query_scalar().fetch_all(&mut *tx).await?;
+        let posts = ids.into_iter().map(|post_id| LibraryDeletePost { source: scope.source, post_id: post_id as u64 }).collect();
+        let mut preview = LibraryDeletePreview { posts, shared_count: 0, other_groups: Vec::new(), other_group_count: 0 };
+        if let Some(group) = &scope.group {
+            let mut shared = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM posts p");
+            push_delete_scope(&mut shared, scope);
+            shared.push(" AND EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = p.id AND t.category IN ('artist', 'copyright', 'character', 'general') AND t.name <> ")
+                .push_bind(group.name.clone()).push(")");
+            preview.shared_count = shared.build_query_scalar().fetch_one(&mut *tx).await?;
+            let mut others = QueryBuilder::<Sqlite>::new(
+                "SELECT t.name, COUNT(*) OVER () FROM tags t WHERE t.category IN ('artist', 'copyright', 'character', 'general') AND t.name <> ",
+            );
+            others.push_bind(group.name.clone())
+                .push(" AND EXISTS (SELECT 1 FROM posts p");
+            push_delete_scope(&mut others, scope);
+            others.push(" AND EXISTS (SELECT 1 FROM post_tags pt WHERE pt.post_id = p.id AND pt.tag_id = t.id)) ORDER BY t.name LIMIT 5");
+            let rows: Vec<(String, i64)> = others.build_query_as().fetch_all(&mut *tx).await?;
+            preview.other_group_count = rows.first().map_or(0, |row| row.1);
+            preview.other_groups = rows.into_iter().map(|row| row.0).collect();
+        }
+        tx.commit().await?;
+        Ok(preview)
     }
 
     /// 从图库删除记录（tag 关联随之删除），返回删掉的条数。不碰文件。
@@ -1503,6 +1566,14 @@ fn push_filter(query: &mut QueryBuilder<Sqlite>, filter: &LibraryQuery, tags: &T
     }
 }
 
+fn push_delete_scope(query: &mut QueryBuilder<Sqlite>, scope: &LibraryDeleteScope) {
+    query.push(" WHERE p.source = ").push_bind(scope.source.as_str());
+    if let Some(group) = &scope.group {
+        query.push(" AND EXISTS (SELECT 1 FROM post_tags selected_pt JOIN tags selected_tag ON selected_tag.id = selected_pt.tag_id WHERE selected_pt.post_id = p.id AND selected_tag.category = ")
+            .push_bind(group.kind.category()).push(" AND selected_tag.name = ").push_bind(group.name.clone()).push(")");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1519,6 +1590,7 @@ mod tests {
             fav_count: Some(3),
             file_ext: "png".into(),
             file_name: None,
+            download_index: None,
             title: None,
             file_size: Some(1234),
             file_url: Some(format!("https://cdn.donmai.us/original/{id}.png")),
@@ -1892,19 +1964,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migrates_fanbox_download_indices_and_keeps_legacy_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(dir.path().join(DB_FILE)).create_if_missing(true))
+            .await
+            .unwrap();
+        let migrations = sqlx::migrate!("./migrations");
+        let previous = sqlx::migrate::Migrator::with_migrations(
+            migrations.iter().filter(|migration| migration.version < 9).cloned().collect(),
+        );
+        previous.run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO posts (source, post_id, width, height, file_ext, post_url, local_path, downloaded_at, file_name, title)
+             VALUES ('fanbox', 42000, 1, 1, 'zip', 'https://www.fanbox.cc/@artist/posts/42', '/images/FANBOX/Artist/42_p0_original.zip', 1, 'original.zip', 'Original title')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let lib = Library::open(dir.path()).await.unwrap();
+        let legacy = lib.list(&LibraryQuery::default()).await.unwrap();
+        assert_eq!(legacy.total, 1);
+        assert!(legacy.posts[0].post.download_index.is_none());
+        assert_eq!(legacy.posts[0].post.file_name.as_deref(), Some("original.zip"));
+        assert_eq!(legacy.posts[0].path, "/images/FANBOX/Artist/42_p0_original.zip");
+
+        let mut image = post(Source::Fanbox, 42001, tags(&["Artist"], &[]));
+        image.download_index = Some(1);
+        let path = Path::new("/images/fanbox/Artist/2026-10-06-Sketches/001.png");
+        lib.save_post(&image, path, 2).await.unwrap();
+        let query = LibraryQuery { source: Some(Source::Fanbox), ..LibraryQuery::default() };
+        let saved = lib.list(&query).await.unwrap();
+        assert_eq!(saved.posts.iter().find(|item| item.post.id == image.id).unwrap().post.download_index, Some(1));
+        image.download_index = Some(2);
+        lib.save_post(&image, path, 3).await.unwrap();
+        lib.pool.close().await;
+
+        let lib = Library::open(dir.path()).await.unwrap();
+        let saved = lib.list(&query).await.unwrap();
+        assert_eq!(saved.total, 2);
+        let current = saved.posts.iter().find(|item| item.post.id == image.id).unwrap();
+        assert_eq!(current.post.download_index, Some(2));
+        let legacy = saved.posts.iter().find(|item| item.post.id == 42000).unwrap();
+        assert!(legacy.post.download_index.is_none());
+        assert_eq!(legacy.path, "/images/FANBOX/Artist/42_p0_original.zip");
+    }
+
+    #[tokio::test]
     async fn queued_posts_preserve_names_and_accept_legacy_json() {
         let lib = Library::in_memory().await;
         let legacy = post(Source::Danbooru, 1, PostTags::default());
         let json = serde_json::to_value(&legacy).unwrap();
         assert!(json.get("fileName").is_none());
         assert!(json.get("title").is_none());
+        assert!(json.get("downloadIndex").is_none());
         let old: Post = serde_json::from_value(json).unwrap();
         assert!(old.file_name.is_none());
         assert!(old.title.is_none());
+        assert!(old.download_index.is_none());
         let named = Post {
             id: 2,
             file_name: Some("原稿.psd".into()),
             title: Some("作品标题".into()),
+            download_index: Some(3),
             ..legacy.clone()
         };
         let job = lib.create_posts_job(Source::Danbooru, "files", &[old, named.clone()]).await.unwrap();
@@ -1912,8 +2037,10 @@ mod tests {
         assert_eq!(pending.len(), 2);
         assert!(pending[0].post.file_name.is_none());
         assert!(pending[0].post.title.is_none());
+        assert!(pending[0].post.download_index.is_none());
         assert_eq!(pending[1].post.file_name, named.file_name);
         assert_eq!(pending[1].post.title, named.title);
+        assert_eq!(pending[1].post.download_index, named.download_index);
     }
 
     #[tokio::test]
@@ -1983,6 +2110,79 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((second.groups.len(), second.total, second.has_more), (1, 2, false));
+    }
+
+    #[tokio::test]
+    async fn delete_preview_is_exact_complete_and_reports_shared_groups() {
+        let lib = Library::in_memory().await;
+        let path = Path::new("/missing/fixture.png");
+        for id in 1..=65 {
+            let mut names = vec!["-Artist With Spaces"];
+            if id <= 3 { names.extend(["other_a", "other_b"]); }
+            if id == 1 { names.extend(["other_c", "other_d", "other_e", "other_f"]); }
+            lib.save_post(&post(Source::Gelbooru, id, tags(&[], &names)), path, id as i64).await.unwrap();
+        }
+        lib.save_post(&post(Source::Danbooru, 1, tags(&[], &["-Artist With Spaces", "foreign"])), path, 1).await.unwrap();
+        lib.save_post(&post(Source::Gelbooru, 66, tags(&[], &["-artist with spaces"])), path, 66).await.unwrap();
+        lib.save_post(&post(Source::Gelbooru, 67, tags(&[], &[])), path, 67).await.unwrap();
+        let scope = LibraryDeleteScope {
+            source: Source::Gelbooru,
+            group: Some(LibraryDeleteGroup { kind: GroupKind::General, name: "-Artist With Spaces".into() }),
+        };
+        let preview = lib.delete_preview(&scope).await.unwrap();
+        assert_eq!(preview.posts.len(), 65);
+        assert!(preview.posts.iter().all(|item| item.source == Source::Gelbooru && item.post_id <= 65));
+        assert_eq!(preview.shared_count, 3);
+        assert_eq!(preview.other_group_count, 6);
+        assert_eq!(preview.other_groups, ["other_a", "other_b", "other_c", "other_d", "other_e"]);
+        let wrong_kind = LibraryDeleteScope {
+            source: Source::Gelbooru,
+            group: Some(LibraryDeleteGroup { kind: GroupKind::Artist, name: "-Artist With Spaces".into() }),
+        };
+        assert!(lib.delete_preview(&wrong_kind).await.unwrap().posts.is_empty());
+        let empty_tag = LibraryDeleteScope {
+            source: Source::Gelbooru,
+            group: Some(LibraryDeleteGroup { kind: GroupKind::General, name: String::new() }),
+        };
+        assert!(lib.delete_preview(&empty_tag).await.unwrap().posts.is_empty());
+        let entire_source = lib.delete_preview(&LibraryDeleteScope { source: Source::Gelbooru, group: None }).await.unwrap();
+        assert_eq!(entire_source.posts.len(), 67);
+        assert_eq!(entire_source.shared_count, 0);
+        assert!(entire_source.other_groups.is_empty());
+
+        // The confirmation snapshot must not include files downloaded after it was shown.
+        lib.save_post(&post(Source::Gelbooru, 68, tags(&[], &["-Artist With Spaces"])), path, 68).await.unwrap();
+        let keys: Vec<_> = preview.posts.iter().map(|item| (item.source, item.post_id)).collect();
+        assert_eq!(lib.remove_posts(&keys).await.unwrap(), 65);
+        let remaining = lib.delete_preview(&scope).await.unwrap();
+        assert_eq!(remaining.posts.iter().map(|item| item.post_id).collect::<Vec<_>>(), [68]);
+        assert_eq!(lib.delete_preview(&LibraryDeleteScope { source: Source::Danbooru, group: None }).await.unwrap().posts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_preview_includes_attachments_missing_files_and_multiple_artists() {
+        let lib = Library::in_memory().await;
+        let path = Path::new("/missing/archive.zip");
+        let mut attachment = fanbox_post(42000, "creator", "First Artist");
+        attachment.file_ext = "zip".into();
+        attachment.file_name = Some("archive.zip".into());
+        attachment.tags.artist.push("Second Artist".into());
+        attachment.tags.general.push("archive_tag".into());
+        lib.save_post(&attachment, path, 1).await.unwrap();
+        let mut image = fanbox_post(43000, "creator", "First Artist");
+        image.tags.general.push("archive_tag".into());
+        image.tags.meta.push("not_a_visible_group".into());
+        lib.save_post(&image, path, 2).await.unwrap();
+        let preview = lib.delete_preview(&LibraryDeleteScope {
+            source: Source::Fanbox,
+            group: Some(LibraryDeleteGroup { kind: GroupKind::Artist, name: "First Artist".into() }),
+        }).await.unwrap();
+        assert_eq!(preview.posts.len(), 2);
+        assert_eq!(preview.posts[0].post_id, 42000);
+        assert_eq!(preview.shared_count, 2);
+        assert_eq!(preview.other_groups, ["Second Artist", "archive_tag"]);
+        assert_eq!(preview.other_group_count, 2);
+        assert!(lib.delete_preview(&LibraryDeleteScope { source: Source::Custom, group: None }).await.unwrap().posts.is_empty());
     }
 
     #[tokio::test]

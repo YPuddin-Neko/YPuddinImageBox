@@ -12,7 +12,7 @@ use crate::i18n::{self, text, tr, Language, LanguageSetting};
 use crate::library::{
     Folder, GroupPage, GroupQuery, ItemNote, JobInfo, LibraryPage, LibraryQuery, NewSubscription, SavedSearch, Subscription,
 };
-use crate::settings::{parse_proxy_url, KeyStorage, ProxyMode, ProxySettings, SavedAccount};
+use crate::settings::{parse_proxy_url, FanboxDownloadSettings, KeyStorage, ProxyMode, ProxySettings, SavedAccount};
 use crate::sources::filter::{self, QueryPlan};
 use crate::sources::x::Capture;
 use crate::sources::{
@@ -468,6 +468,7 @@ fn import_files(paths: Vec<PathBuf>, root: PathBuf, classify: bool) -> Result<(V
                 fav_count: None,
                 file_ext: ext,
                 file_name: None,
+                download_index: None,
                 title: None,
                 file_size: Some(bytes.len() as u64),
                 file_url: None,
@@ -513,6 +514,14 @@ pub async fn library_import(
 #[tauri::command]
 pub async fn library_groups(state: State<'_, AppState>, query: GroupQuery) -> Result<GroupPage, AppError> {
     Ok(state.library.groups(&query).await?)
+}
+
+#[tauri::command]
+pub async fn library_delete_preview(
+    state: State<'_, AppState>,
+    scope: crate::library::LibraryDeleteScope,
+) -> Result<crate::library::LibraryDeletePreview, AppError> {
+    Ok(state.library.delete_preview(&scope).await?)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -1388,6 +1397,36 @@ pub fn storage_info(state: State<'_, AppState>) -> StorageInfo {
     state.storage().info()
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FanboxDownloadInfo {
+    settings: FanboxDownloadSettings,
+    default_directory: PathBuf,
+}
+
+fn fanbox_download_status(state: &AppState) -> FanboxDownloadInfo {
+    let settings = state.settings().fanbox_download.clone();
+    let default_directory = state.storage().path(StorageKind::Images).join("fanbox");
+    FanboxDownloadInfo { settings, default_directory }
+}
+
+#[tauri::command]
+pub fn fanbox_download_info(state: State<'_, AppState>) -> FanboxDownloadInfo {
+    fanbox_download_status(&state)
+}
+
+fn save_fanbox_download_settings(state: &AppState, settings: FanboxDownloadSettings) -> Result<FanboxDownloadInfo, AppError> {
+    let settings = settings.normalized()?;
+    state.update_settings(|current| current.fanbox_download = settings.clone())?;
+    state.downloader.set_fanbox_settings(settings);
+    Ok(fanbox_download_status(state))
+}
+
+#[tauri::command]
+pub fn fanbox_download_save(state: State<'_, AppState>, settings: FanboxDownloadSettings) -> Result<FanboxDownloadInfo, AppError> {
+    save_fanbox_download_settings(&state, settings)
+}
+
 /// 统计目录占用。图片多时要遍历很多文件，放到阻塞线程里做。
 #[tauri::command]
 pub async fn storage_usage(state: State<'_, AppState>, kind: StorageKind) -> Result<u64, AppError> {
@@ -1546,6 +1585,51 @@ mod tests {
             settings: Mutex::new(Settings::default()),
             accounts_error: Mutex::new(None),
         }
+    }
+
+    #[tokio::test]
+    async fn fanbox_settings_save_only_their_own_configuration_and_normalize_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path()).await;
+        let initial = state.settings().clone();
+        let destination = dir.path().join("fanbox archive");
+        let requested = FanboxDownloadSettings {
+            directory: Some(destination.clone()),
+            folder_template: "{creator_id}/{postid}-{title}".into(),
+            image_template: "{postid}_{index}".into(),
+            attachment_template: "{index}_{name}".into(),
+        };
+        let saved = save_fanbox_download_settings(&state, requested.clone()).unwrap();
+        assert_eq!(saved.settings, requested);
+        assert_eq!(saved.default_directory, dir.path().join("images/fanbox"));
+        assert!(!destination.exists());
+        let mut expected = initial;
+        expected.fanbox_download = requested.clone();
+        assert_eq!(*state.settings(), expected);
+        assert_eq!(Settings::load(&dir.path().join("data")), expected);
+        let payload = serde_json::to_value(saved).unwrap();
+        assert_eq!(payload["settings"]["imageTemplate"], "{postid}_{index}");
+        assert_eq!(payload["defaultDirectory"], dir.path().join("images/fanbox").to_string_lossy().as_ref());
+
+        let invalid = FanboxDownloadSettings { folder_template: "../{user}".into(), ..requested.clone() };
+        assert!(save_fanbox_download_settings(&state, invalid).is_err());
+        assert_eq!(Settings::load(&dir.path().join("data")), expected);
+        assert_eq!(*state.settings(), expected);
+
+        let reset = FanboxDownloadSettings { directory: Some(PathBuf::new()), ..requested };
+        let saved = save_fanbox_download_settings(&state, reset).unwrap();
+        assert!(saved.settings.directory.is_none());
+        assert!(Settings::load(&dir.path().join("data")).fanbox_download.directory.is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_fanbox_settings_save_keeps_current_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path()).await;
+        std::fs::write(dir.path().join("data"), b"a file blocks the settings directory").unwrap();
+        let requested = FanboxDownloadSettings { image_template: "{postid}_{index}".into(), ..FanboxDownloadSettings::default() };
+        assert!(save_fanbox_download_settings(&state, requested).is_err());
+        assert_eq!(*state.settings(), Settings::default());
     }
 
     #[test]

@@ -192,6 +192,7 @@ fn normalize(raw: RawPost) -> Option<Post> {
         fav_count: raw.favorites,
         file_ext,
         file_name: None,
+        download_index: None,
         title: None,
         file_size: raw.file_size.or(raw.filesize),
         sample_url: non_empty(raw.sample_url).or_else(|| file_url.clone()),

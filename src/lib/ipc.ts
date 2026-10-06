@@ -113,6 +113,7 @@ export interface Post {
   createdAt: string | null;
   postUrl: string;
   fileName?: string | null;
+  downloadIndex?: number | null;
   title?: string | null;
   tags: PostTags;
   /** Pixiv 的多页作品有几页；只有一张图时没有。 */

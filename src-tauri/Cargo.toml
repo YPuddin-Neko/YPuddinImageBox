@@ -43,6 +43,7 @@ sha2 = "0.11"
 base64 = "0.23.1"
 machine-uid = "0.6"
 getrandom = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"

@@ -119,6 +119,7 @@ fn normalize(raw: RawPost) -> Option<Post> {
         fav_count: None,
         file_ext,
         file_name: None,
+        download_index: None,
         title: None,
         file_size: raw.file_size,
         file_url,

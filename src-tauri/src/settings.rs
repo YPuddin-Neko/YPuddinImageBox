@@ -36,6 +36,8 @@ pub struct Settings {
     /// 界面语言。
     #[serde(default)]
     pub language: LanguageSetting,
+    #[serde(default)]
+    pub fanbox_download: FanboxDownloadSettings,
 }
 
 fn default_true() -> bool {
@@ -51,8 +53,110 @@ impl Default for Settings {
             key_salt: None,
             close_to_tray: true,
             language: LanguageSetting::default(),
+            fanbox_download: FanboxDownloadSettings::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FanboxDownloadSettings {
+    pub directory: Option<PathBuf>,
+    pub folder_template: String,
+    pub image_template: String,
+    pub attachment_template: String,
+}
+
+impl Default for FanboxDownloadSettings {
+    fn default() -> Self {
+        Self {
+            directory: None,
+            folder_template: "{user}/{date}-{title}".into(),
+            image_template: "{index}".into(),
+            attachment_template: "{name}".into(),
+        }
+    }
+}
+
+impl FanboxDownloadSettings {
+    pub fn normalized(mut self) -> Result<Self, AppError> {
+        if self.directory.as_ref().is_some_and(|path| path.to_string_lossy().trim().is_empty()) {
+            self.directory = None;
+        }
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn validate(&self) -> Result<(), AppError> {
+        if let Some(path) = self.directory.as_ref().filter(|path| !path.to_string_lossy().trim().is_empty()) {
+            if !path.is_absolute() {
+                return Err(AppError::InvalidInput(tr!(
+                    "FANBOX 下载目录必须是绝对路径",
+                    "The FANBOX download directory must be an absolute path"
+                )));
+            }
+            if path.is_file() {
+                return Err(AppError::InvalidInput(tr!(
+                    "FANBOX 下载目录指向了文件，请选择文件夹",
+                    "The FANBOX download directory points to a file; choose a folder"
+                )));
+            }
+        }
+        validate_fanbox_template(&self.folder_template, true)?;
+        validate_fanbox_template(&self.image_template, false)?;
+        validate_fanbox_template(&self.attachment_template, false)
+    }
+}
+
+fn validate_fanbox_template(value: &str, folder: bool) -> Result<(), AppError> {
+    if value.trim().is_empty() || value.chars().count() > 500 {
+        return Err(AppError::InvalidInput(tr!(
+            "FANBOX 命名模板不能为空，且不能超过 500 个字符",
+            "FANBOX naming templates must contain 1 to 500 characters"
+        )));
+    }
+    let parts: Vec<&str> = value.split('/').collect();
+    let has_drive = |part: &&str| {
+        let bytes = part.trim().as_bytes();
+        bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+    };
+    if value.contains('\\')
+        || value.chars().any(char::is_control)
+        || parts.iter().any(|part| matches!(part.trim(), "" | "." | ".."))
+        || parts.iter().any(has_drive)
+        || parts.len() > if folder { 10 } else { 1 }
+    {
+        return Err(AppError::InvalidInput(if folder {
+            tr!(
+                "FANBOX 文件夹模板须为相对路径，最多 10 层；用 / 分隔，不能包含空层级、.、..、反斜杠或盘符",
+                "The FANBOX folder template must be a relative path of at most 10 levels, separated by /; empty levels, ., .., backslashes and drive letters are not allowed"
+            )
+        } else {
+            tr!(
+                "FANBOX 文件名模板不能使用路径分隔符、盘符或单独的 .、..",
+                "FANBOX filename templates cannot use path separators, drive letters, or a standalone . or .."
+            )
+        }));
+    }
+    let mut rest = value;
+    while let Some(start) = rest.find(['{', '}']) {
+        let token = &rest[start..];
+        let Some(end) = token.find('}').filter(|end| *end > 0 && token.starts_with('{')) else {
+            return Err(AppError::InvalidInput(tr!(
+                "FANBOX 命名模板的占位符括号不完整",
+                "A placeholder in the FANBOX naming template has unmatched braces"
+            )));
+        };
+        let name = &token[1..end];
+        if !matches!(name, "user" | "creator_id" | "date" | "title" | "postid" | "index" | "name") {
+            return Err(AppError::InvalidInput(tr!(
+                "FANBOX 命名模板不支持占位符：{name}",
+                "Unsupported FANBOX naming placeholder: {name}"
+            )));
+        }
+        rest = &token[end + 1..];
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,6 +349,7 @@ mod tests {
         let loaded = Settings::load(dir.path());
         assert_eq!(loaded.proxy.mode, ProxyMode::None);
         assert!(loaded.close_to_tray);
+        assert_eq!(loaded.fanbox_download, FanboxDownloadSettings::default());
     }
 
     #[test]
@@ -266,9 +371,74 @@ mod tests {
             key_salt: Some("salt".into()),
             close_to_tray: false,
             language: LanguageSetting::En,
+            fanbox_download: FanboxDownloadSettings {
+                directory: Some(dir.path().join("FANBOX archive")),
+                folder_template: "{creator_id}/{date}-{postid}-{title}".into(),
+                image_template: "作品_{index}".into(),
+                attachment_template: "{index}_{name}".into(),
+            },
         };
         settings.save(&dir.path().join("nested")).unwrap();
         assert_eq!(Settings::load(&dir.path().join("nested")), settings);
+    }
+
+    #[test]
+    fn fanbox_templates_accept_supported_tokens_and_keep_unicode() {
+        let settings = FanboxDownloadSettings {
+            directory: Some(PathBuf::from("   ")),
+            folder_template: "作者/{user}/{creator_id}/{date}-{title}-{postid}".into(),
+            image_template: "原图 {index}·{name}".into(),
+            attachment_template: "附件 {postid}-{index}-{name}".into(),
+        };
+        let normalized = settings.clone().normalized().unwrap();
+        assert!(normalized.directory.is_none());
+        assert_eq!(normalized.folder_template, settings.folder_template);
+        assert_eq!(normalized.image_template, settings.image_template);
+        assert_eq!(normalized.attachment_template, settings.attachment_template);
+        let restored: FanboxDownloadSettings = serde_json::from_str(r#"{"imageTemplate":"{name}"}"#).unwrap();
+        assert_eq!(restored.folder_template, FanboxDownloadSettings::default().folder_template);
+        assert_eq!(restored.image_template, "{name}");
+        assert_eq!(restored.attachment_template, "{name}");
+        assert!(restored.directory.is_none());
+    }
+
+    #[test]
+    fn fanbox_templates_reject_traversal_absolute_paths_and_unknown_tokens() {
+        for value in [
+            "", " ", "/{user}", "{user}/", "{user}//{title}", "../{user}", "{user}/./{title}",
+            "{user}/.. /{title}", "{user}\\{title}", "C:/{user}", " C:{user}", "a/C:relative", "a\n{title}",
+            "{unknown}", "{user", "user}", "{{user}}", "{}", "{user}/{title}}", "{title}{",
+        ] {
+            let settings = FanboxDownloadSettings { folder_template: value.into(), ..FanboxDownloadSettings::default() };
+            assert!(settings.validate().is_err(), "{value}");
+        }
+        for value in ["../{name}", "{name}/child", "{name}\\child", ".", "..", "C:{name}", "{unknown}", "{name"] {
+            let image = FanboxDownloadSettings { image_template: value.into(), ..FanboxDownloadSettings::default() };
+            let attachment = FanboxDownloadSettings { attachment_template: value.into(), ..FanboxDownloadSettings::default() };
+            assert!(image.validate().is_err(), "{value}");
+            assert!(attachment.validate().is_err(), "{value}");
+        }
+        for (levels, valid) in [(10, true), (11, false)] {
+            let settings = FanboxDownloadSettings { folder_template: vec!["作品"; levels].join("/"), ..FanboxDownloadSettings::default() };
+            assert_eq!(settings.validate().is_ok(), valid);
+        }
+        for (length, valid) in [(500, true), (501, false)] {
+            let settings = FanboxDownloadSettings { folder_template: "画".repeat(length), ..FanboxDownloadSettings::default() };
+            assert_eq!(settings.validate().is_ok(), valid);
+        }
+    }
+
+    #[test]
+    fn fanbox_directory_validation_does_not_create_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("new archive");
+        let settings = FanboxDownloadSettings { directory: Some(destination.clone()), ..FanboxDownloadSettings::default() };
+        assert!(settings.validate().is_ok());
+        assert!(!destination.exists());
+        std::fs::write(&destination, b"existing file").unwrap();
+        assert!(settings.validate().is_err());
+        let relative = FanboxDownloadSettings { directory: Some(PathBuf::from("relative/archive")), ..settings };
+        assert!(relative.validate().is_err());
     }
 
     #[test]

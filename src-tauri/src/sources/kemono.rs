@@ -366,6 +366,7 @@ fn normalize(raw: RawPost) -> Vec<Post> {
                 fav_count: None,
                 file_ext: ext,
                 file_name: None,
+                download_index: None,
                 title: None,
                 file_size: None,
                 file_url: Some(url),

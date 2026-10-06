@@ -22,6 +22,7 @@ use crate::i18n::{text, tr};
 use crate::library::{now_ms, ItemStatus, JobInfo, JobItem, JobKind, JobStatus, Library, Subscription};
 use crate::net::Net;
 use crate::protocol::sniff;
+use crate::settings::FanboxDownloadSettings;
 use crate::sources::filter::LocalFilter;
 use crate::sources::{self, fanbox, kemono, pixiv, AccountStore, Page, Post, Source};
 use crate::storage::{Storage, StorageKind};
@@ -121,6 +122,7 @@ pub struct Downloader {
     /// 图片位置整体移动时拿写锁；每张图从选定目录到写进图库期间拿读锁，
     /// 保证新图不会写进正在搬走的目录。
     images_gate: Arc<tokio::sync::RwLock<()>>,
+    fanbox_settings: RwLock<FanboxDownloadSettings>,
     events: EventSink,
     wake: Notify,
     /// 订阅有变化（新建、改间隔、启用）时叫醒调度，不必等满一分钟。
@@ -147,11 +149,17 @@ impl Downloader {
             accounts,
             storage,
             images_gate,
+            fanbox_settings: RwLock::new(FanboxDownloadSettings::default()),
             events,
             wake: Notify::new(),
             schedule_wake: Notify::new(),
             active: Mutex::new(None),
         })
+    }
+
+    pub fn set_fanbox_settings(&self, settings: FanboxDownloadSettings) {
+        let settings = settings.normalized().unwrap_or_default();
+        *self.fanbox_settings.write().unwrap_or_else(PoisonError::into_inner) = settings;
     }
 
     fn emit(&self, event: Event) {
@@ -601,18 +609,24 @@ impl Downloader {
 
         let gate = self.images_gate.read().await;
         let root = read(&self.storage).path(StorageKind::Images);
-        let target = target_path(&root, post, &ext);
+        let target = if post.source == Source::Fanbox {
+            let settings = self.fanbox_settings.read().unwrap_or_else(PoisonError::into_inner);
+            fanbox_target_path(&root, post, &ext, &chrono::Local, &settings)
+        } else {
+            target_path(&root, post, &ext)
+        };
         let mut attempt = 1;
-        loop {
+        let downloaded = loop {
             match fetch_file(&self.net, &url, post, &target, self.accounts.get().fanbox.as_ref()).await {
-                Ok(()) => break,
+                Ok(file) => break file,
                 Err(err) if err.retryable() && attempt < ATTEMPTS => {
                     tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
                     attempt += 1;
                 }
                 Err(err) => return Ok(Outcome::Failed(err.to_string())),
             }
-        }
+        };
+        let target = downloaded.path.clone();
         // 站点没给尺寸（Kemono、部分 X 图片记为 1 × 1）：按下载好的文件补上，图库里的比例才对。
         let sized = if image_ext(post).is_some() && (post.width <= 1 || post.height <= 1) {
             image_size(target.clone()).await.map(|(width, height)| Post { width, height, ..post.clone() })
@@ -620,6 +634,7 @@ impl Downloader {
             None
         };
         self.library.save_post(sized.as_ref().unwrap_or(post), &target, now_ms()).await?;
+        downloaded.keep();
         drop(gate);
 
         // 缩略图生成失败不影响下载结果，浏览图库时会再生成。
@@ -666,9 +681,11 @@ fn download_ext(post: &Post) -> Option<String> {
     })
 }
 
-/// 保存位置：`图片位置/站点/画师/帖子id.扩展名`；没有画师 tag 时直接放在站点目录下。
-/// 多图投稿用「帖子id_p第几张」命名，避免同一投稿的图片互相覆盖。
+/// FANBOX 按作者、发布日期和投稿标题建目录；其他来源使用原有编号命名。
 pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
+    if post.source == Source::Fanbox {
+        return fanbox_target_path(root, post, ext, &chrono::Local, &FanboxDownloadSettings::default());
+    }
     let mut dir = root.join(post.source.site_name());
     if let Some(artist) = post.tags.artist.first() {
         dir.push(safe_name(artist));
@@ -682,19 +699,98 @@ pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
             let (id, index) = kemono::split_id(post.id);
             format!("{id}_p{index}")
         }
-        Source::Fanbox => {
-            let (id, index) = fanbox::split_id(post.id);
-            if fanbox::is_cover(post) { format!("{id}_cover") } else { format!("{id}_p{index}") }
-        }
         _ => post.id.to_string(),
     };
-    if is_attachment(post) {
-        let original = post.file_name.as_deref().unwrap_or_default();
-        let stem = original.rsplit_once('.').map_or(original, |(stem, _)| stem);
-        dir.join(format!("{name}_{}.{ext}", safe_name(stem)))
+    dir.join(format!("{name}.{ext}"))
+}
+
+fn fanbox_target_path(
+    root: &Path, post: &Post, ext: &str, timezone: &impl chrono::TimeZone, settings: &FanboxDownloadSettings,
+) -> PathBuf {
+    let (id, index) = fanbox::split_id(post.id);
+    let mut dir = settings.directory.clone().unwrap_or_else(|| root.join("fanbox"));
+    let date = post.created_at.as_deref()
+        .and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok())
+        .map(|date| date.with_timezone(timezone).date_naive().to_string()).unwrap_or_default();
+    let post_id = id.to_string();
+    let title = post.title.as_deref().map(str::trim).filter(|title| !title.is_empty()).unwrap_or(&post_id);
+    let creator = Url::parse(&post.post_url).ok().and_then(|url| {
+        url.path_segments()?.next()?.strip_prefix('@').map(str::to_string)
+    }).unwrap_or_default();
+    let user = post.tags.artist.first().map(String::as_str).filter(|name| !name.trim().is_empty()).unwrap_or(&creator);
+    let filename_index = post.download_index.unwrap_or_else(|| if fanbox::is_cover(post) { 0 } else { index as u32 + 1 });
+    let filename_index = format!("{filename_index:03}");
+    let url_name = Url::parse(post.file_url.as_deref().unwrap_or_default()).ok()
+        .and_then(|url| url.path_segments()?.next_back().map(|s| percent_encoding::percent_decode_str(s).decode_utf8_lossy().into_owned()));
+    let original = post.file_name.as_deref().or(url_name.as_deref()).unwrap_or(&filename_index);
+    let suffix = format!(".{ext}");
+    let name = if original.to_ascii_lowercase().ends_with(&suffix.to_ascii_lowercase()) {
+        &original[..original.len() - suffix.len()]
     } else {
-        dir.join(format!("{name}.{ext}"))
+        original
+    };
+    let values = [("user", user), ("creator_id", &creator), ("date", &date), ("title", title),
+        ("postid", &post_id), ("index", &filename_index), ("name", name)];
+    let render = |template: &str| {
+        let mut rendered = String::new();
+        let mut rest = template;
+        while let Some(start) = rest.find('{') {
+            rendered.push_str(&rest[..start]);
+            let Some(end) = rest[start..].find('}') else { break };
+            let key = &rest[start + 1..start + end];
+            if let Some((_, value)) = values.iter().find(|(token, _)| *token == key) {
+                if !value.is_empty() {
+                    rendered.push_str(&fanbox_safe_name(value));
+                }
+            }
+            rest = &rest[start + end + 1..];
+        }
+        rendered.push_str(rest);
+        fanbox_safe_name(rendered.trim_matches(['-', '_', ' ']))
+    };
+    for segment in settings.folder_template.split('/') {
+        dir.push(render(segment));
     }
+    let template = if is_attachment(post) && image_ext(post).is_none() {
+        &settings.attachment_template
+    } else {
+        &settings.image_template
+    };
+    dir.join(format!("{}.{ext}", render(template)))
+}
+
+/// 保留标题里的标点形状，路径分隔符改为全角，并为文件扩展名与重名后缀留出空间。
+fn fanbox_safe_name(name: &str) -> String {
+    let mut result = String::new();
+    for c in name.chars().filter(|c| !c.is_control()) {
+        let c = if r#"\\/:?\"<>*|~"#.contains(c) {
+            char::from_u32(c as u32 + 0xfee0).unwrap_or(c)
+        } else {
+            c
+        };
+        if result.len() + c.len_utf8() > 180 {
+            break;
+        }
+        result.push(c);
+    }
+    let mut result = result.trim().to_string();
+    if result.starts_with('.') {
+        result.replace_range(..1, "．");
+    }
+    if result.ends_with('.') {
+        result.pop();
+        result.push('．');
+    }
+    if result.is_empty() {
+        return "_".into();
+    }
+    let stem = result.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit())
+    {
+        result.insert(0, '_');
+    }
+    result
 }
 
 /// 把 tag 变成 Windows 和 macOS 都能用的文件夹名。
@@ -766,7 +862,7 @@ impl std::fmt::Display for FetchError {
     }
 }
 
-/// 下载中的临时文件；没下完（出错、任务被暂停或取消）时自动删掉。
+/// 下载中的文件；临时文件以及尚未入库的 FANBOX 新文件在取消或失败时自动清理。
 struct PartFile {
     path: PathBuf,
     keep: bool,
@@ -781,6 +877,45 @@ impl PartFile {
     fn keep(mut self) {
         self.keep = true;
     }
+
+    async fn create_unique(target: &Path) -> Result<(Self, tokio::fs::File), std::io::Error> {
+        let name = target.file_name().unwrap_or_default().to_string_lossy();
+        let base = target.with_file_name(format!(".{name}.part"));
+        for index in 0u64.. {
+            let path = if index == 0 { base.clone() } else { base.with_extension(format!("part{index}")) };
+            match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&path).await {
+                Ok(file) => return Ok((Self { path, keep: false }, file)),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(err) => return Err(err),
+            }
+        }
+        unreachable!()
+    }
+}
+
+/// 先独占文件名，再发布已校验的文件。同名资源并行完成时也不会覆盖彼此。
+fn publish_unique(part: PartFile, target: &Path) -> Result<PartFile, std::io::Error> {
+    let stem = target.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = target.extension().unwrap_or_default().to_string_lossy();
+    for index in 0u64.. {
+        let path = if index == 0 {
+            target.to_path_buf()
+        } else {
+            target.with_file_name(format!("{stem} ({index}).{ext}"))
+        };
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => {
+                let reservation = PartFile { path: path.clone(), keep: false };
+                drop(file);
+                std::fs::rename(&part.path, &path)?;
+                part.keep();
+                return Ok(reservation);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    unreachable!()
 }
 
 impl Drop for PartFile {
@@ -811,7 +946,7 @@ fn validate_download(post: &Post, head: &[u8], content_type: &str) -> Result<(),
 
 async fn fetch_file(
     net: &Net, url: &Url, post: &Post, target: &Path, fanbox_credentials: Option<&fanbox::Credentials>,
-) -> Result<(), FetchError> {
+) -> Result<PartFile, FetchError> {
     let request = if post.source == Source::Fanbox {
         fanbox::media_request(net, url.clone(), fanbox_credentials).map_err(|err| FetchError::Other(err.to_string()))?
     } else {
@@ -829,8 +964,13 @@ async fn fetch_file(
     if let Some(parent) = target.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(FetchError::Io)?;
     }
-    let part = PartFile::for_target(target);
-    let mut file = tokio::fs::File::create(&part.path).await.map_err(FetchError::Io)?;
+    let (part, mut file) = if post.source == Source::Fanbox {
+        PartFile::create_unique(target).await.map_err(FetchError::Io)?
+    } else {
+        let part = PartFile::for_target(target);
+        let file = tokio::fs::File::create(&part.path).await.map_err(FetchError::Io)?;
+        (part, file)
+    };
     let mut hasher = Md5::new();
     let mut head = Vec::with_capacity(16);
     let mut size = 0u64;
@@ -855,9 +995,15 @@ async fn fetch_file(
             return Err(FetchError::Checksum);
         }
     }
-    tokio::fs::rename(&part.path, target).await.map_err(FetchError::Io)?;
-    part.keep();
-    Ok(())
+    if post.source == Source::Fanbox {
+        let target = target.to_path_buf();
+        tokio::task::spawn_blocking(move || publish_unique(part, &target)).await
+            .map_err(|err| FetchError::Other(err.to_string()))?.map_err(FetchError::Io)
+    } else {
+        tokio::fs::rename(&part.path, target).await.map_err(FetchError::Io)?;
+        part.keep();
+        Ok(PartFile { path: target.to_path_buf(), keep: true })
+    }
 }
 
 #[cfg(test)]
@@ -879,6 +1025,7 @@ mod tests {
             fav_count: None,
             file_ext: ext.into(),
             file_name: None,
+            download_index: None,
             title: None,
             file_size: None,
             file_url: file_url.map(str::to_string),
@@ -914,20 +1061,110 @@ mod tests {
     }
 
     #[test]
-    fn fanbox_images_keep_post_and_image_numbers_in_paths() {
+    fn fanbox_default_paths_match_post_folders_and_padded_numbers() {
         let root = Path::new("/pics");
         let mut p = post(12_560_223_001, "jpeg", None);
         p.source = Source::Fanbox;
-        assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/FANBOX/alice/12560223_p1.jpeg"));
+        assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/fanbox/alice/12560223/002.jpeg"));
         assert_eq!(p.label(), "#12560223 p2");
 
         p.id = 12_560_223_999;
         p.file_url = Some("https://pixiv.pximg.net/fanbox/public/images/post/12560223/cover/example.jpeg".into());
-        assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/FANBOX/alice/12560223_cover.jpeg"));
+        assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/fanbox/alice/12560223/000.jpeg"));
         assert_eq!(p.label(), "#12560223 封面");
         p.file_url = Some("https://downloads.fanbox.cc/images/post/12560223/body.jpeg".into());
-        assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/FANBOX/alice/12560223_p999.jpeg"));
+        assert_eq!(target_path(root, &p, "jpeg"), PathBuf::from("/pics/fanbox/alice/12560223/1000.jpeg"));
         assert_eq!(p.label(), "#12560223 p1000");
+    }
+
+    #[test]
+    fn fanbox_templates_use_local_publication_date_and_safe_values() {
+        let mut p = post(42_001, "png", Some("https://downloads.fanbox.cc/images/post/42/original.png"));
+        p.source = Source::Fanbox;
+        p.created_at = Some("2026-10-06T00:30:00+09:00".into());
+        p.title = Some("秋/冬: {index}?".into());
+        p.post_url = "https://www.fanbox.cc/@artist/posts/42".into();
+        p.download_index = Some(1);
+        let timezone = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let defaults = FanboxDownloadSettings::default();
+        assert_eq!(fanbox_target_path(Path::new("/pics"), &p, "png", &timezone, &defaults),
+            PathBuf::from("/pics/fanbox/alice/2026-10-05-秋／冬： {index}？/001.png"));
+        let custom = FanboxDownloadSettings {
+            directory: Some(PathBuf::from("/archive")),
+            folder_template: "{creator_id}/{postid}-{title}".into(),
+            image_template: "{postid}_{index}_{name}".into(),
+            attachment_template: "{index}-{name}".into(),
+        };
+        assert_eq!(fanbox_target_path(Path::new("/pics"), &p, "png", &timezone, &custom),
+            PathBuf::from("/archive/artist/42-秋／冬： {index}？/42_001_original.png"));
+        p.file_ext = "psd".into();
+        p.file_name = Some("../CON.psd".into());
+        p.download_index = Some(3);
+        assert_eq!(fanbox_target_path(Path::new("/pics"), &p, "psd", &timezone, &custom),
+            PathBuf::from("/archive/artist/42-秋／冬： {index}？/003-．.／CON.psd"));
+        assert_eq!(fanbox_safe_name(" CON "), "_CON");
+        assert_eq!(fanbox_safe_name(".."), "．．");
+        assert_eq!(fanbox_safe_name("a\nb\u{0}c"), "abc");
+        assert!(fanbox_safe_name(&"長".repeat(150)).len() <= 180);
+    }
+
+    #[tokio::test]
+    async fn fanbox_collisions_keep_every_file_when_downloads_finish_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("原稿.psd");
+        tokio::fs::write(&target, b"existing original").await.unwrap();
+        let mut tasks = JoinSet::new();
+        for contents in [b"first download", b"other download"] {
+            let target = target.clone();
+            tasks.spawn(async move {
+                let (part, mut file) = PartFile::create_unique(&target).await.unwrap();
+                file.write_all(contents).await.unwrap();
+                file.flush().await.unwrap();
+                drop(file);
+                let published = tokio::task::spawn_blocking(move || publish_unique(part, &target)).await.unwrap().unwrap();
+                let path = published.path.clone();
+                published.keep();
+                (path, contents)
+            });
+        }
+        let mut paths = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            let (path, contents) = result.unwrap();
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), contents);
+            paths.push(path);
+        }
+        assert_ne!(paths[0], paths[1]);
+        assert!(dir.path().join("原稿 (1).psd").is_file());
+        assert!(dir.path().join("原稿 (2).psd").is_file());
+        assert_eq!(tokio::fs::read(&target).await.unwrap(), b"existing original");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+    }
+
+    #[tokio::test]
+    async fn fanbox_existing_library_paths_are_not_redownloaded_after_rule_changes() {
+        let h = harness().await;
+        let mut p = post(42_001, "png", None);
+        p.source = Source::Fanbox;
+        let path = h._dir.path().join("42_p1.png");
+        tokio::fs::write(&path, b"previous download").await.unwrap();
+        h.library.save_post(&p, &path, 1).await.unwrap();
+        assert!(matches!(h.downloader.save(&p).await.unwrap(), Outcome::Skipped(_)));
+        assert_eq!(h.library.local_path(p.source, p.id).await.unwrap(), Some(path));
+    }
+
+    #[tokio::test]
+    async fn fanbox_unregistered_files_are_cleaned_without_touching_reused_part_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("001.jpg");
+        let (part, file) = PartFile::create_unique(&target).await.unwrap();
+        let temporary = part.path.clone();
+        drop(file);
+        let published = publish_unique(part, &target).unwrap();
+        tokio::fs::write(&temporary, b"next download").await.unwrap();
+        assert!(target.is_file());
+        drop(published);
+        assert!(!target.exists());
+        assert_eq!(tokio::fs::read(&temporary).await.unwrap(), b"next download");
     }
 
     #[tokio::test]
@@ -966,7 +1203,7 @@ mod tests {
         p.source = Source::Fanbox;
         p.file_name = Some("../同名源文件.zip".into());
         assert_eq!(download_ext(&p).as_deref(), Some("zip"));
-        assert_eq!(target_path(Path::new("/pics"), &p, "zip"), PathBuf::from("/pics/FANBOX/alice/42_p1__._同名源文件.zip"));
+        assert_eq!(target_path(Path::new("/pics"), &p, "zip"), PathBuf::from("/pics/fanbox/alice/42/．.／同名源文件.zip"));
         assert!(validate_download(&p, b"PK\x03\x04some-file", "application/zip").is_ok());
         assert!(validate_download(&p, b"<!DOCTYPE html>", "text/html").is_err());
         p.file_ext = "psd".into();
@@ -1000,8 +1237,32 @@ mod tests {
         assert_eq!(page.total as usize, posts.len());
         let cover = page.posts.iter().find(|post| fanbox::is_cover(&post.post)).unwrap();
         assert!(cover.post.width > 1 && cover.post.height > 1);
-        assert!(cover.path.ends_with("12560223_cover.jpeg"));
+        assert!(cover.path.ends_with("000.jpeg"));
+        for local in &page.posts {
+            assert_eq!(Path::new(&local.path), target_path(&h._dir.path().join("images"), &local.post, &local.post.file_ext));
+        }
         assert!(h._dir.path().join("cache/thumbs/fanbox").join(cover.post.id.to_string()).is_file());
+
+        let custom = harness().await;
+        let settings = FanboxDownloadSettings {
+            directory: Some(custom._dir.path().join("separate-fanbox")),
+            folder_template: "{creator_id}/{postid}".into(),
+            image_template: "{postid}-{index}".into(),
+            ..FanboxDownloadSettings::default()
+        };
+        custom.downloader.set_fanbox_settings(settings.clone());
+        let post = &posts[0];
+        let intended = fanbox_target_path(&custom._dir.path().join("images"), post, &post.file_ext, &chrono::Local, &settings);
+        tokio::fs::create_dir_all(intended.parent().unwrap()).await.unwrap();
+        tokio::fs::write(&intended, b"file already in destination").await.unwrap();
+        assert!(matches!(custom.downloader.save(post).await.unwrap(), Outcome::Saved));
+        let actual = custom.library.local_path(post.source, post.id).await.unwrap().unwrap();
+        assert_ne!(actual, intended);
+        assert_eq!(actual.parent(), intended.parent());
+        assert!(actual.file_name().unwrap().to_string_lossy().contains(" (1)."));
+        assert!(sniff(&tokio::fs::read(&actual).await.unwrap()).is_some());
+        assert_eq!(tokio::fs::read(&intended).await.unwrap(), b"file already in destination");
+        assert!(matches!(custom.downloader.save(post).await.unwrap(), Outcome::Skipped(_)));
     }
 
     #[test]

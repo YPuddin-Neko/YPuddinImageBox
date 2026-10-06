@@ -24,6 +24,7 @@ import {
   type StorageInfo,
   type StorageKind,
 } from "../../lib/storage";
+import { FanboxDownloadSettings } from "./FanboxDownloadSettings";
 
 const DESCRIPTION: Record<StorageKind, Msg> = {
   images: "下载的原图",
@@ -238,6 +239,7 @@ export function StorageSettings() {
             )}
           </section>
         ))}
+        <FanboxDownloadSettings imagesDirectory={info?.locations.find((location) => location.kind === "images")?.path} />
       </div>
 
       {info && (

@@ -645,6 +645,7 @@ fn post_items(value: &Value, single_post: bool) -> Result<Vec<Post>, AppError> {
             file_ext: extension,
             file_size: None,
             file_name: None,
+            download_index: Some(0),
             title: value.get("title").and_then(Value::as_str).map(str::to_string),
             file_url: Some(original.to_string()),
             sample_url: Some(original.to_string()),
@@ -655,10 +656,18 @@ fn post_items(value: &Value, single_post: bool) -> Result<Vec<Post>, AppError> {
             pages: None,
         });
     }
+    let mut image_index = 0;
+    let mut file_index = list.iter().filter(|media| matches!(media, Media::Image(_))).count();
     for (index, media) in list.into_iter().enumerate() {
-        let (item, is_image) = match media {
-            Media::Image(item) => (item, true),
-            Media::File(item) => (item, false),
+        let (item, is_image, name_index) = match media {
+            Media::Image(item) => {
+                image_index += 1;
+                (item, true, image_index)
+            }
+            Media::File(item) => {
+                file_index += 1;
+                (item, false, file_index)
+            }
         };
         let original = item
             .get(if is_image { "originalUrl" } else { "url" })
@@ -737,6 +746,7 @@ fn post_items(value: &Value, single_post: bool) -> Result<Vec<Post>, AppError> {
                 })
                 .flatten(),
             file_name,
+            download_index: Some(name_index as u32),
             title: value
                 .get("title")
                 .and_then(Value::as_str)
@@ -1208,6 +1218,7 @@ mod tests {
         value["coverImageUrl"] = json!(cover(42));
         let posts = post_items(&value, true).unwrap();
         assert_eq!(posts.iter().map(|post| post.id).collect::<Vec<_>>(), [42999, 42000, 42001]);
+        assert_eq!(posts.iter().map(|post| post.download_index).collect::<Vec<_>>(), [Some(0), Some(1), Some(2)]);
         assert!(is_cover(&posts[0]));
         assert!(!is_cover(&posts[1]));
         assert_eq!(serde_json::to_value(&posts[1..]).unwrap(), serde_json::to_value(existing).unwrap());
@@ -1302,6 +1313,7 @@ mod tests {
         assert_eq!(posts[0].file_name.as_deref(), Some("sketches.zip"));
         assert_eq!(posts[1].file_name.as_deref(), Some("sketches.zip"));
         assert_eq!(posts[2].file_name.as_deref(), Some("Layered drawing.PSD"));
+        assert_eq!(posts.iter().map(|post| post.download_index).collect::<Vec<_>>(), [Some(1), Some(2), Some(3)]);
         assert!(posts.iter().all(|post| post.width == 1
             && post.height == 1
             && post.sample_url.is_none()
@@ -1310,11 +1322,45 @@ mod tests {
             && post.title.as_deref() == Some("October sketches")));
         value["body"]["files"][0]["size"] = json!(0);
         assert_eq!(post_items(&value, true).unwrap()[0].file_size, None);
-        value["body"]["files"][0] = attachment("preview", "sketch", "png");
-        let image_attachment = post_items(&value, true).unwrap().remove(0);
-        assert!(image_attachment.file_name.is_some());
-        assert_eq!(image_attachment.thumb_url, image_attachment.file_url);
+        for extension in ["jpg", "jpeg", "png", "gif", "bmp", "webp", "avif"] {
+            value["body"]["files"][0] = attachment("preview", "sketch", extension);
+            let image_attachment = post_items(&value, true).unwrap().remove(0);
+            assert_eq!(image_attachment.file_name, Some(format!("sketch.{extension}")));
+            assert_eq!(image_attachment.download_index, Some(1));
+            if extension != "bmp" {
+                assert_eq!(image_attachment.thumb_url, image_attachment.file_url);
+            }
+        }
+    }
 
+    #[test]
+    fn article_download_indices_number_images_before_files_without_changing_resource_ids() {
+        let mut value = raw();
+        value["type"] = json!("article");
+        value["body"] = json!({
+            "blocks":[
+                {"type":"file","fileId":"preview"},
+                {"type":"image","imageId":"b"},
+                {"type":"file","fileId":"archive"},
+                {"type":"image","imageId":"a"},
+                {"type":"file","fileId":"webp"},
+                {"type":"file","fileId":"avif"}
+            ],
+            "imageMap":{"a":image("a"),"b":image("b")},
+            "fileMap":{
+                "preview":attachment("preview","Original preview","png"),
+                "archive":attachment("archive","../原稿:完成.ZIP","zip"),
+                "webp":attachment("webp","Original preview","webp"),
+                "avif":attachment("avif","Original preview","avif")
+            }
+        });
+        let posts = post_items(&value, true).unwrap();
+        assert_eq!(posts.iter().map(|post| post.id).collect::<Vec<_>>(), [42000, 42001, 42002, 42003, 42004, 42005]);
+        assert_eq!(posts.iter().map(|post| post.download_index).collect::<Vec<_>>(), [Some(3), Some(1), Some(4), Some(2), Some(5), Some(6)]);
+        assert_eq!(posts[0].file_name.as_deref(), Some("Original preview.png"));
+        assert!(posts[1].file_name.is_none());
+        assert!(posts[1].file_url.as_deref().unwrap().ends_with("/b.png"));
+        assert!(posts[3].file_url.as_deref().unwrap().ends_with("/a.png"));
     }
 
     #[test]

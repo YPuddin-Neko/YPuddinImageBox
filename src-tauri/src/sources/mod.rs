@@ -355,6 +355,8 @@ pub struct Post {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// 原图。站点不对当前账号开放原图时为空，见 [`Post::gold_only`]。
     pub file_url: Option<String>,

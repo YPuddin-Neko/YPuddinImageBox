@@ -26,6 +26,7 @@ import {
 } from "../../lib/library";
 import type { Navigate } from "../../lib/nav";
 import { LibraryGrid, type GridScope } from "./LibraryGrid";
+import { useScopeDelete } from "./useScopeDelete";
 
 /** 图库的三层：来源文件夹 → 文件夹里的分组 → 一组里的图。 */
 type Place =
@@ -147,6 +148,7 @@ function FolderShelf({
 
   useEffect(load, [load]);
   useLibraryChanges(load);
+  const deletion = useScopeDelete(load);
 
   const total = folders?.reduce((sum, folder) => sum + folder.count, 0) ?? 0;
   const fileUnits = folders?.some((folder) => folder.source === "fanbox" && folder.count > 0) ?? false;
@@ -232,19 +234,32 @@ function FolderShelf({
                       {t("导入图片")}
                     </button>
                   </div>
+                  {folder.count > 0 && <button type="button" className="btn ghost stack-delete" disabled={deletion.busy}
+                    aria-label={t("删除「{name}」中的全部文件", { name: SOURCE_LABEL[folder.source] })}
+                    onClick={(event) => void deletion.request({ source: folder.source }, SOURCE_LABEL[folder.source], event.currentTarget)}>
+                    <Icon name="trash" size={15} />{t("删除")}
+                  </button>}
                 </div>
               );
             }
             return (
-              <button key={folder.source} type="button" className="stack-card" onClick={() => onOpen(folder.source)} disabled={folder.count === 0}>
-                {content}
-              </button>
+              <div key={folder.source} className="stack-card-shell">
+                <button type="button" className="stack-card" onClick={() => onOpen(folder.source)} disabled={folder.count === 0}>
+                  {content}
+                </button>
+                {folder.count > 0 && <button type="button" className="btn ghost stack-delete" disabled={deletion.busy}
+                  aria-label={t("删除「{name}」中的全部文件", { name: SOURCE_LABEL[folder.source] })}
+                  onClick={(event) => void deletion.request({ source: folder.source }, SOURCE_LABEL[folder.source], event.currentTarget)}>
+                  <Icon name="trash" size={15} />{t("删除")}
+                </button>}
+              </div>
             );
           })}
         </div>
       )}
 
       {folders && total === 0 && !error && <EmptyLibrary onNavigate={onNavigate} title={t("图库里还没有图片")} />}
+      {deletion.content}
       <Toast message={notice} />
       <Dialog
         open={pendingImport !== null}
@@ -337,6 +352,7 @@ function GroupShelf({
     void load(0);
   }, [load]);
   useLibraryChanges(() => void load(0));
+  const deletion = useScopeDelete(() => void load(0));
 
   const count = groups?.length ?? 0;
   useEffect(() => {
@@ -408,27 +424,36 @@ function GroupShelf({
 
         {folder && groups && (
           <div className="shelf page-block" data-size="md" data-loading={loading || undefined}>
-            <button type="button" className="stack-card" onClick={() => onOpen({ source, tag: null, title: name })}>
-              <FanStack covers={folder.covers} max={GROUP_COVERS} />
-              <span className="stack-meta">
-                <span className="stack-title">{t("全部")}</span>
-                <span className="stack-count">{formatCount(folder.count)}</span>
-              </span>
-            </button>
-            {groups.map((group) => (
-              <button
-                key={group.name}
-                type="button"
-                className="stack-card"
-                title={group.name}
-                onClick={() => onOpen({ source, tag: group.name, title: group.name })}
-              >
-                <FanStack covers={group.covers} max={GROUP_COVERS} />
+            <div className="stack-card-shell">
+              <button type="button" className="stack-card" onClick={() => onOpen({ source, tag: null, title: name })}>
+                <FanStack covers={folder.covers} max={GROUP_COVERS} />
                 <span className="stack-meta">
-                  <span className="stack-title">{group.name}</span>
-                  <span className="stack-count">{formatCount(group.count)}</span>
+                  <span className="stack-title">{t("全部")}</span>
+                  <span className="stack-count">{formatCount(folder.count)}</span>
                 </span>
               </button>
+              {folder.count > 0 && <button type="button" className="btn ghost stack-delete" disabled={deletion.busy}
+                aria-label={t("删除「{name}」中的全部文件", { name })}
+                onClick={(event) => void deletion.request({ source }, name, event.currentTarget)}>
+                <Icon name="trash" size={15} />{t("删除")}
+              </button>}
+            </div>
+            {groups.map((group) => (
+              <div key={group.name} className="stack-card-shell">
+                <button type="button" className="stack-card" title={group.name}
+                  onClick={() => onOpen({ source, tag: group.name, title: group.name })}>
+                  <FanStack covers={group.covers} max={GROUP_COVERS} />
+                  <span className="stack-meta">
+                    <span className="stack-title">{group.name}</span>
+                    <span className="stack-count">{formatCount(group.count)}</span>
+                  </span>
+                </button>
+                <button type="button" className="btn ghost stack-delete" disabled={deletion.busy}
+                  aria-label={t("删除「{name}」中的全部文件", { name: group.name })}
+                  onClick={(event) => void deletion.request({ source, group: { kind, name: group.name } }, group.name, event.currentTarget)}>
+                  <Icon name="trash" size={15} />{t("删除")}
+                </button>
+              </div>
             ))}
           </div>
         )}
@@ -441,6 +466,7 @@ function GroupShelf({
       </div>
       {/* 放在滚动区域外面，停在页面底部正中，不随列表滚动。 */}
       <LoadingPill loading={loading} />
+      {deletion.content}
     </>
   );
 }

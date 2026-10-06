@@ -78,3 +78,19 @@ export const generalSave = ({ closeToTray, launchAtLogin, language }: GeneralSet
   invoke<GeneralInfo>("general_save", { closeToTray, launchAtLogin, language });
 /** 当前界面语言，启动时渲染前先问一次。 */
 export const languageCurrent = () => invoke<Language>("language_current");
+
+export interface FanboxDownloadSettings {
+  directory: string | null;
+  folderTemplate: string;
+  imageTemplate: string;
+  attachmentTemplate: string;
+}
+
+export interface FanboxDownloadInfo {
+  settings: FanboxDownloadSettings;
+  defaultDirectory: string;
+}
+
+export const fanboxDownloadInfo = () => invoke<FanboxDownloadInfo>("fanbox_download_info");
+export const fanboxDownloadSave = (settings: FanboxDownloadSettings) =>
+  invoke<FanboxDownloadInfo>("fanbox_download_save", { settings });

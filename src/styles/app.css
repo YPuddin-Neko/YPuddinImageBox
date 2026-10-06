@@ -2226,6 +2226,61 @@ code {
   gap: 8px;
 }
 
+.fanbox-setting-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-2);
+}
+
+.fanbox-download-settings .set-desc {
+  margin-top: 6px;
+}
+
+.fanbox-template-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 8px;
+}
+
+.fanbox-template-fields label {
+  display: contents;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.fanbox-template-fields .field-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.fanbox-template-help {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.fanbox-template-help summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.fanbox-path-examples {
+  margin-top: 8px;
+  font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.fanbox-save-line {
+  justify-content: flex-end;
+}
+
 /* 快捷键列表：按键一列、说明一列，行高和设置里的选项一致。 */
 .shortcuts {
   display: grid;
@@ -2568,6 +2623,44 @@ kbd {
   cursor: default;
 }
 
+.stack-card-shell {
+  position: relative;
+  min-width: 0;
+}
+
+.stack-card-shell > .stack-card {
+  width: 100%;
+  height: 100%;
+}
+
+.stack-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.stack-card-custom {
+  position: relative;
+}
+
+.stack-card-shell:hover .stack-delete,
+.stack-card-shell:focus-within .stack-delete,
+.stack-card-custom:hover .stack-delete,
+.stack-card-custom:focus-within .stack-delete {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .stack-delete { opacity: 1; }
+}
+
+.scope-delete-names {
+  overflow-wrap: anywhere;
+}
+
 /*
  * 相片宽度跟着卡片宽度走：扇面悬停张开时最宽约 2 张相片，窗口再窄也不会伸出卡片。
  * 往右转开的相片，左上角最多比最前面那张高出约 0.3 张相片宽，高度里预留出来。
@@ -2618,6 +2711,10 @@ kbd {
 
 .fan-card .shimmer-img {
   border-radius: 6px;
+}
+
+.fan-card:not([data-empty]) {
+  will-change: transform;
 }
 
 .fan-card[data-empty] {

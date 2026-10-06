@@ -161,3 +161,18 @@ export const libraryGroups = (query: { source: Source; kind: GroupKind; sort: Gr
 /** 从图库删除；keepFiles 为 false 时图片移到废纸篓（回收站）。 */
 export const libraryDelete = (posts: PostRef[], keepFiles: boolean) =>
   invoke<DeleteOutcome>("library_delete", { posts, keepFiles });
+
+export interface LibraryDeleteScope {
+  source: Source;
+  group?: { kind: GroupKind; name: string };
+}
+
+export interface LibraryDeletePreview {
+  posts: PostRef[];
+  sharedCount: number;
+  otherGroups: string[];
+  otherGroupCount: number;
+}
+
+export const libraryDeletePreview = (scope: LibraryDeleteScope) =>
+  invoke<LibraryDeletePreview>("library_delete_preview", { scope });

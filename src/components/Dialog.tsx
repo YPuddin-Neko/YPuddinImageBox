@@ -24,17 +24,62 @@ export function Dialog({ open, title, onClose, children, actions, initialFocus =
   });
 
   useEffect(() => {
-    if (!open) return;
+    const dialog = panel.current;
+    if (!open || !dialog) return;
     const previous = document.activeElement as HTMLElement | null;
-    const buttons = panel.current?.querySelectorAll<HTMLElement>(".dialog-actions button");
-    buttons?.[initialFocus === "last" ? buttons.length - 1 : 0]?.focus();
+    dialog.dataset.focusTrap = "true";
+    const topmost = () => {
+      const dialogs = document.querySelectorAll<HTMLElement>('.dialog[data-focus-trap="true"]');
+      return dialogs[dialogs.length - 1] === dialog;
+    };
+    const available = (element: HTMLElement) => !element.matches(":disabled")
+      && !element.closest('[hidden], [inert], [aria-hidden="true"]')
+      && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
+    const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>(
+      'a[href], button, input:not([type="hidden"]), select, textarea, summary, [tabindex]',
+    )).filter((element) => element.tabIndex >= 0 && available(element));
+    const focusInitial = () => {
+      const buttons = Array.from(dialog.querySelectorAll<HTMLElement>(".dialog-actions button")).filter(available);
+      const button = buttons[initialFocus === "last" ? buttons.length - 1 : 0];
+      (button ?? focusable()[0] ?? dialog).focus({ preventScroll: true });
+    };
+    focusInitial();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeRef.current();
+      if (!topmost() || event.defaultPrevented || event.isComposing) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusable();
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      const active = document.activeElement;
+      if (!first) {
+        event.preventDefault();
+        dialog.focus({ preventScroll: true });
+      } else if (active === dialog || !dialog.contains(active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus({ preventScroll: true });
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
+    };
+    const onFocus = (event: FocusEvent) => {
+      if (topmost() && !dialog.contains(event.target as Node | null)) focusInitial();
     };
     window.addEventListener("keydown", onKey);
+    document.addEventListener("focusin", onFocus);
     return () => {
       window.removeEventListener("keydown", onKey);
-      previous?.focus();
+      document.removeEventListener("focusin", onFocus);
+      delete dialog.dataset.focusTrap;
+      previous?.focus({ preventScroll: true });
     };
   }, [open, initialFocus]);
 
@@ -55,6 +100,7 @@ export function Dialog({ open, title, onClose, children, actions, initialFocus =
             ref={panel}
             className="dialog"
             role="dialog"
+            tabIndex={-1}
             aria-modal="true"
             aria-labelledby={titleId}
             initial={{ opacity: 0, scale: 0.96, y: 8 }}
