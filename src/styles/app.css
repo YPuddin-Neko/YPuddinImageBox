@@ -2980,25 +2980,6 @@ kbd {
   background: var(--err);
 }
 
-/* 总数未知时来回滑动。 */
-.bar > .bar-indeterminate {
-  position: absolute;
-  inset: 0 auto 0 0;
-  opacity: 0.5;
-  background: var(--accent);
-  width: 30%;
-  animation: bar-slide 1.3s ease-in-out infinite;
-}
-
-@keyframes bar-slide {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(340%);
-  }
-}
-
 .job-meta {
   display: flex;
   flex-wrap: wrap;
@@ -3374,11 +3355,6 @@ html.theme-fade * {
 
   .shimmer-img::before {
     background: var(--chip);
-  }
-
-  .bar.is-indeterminate > .bar-indeterminate {
-    width: 100%;
-    opacity: 0.5;
   }
 }
 

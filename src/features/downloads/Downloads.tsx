@@ -73,7 +73,7 @@ function summary(jobs: Job[]): string {
 
 function Progress({ job }: { job: Job }) {
   const progress = jobProgress(job);
-  // 未知总数时，分段只表示已读取资源的处理情况；滑动提示保留列表尚未读完的状态。
+  // 未知总数时，分段只表示已读取资源的处理情况。
   const parts = [
     { className: "bar-saved", n: job.saved },
     { className: "bar-skipped", n: job.skipped },
@@ -81,7 +81,7 @@ function Progress({ job }: { job: Job }) {
   ];
   return (
     <div
-      className={`bar${progress.reading ? " is-indeterminate" : ""}`}
+      className="bar"
       role="progressbar"
       aria-label={t("下载进度")}
       aria-valuemin={0}
@@ -94,7 +94,6 @@ function Progress({ job }: { job: Job }) {
           ({ className, n }) => n > 0 && <i key={className} className={className} style={{ flexGrow: n }} />,
         )}
       </i>
-      {progress.reading && <i className="bar-indeterminate" />}
     </div>
   );
 }
