@@ -22,11 +22,15 @@ export function useScopeDelete(onDeleted: () => void) {
   const [sharedReady, setSharedReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useToast();
+  const alert = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
   const executing = useRef(false);
   const trigger = useRef<HTMLElement | null>(null);
   const shared = pending?.phase === "shared";
   useEffect(() => () => { generation.current++; }, []);
+  useEffect(() => {
+    if (error) alert.current?.scrollIntoView({ block: "nearest" });
+  }, [error]);
   useEffect(() => {
     if (pending !== null || deleting || !trigger.current) return;
     const target = trigger.current;
@@ -108,10 +112,10 @@ export function useScopeDelete(onDeleted: () => void) {
   };
 
   const preview = pending?.preview;
+  const errorAlert = error && <div ref={alert} className="alert page-block" role="alert"><span>{error}</span>
+    <button type="button" className="btn" onClick={() => setError(null)}>{t("关闭")}</button>
+  </div>;
   const content = <>
-    {error && <div className="alert page-block" role="alert"><span>{error}</span>
-      <button type="button" className="btn" onClick={() => setError(null)}>{t("关闭")}</button>
-    </div>}
     <Toast message={notice} />
     <Dialog key={shared ? "shared" : "choose"} open={pending !== null}
       title={shared ? t("同时从其他分组移除？") : t("删除「{name}」中的全部文件？", { name: pending?.title ?? "" })}
@@ -151,5 +155,5 @@ export function useScopeDelete(onDeleted: () => void) {
       </>}
     </Dialog>
   </>;
-  return { request, busy: pending !== null || deleting, content };
+  return { request, busy: pending !== null || deleting, errorAlert, content };
 }

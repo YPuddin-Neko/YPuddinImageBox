@@ -2642,14 +2642,8 @@ kbd {
   transition: opacity 0.15s ease;
 }
 
-.stack-card-custom {
-  position: relative;
-}
-
 .stack-card-shell:hover .stack-delete,
-.stack-card-shell:focus-within .stack-delete,
-.stack-card-custom:hover .stack-delete,
-.stack-card-custom:focus-within .stack-delete {
+.stack-card-shell:focus-within .stack-delete {
   opacity: 1;
 }
 

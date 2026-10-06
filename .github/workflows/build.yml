@@ -60,7 +60,7 @@ jobs:
         run: node --test tests/*.test.mjs
 
       - name: 测试
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --test language
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --test language --test acl
 
       - name: 打包
         run: pnpm tauri build ${{ matrix.build-args }}

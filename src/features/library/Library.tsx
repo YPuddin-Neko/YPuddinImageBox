@@ -148,7 +148,6 @@ function FolderShelf({
 
   useEffect(load, [load]);
   useLibraryChanges(load);
-  const deletion = useScopeDelete(load);
 
   const total = folders?.reduce((sum, folder) => sum + folder.count, 0) ?? 0;
   const fileUnits = folders?.some((folder) => folder.source === "fanbox" && folder.count > 0) ?? false;
@@ -234,32 +233,19 @@ function FolderShelf({
                       {t("导入图片")}
                     </button>
                   </div>
-                  {folder.count > 0 && <button type="button" className="btn ghost stack-delete" disabled={deletion.busy}
-                    aria-label={t("删除「{name}」中的全部文件", { name: SOURCE_LABEL[folder.source] })}
-                    onClick={(event) => void deletion.request({ source: folder.source }, SOURCE_LABEL[folder.source], event.currentTarget)}>
-                    <Icon name="trash" size={15} />{t("删除")}
-                  </button>}
                 </div>
               );
             }
             return (
-              <div key={folder.source} className="stack-card-shell">
-                <button type="button" className="stack-card" onClick={() => onOpen(folder.source)} disabled={folder.count === 0}>
-                  {content}
-                </button>
-                {folder.count > 0 && <button type="button" className="btn ghost stack-delete" disabled={deletion.busy}
-                  aria-label={t("删除「{name}」中的全部文件", { name: SOURCE_LABEL[folder.source] })}
-                  onClick={(event) => void deletion.request({ source: folder.source }, SOURCE_LABEL[folder.source], event.currentTarget)}>
-                  <Icon name="trash" size={15} />{t("删除")}
-                </button>}
-              </div>
+              <button key={folder.source} type="button" className="stack-card" onClick={() => onOpen(folder.source)} disabled={folder.count === 0}>
+                {content}
+              </button>
             );
           })}
         </div>
       )}
 
       {folders && total === 0 && !error && <EmptyLibrary onNavigate={onNavigate} title={t("图库里还没有图片")} />}
-      {deletion.content}
       <Toast message={notice} />
       <Dialog
         open={pendingImport !== null}
@@ -421,6 +407,8 @@ function GroupShelf({
             </button>
           </div>
         )}
+
+        {deletion.errorAlert}
 
         {folder && groups && (
           <div className="shelf page-block" data-size="md" data-loading={loading || undefined}>
