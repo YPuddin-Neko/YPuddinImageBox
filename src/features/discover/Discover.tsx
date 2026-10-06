@@ -58,7 +58,7 @@ import { intervalOptions, subscriptionCreate, subscriptionPreview, subscriptionT
 import { useDownloads } from "../downloads/context";
 import { Inspector } from "./Inspector";
 import { ImageViewer } from "../../components/ImageViewer";
-import { mergePixivCreators, pixivCreatorQuery } from "./pixivCreators";
+import { hasPixivIdCollision, mergePixivCreators, pixivCreatorQuery } from "./pixivCreators";
 
 interface Criteria {
   /** 来源里勾选的站点；两个以上时是聚合搜索。 */
@@ -72,6 +72,7 @@ interface Criteria {
 
 interface Results {
   posts: Post[];
+  input: string;
   cursor: string | null;
   /** 下一页的位置，没有更多时为 null。 */
   next: string | null;
@@ -85,6 +86,7 @@ interface Results {
 }
 
 type Count = number | null | "loading" | "failed";
+type PixivResultType = "creators" | "artworks";
 
 /** 对话框里一个站点的条件。 */
 interface SiteCriteria {
@@ -171,7 +173,7 @@ async function searchPage(criteria: Criteria, cursor: string | null): Promise<{ 
       cursor,
     });
     return {
-      results: { posts: page.posts, cursor, next: page.next, sites: page.sites, combined: true },
+      results: { posts: page.posts, input: criteria.tags, cursor, next: page.next, sites: page.sites, combined: true },
       owned: page.owned.map((post) => postKey({ source: post.source, id: post.postId })),
     };
   }
@@ -180,7 +182,7 @@ async function searchPage(criteria: Criteria, cursor: string | null): Promise<{ 
   const site: SiteStatus = { source, query: page.query, localFilter: page.localFilter, error: null, retry: false };
   return {
     results: {
-      posts: page.posts, cursor, next: page.next, sites: [site], combined: false,
+      posts: page.posts, input: criteria.tags, cursor, next: page.next, sites: [site], combined: false,
       creators: page.creators, creatorError: page.creatorError, artworkError: page.artworkError,
     },
     owned: page.owned.map((id) => postKey({ source, id })),
@@ -281,6 +283,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [ratings, setRatings] = useState<Rating[]>(DEFAULT_CRITERIA.ratings);
   const [sort, setSort] = useState<RemoteSort>(DEFAULT_CRITERIA.sort);
   const [results, setResults] = useState<Results | null>(null);
+  const [pixivResultTypes, setPixivResultTypes] = useState<PixivResultType[]>(["creators", "artworks"]);
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   /** 记下失败的是哪一页，重试时重跑这一页；code 用来判断是不是账号问题。 */
@@ -301,7 +304,11 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const sentinel = useRef<HTMLDivElement>(null);
   const center = useRef<HTMLDivElement>(null);
 
-  const posts = results?.posts ?? [];
+  const idCollision = sources.length === 1 && sources[0] === "pixiv" && !results?.combined
+    && hasPixivIdCollision(results?.sites.map((site) => site.source) ?? [], results?.input ?? "", results?.creators ?? [], results?.posts ?? []);
+  const creatorsOnly = idCollision && !pixivResultTypes.includes("artworks");
+  const posts = creatorsOnly ? [] : results?.posts ?? [];
+  const creators = idCollision && !pixivResultTypes.includes("creators") ? [] : results?.creators ?? [];
   const { picked, pickedPosts, toggle: togglePick, clear: clearPicks, pickAll } = usePicker(posts);
 
   /** `cursor` 为 null 表示重新搜第一页。 */
@@ -330,6 +337,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         return ownedNow;
       });
       if (first) {
+        setPixivResultTypes(["creators", "artworks"]);
         setSelected(next.posts[0] ? postKey(next.posts[0]) : null);
         clearPicks();
       }
@@ -441,6 +449,15 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
     setPlatforms(["pixiv"]);
     setSort(nextSort);
     void run({ ...criteria, sources: ["pixiv"], platforms: ["pixiv"], tags: query, sort: nextSort }, null);
+  };
+
+  const changePixivResultTypes = (next: PixivResultType[]) => {
+    setPixivResultTypes(next);
+    clearPicks();
+    if (!next.includes("artworks")) {
+      setSelected(null);
+      setViewerPost(null);
+    }
   };
 
   // 换来源时平台筛选回到全部；新选的站点不支持当前排序就回到默认顺序（几个站点一起搜时只能用都支持的排序）。
@@ -784,6 +801,22 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
             options={remoteSorts(sources)}
             onChange={changeSort}
           />
+          {idCollision && (
+            <MultiSelect
+              className="filter-select"
+              name={t("结果类型")}
+              label={t("类型")}
+              values={pixivResultTypes}
+              allLabel={t("全部")}
+              showAll={false}
+              options={[
+                { value: "creators", label: t("画师") },
+                { value: "artworks", label: t("作品::pixiv-search") },
+              ]}
+              sizers={[t("画师") + t("、::list") + t("作品::pixiv-search")]}
+              onChange={changePixivResultTypes}
+            />
+          )}
           {results && (
             <span className="query" title={queryTitle(results.sites)}>
               {queryText(results.sites)}
@@ -800,13 +833,13 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 {t("本地筛选 {filter}", { filter: localFilter })}
               </span>
             )}
-            <span className="count">{t(fileUnits ? "{n} 项" : "{n} 张", { n: formatCount(posts.length) })}</span>
+            <span className="count">{t(creatorsOnly ? "{n} 位画师" : fileUnits ? "{n} 项" : "{n} 张", { n: formatCount(creatorsOnly ? creators.length : posts.length) })}</span>
             <button
               type="button"
               className="btn sm collapsible"
               title={collapsedTitle(t("订阅"))}
               onClick={() => void openSubscribe()}
-              disabled={!results || loading}
+              disabled={!results || loading || creatorsOnly}
             >
               <Icon name="bell" size={14} />
               <span className="btn-text">{t("订阅")}</span>
@@ -881,9 +914,9 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               <button type="button" className="btn" disabled={loading} onClick={retryPixiv}>{t("重试")}</button>
             </div>
           )}
-          {!!results?.creators?.length && (
+          {!!creators.length && (
             <ul className="creator-list pixiv-creators" aria-label={t("画师")}>
-              {results.creators.map((creator) => (
+              {creators.map((creator) => (
                 <li key={creator.id}>
                   <button type="button" className="creator-card" aria-label={t("查看 {name} 的作品", { name: creator.name })} onClick={() => openPixivCreator(creator)}>
                     {creator.avatarUrl

@@ -304,14 +304,15 @@ export function Select<T extends string | number>({
 const ALL_KEY = "__all__";
 
 /**
- * 复选下拉框：第一项「全部」一键全选，至少保留一项。
- * `values` 为空和全选等价，按钮上显示 `allLabel`。
+ * 复选下拉框，至少保留一项；可隐藏一键全选的「全部」选项。
+ * `values` 为空和全选等价。
  */
 export function MultiSelect<T extends string | number>({
   values,
   options,
   onChange,
   allLabel,
+  showAll = true,
   sizers,
   ...common
 }: CommonProps & {
@@ -319,16 +320,17 @@ export function MultiSelect<T extends string | number>({
   options: SelectOption<T>[];
   onChange: (values: T[]) => void;
   allLabel: string;
+  showAll?: boolean;
   /** 按钮宽度按这些文字里最宽的算，勾选变化时不跳动。 */
   sizers?: string[];
 }) {
   const chosen = options.filter((option) => values.includes(option.value)).map((option) => option.value);
   const all = chosen.length === 0 || chosen.length === options.length;
   const effective = all ? options.map((option) => option.value) : chosen;
-  const text = all
+  const text = all && showAll
     ? allLabel
     : options
-        .filter((option) => chosen.includes(option.value))
+        .filter((option) => effective.includes(option.value))
         .map((o) => o.label)
         .join(t("、::list"));
 
@@ -354,7 +356,7 @@ export function MultiSelect<T extends string | number>({
       text={text}
       sizers={sizers}
       items={[
-        { key: ALL_KEY, label: allLabel, selected: all, divider: true },
+        ...(showAll ? [{ key: ALL_KEY, label: allLabel, selected: all, divider: true }] : []),
         ...options.map((option) => {
           const selected = effective.includes(option.value);
           return {
