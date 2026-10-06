@@ -11,7 +11,7 @@
 
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, COOKIE, REFERER, USER_AGENT};
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
@@ -113,6 +113,126 @@ fn parse_query(query: &str) -> Query {
         }
     }
     parsed
+}
+
+fn numeric_id(value: &str) -> Option<u64> {
+    (!value.is_empty() && value.bytes().all(|c| c.is_ascii_digit())).then(|| value.parse().ok()).flatten()
+}
+
+/// 仅规范新输入；后台已保存的数字 tag 查询继续按原语义执行。
+pub fn normalize_input(query: &str) -> String {
+    let Some(CreatorQuery::Id(id)) = creator_query(query) else { return query.to_string() };
+    query.split_whitespace().map(|token| {
+        if numeric_id(token) == Some(id) { format!("id:{id}") } else { token.to_string() }
+    }).collect::<Vec<_>>().join(" ")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreatorQuery {
+    Id(u64),
+    Name(String),
+}
+
+/// 明确的画师、作品和收藏条件继续走原来的查询；普通输入同时找画师。
+pub fn creator_query(query: &str) -> Option<CreatorQuery> {
+    let mut words = Vec::new();
+    for token in query.split_whitespace() {
+        if token.starts_with("rating:") || token.starts_with("order:") || token.starts_with("sort:") {
+            continue;
+        }
+        if token.starts_with('-') || token.contains(':') || token.starts_with("www.") {
+            return None;
+        }
+        words.push(token);
+    }
+    if words.is_empty() {
+        return None;
+    }
+    if words.len() == 1 {
+        if let Some(id) = numeric_id(words[0]) {
+            return Some(CreatorQuery::Id(id));
+        }
+    }
+    Some(CreatorQuery::Name(words.join(" ")))
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PixivCreator {
+    pub id: String,
+    pub name: String,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct CreatorPage {
+    pub creators: Vec<PixivCreator>,
+    pub more: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawCreator {
+    user_id: String,
+    name: String,
+    image: Option<String>,
+    image_big: Option<String>,
+}
+
+fn creator(value: Value) -> Result<PixivCreator, AppError> {
+    let raw: RawCreator = serde_json::from_value(value).map_err(|err| AppError::Parse { site: SITE, detail: err.to_string() })?;
+    if numeric_id(&raw.user_id).is_none() || raw.name.trim().is_empty() {
+        return Err(AppError::Parse { site: SITE, detail: "invalid artist ID or name".into() });
+    }
+    Ok(PixivCreator {
+        id: raw.user_id,
+        name: raw.name,
+        avatar_url: raw.image_big.filter(|url| !url.is_empty()).or_else(|| raw.image.filter(|url| !url.is_empty())),
+    })
+}
+
+fn creator_page(body: Value, page: u32) -> Result<CreatorPage, AppError> {
+    let invalid = || AppError::Parse { site: SITE, detail: "invalid artist search response".into() };
+    let ids = body["page"]["userIds"].as_array().ok_or_else(invalid)?;
+    let total = body["page"]["total"].as_u64().ok_or_else(invalid)?;
+    let users = body["users"].as_array().ok_or_else(invalid)?;
+    // 画师搜索每页 10 人，页码超过最后一页时不再使用站点重复返回的结果。
+    if u64::from(page.saturating_sub(1)) * 10 >= total {
+        return Ok(CreatorPage::default());
+    }
+    let mut creators = Vec::with_capacity(ids.len());
+    for id in ids {
+        let id = id.as_u64().or_else(|| id.as_str().and_then(numeric_id)).ok_or_else(invalid)?.to_string();
+        let user = users.iter().find(|user| user["userId"].as_str() == Some(id.as_str())).ok_or_else(invalid)?;
+        creators.push(creator(user.clone())?);
+    }
+    Ok(CreatorPage { creators, more: u64::from(page) * 10 < total })
+}
+
+pub async fn search_creators(
+    net: &Net,
+    credentials: Option<&Credentials>,
+    query: &CreatorQuery,
+    page: u32,
+) -> Result<CreatorPage, AppError> {
+    match query {
+        CreatorQuery::Id(_) if page > 1 => Ok(CreatorPage::default()),
+        CreatorQuery::Id(id) => {
+            let body = get(net, credentials, api_url(&["ajax", "user", &id.to_string()], &[("full", "1".into())])).await?;
+            Ok(CreatorPage { creators: vec![creator(body)?], more: false })
+        }
+        CreatorQuery::Name(name) => {
+            let credentials = credentials.ok_or(AppError::PixivCreatorSignIn)?;
+            let params = [
+                ("nick", name.clone()),
+                ("s_mode", "s_usr".to_string()),
+                ("i", "1".to_string()),
+                ("p", page.max(1).to_string()),
+            ];
+            let body = get(net, Some(credentials), api_url(&["ajax", "search", "users"], &params)).await?;
+            creator_page(body, page.max(1))
+        }
+    }
 }
 
 /// `user:123`，或者画师主页的地址（`pixiv.net/users/123`、`pixiv.net/en/users/123/illustrations`）。
@@ -240,6 +360,9 @@ async fn get<T: DeserializeOwned>(net: &Net, credentials: Option<&Credentials>, 
     }
     let response = net.pixiv.send(request).await?;
     let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(AppError::Http { site: SITE, status: 404 });
+    }
     if net::challenged(&response) {
         let ray = response.headers().get("cf-ray").and_then(|value| value.to_str().ok()).unwrap_or("-");
         log::warn!("Pixiv 的请求被 Cloudflare 拦下：HTTP {}，cf-ray {ray}", status.as_u16());
@@ -604,6 +727,92 @@ mod tests {
         assert_eq!(parse_query("bookmarks:private").target, Target::Bookmarks { private: true });
         // 别的站点的地址当普通的词。
         assert_eq!(parse_query("https://example.com/users/1").target, Target::Search);
+    }
+
+    #[test]
+    fn routes_new_plain_numbers_to_works_without_changing_explicit_queries() {
+        let query = parse_query(&normalize_input("22675109 rating:general order:date"));
+        assert_eq!(query.target, Target::Work(22675109));
+        assert!(query.words.is_empty());
+        assert_eq!(query.ratings, [Rating::General]);
+        assert!(query.oldest);
+        assert_eq!(parse_query("22675109 scenery").target, Target::Search);
+        assert_eq!(parse_query("user:22675109 123").target, Target::User(22675109));
+        assert_eq!(parse_query("id:22675109").target, Target::Work(22675109));
+        assert_eq!(parse_query("https://www.pixiv.net/users/22675109").target, Target::User(22675109));
+    }
+
+    #[test]
+    fn saved_numeric_tag_queries_keep_their_background_search_meaning() {
+        let saved = parse_query("2024 rating:general");
+        assert_eq!(saved.target, Target::Search);
+        assert_eq!(saved.words, ["2024"]);
+        assert_eq!(saved.ratings, [Rating::General]);
+        assert_eq!(normalize_input("2024 rating:general"), "id:2024 rating:general");
+        assert_eq!(normalize_input("2024 scenery"), "2024 scenery");
+        assert_eq!(normalize_input("user:22675109 2024"), "user:22675109 2024");
+        assert_eq!(normalize_input("id:22675109"), "id:22675109");
+    }
+
+    #[test]
+    fn creator_discovery_keeps_names_and_skips_explicit_filters() {
+        assert_eq!(creator_query("22675109 rating:general order:date"), Some(CreatorQuery::Id(22675109)));
+        assert_eq!(creator_query(" 花咲ちゆ＠お仕事募集中 "), Some(CreatorQuery::Name("花咲ちゆ＠お仕事募集中".into())));
+        assert_eq!(creator_query("Artist Name"), Some(CreatorQuery::Name("Artist Name".into())));
+        for query in ["", "rating:general", "user:22675109", "id:22675109", "bookmarks:", "https://www.pixiv.net/users/22675109", "https://www.pixiv.net/artworks/22675109", "scenery -night"] {
+            assert_eq!(creator_query(query), None, "{query}");
+        }
+    }
+
+    fn artist_body(total: u64) -> Value {
+        serde_json::json!({
+            "page": { "userIds": [22675109, "42"], "total": total },
+            "users": [
+                { "userId": "42", "name": "Artist Name", "image": "https://i.pximg.net/avatar-42.jpg" },
+                { "userId": "22675109", "name": "花咲ちゆ＠お仕事募集中", "image": "https://i.pximg.net/small.jpg", "imageBig": "https://i.pximg.net/large.jpg" }
+            ]
+        })
+    }
+
+    #[test]
+    fn parses_creator_results_in_page_order_and_keeps_pagination() {
+        let first = creator_page(artist_body(12), 1).unwrap();
+        assert_eq!(first.creators.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["22675109", "42"]);
+        assert_eq!(first.creators[0].name, "花咲ちゆ＠お仕事募集中");
+        assert_eq!(first.creators[0].avatar_url.as_deref(), Some("https://i.pximg.net/large.jpg"));
+        assert_eq!(first.creators[1].avatar_url.as_deref(), Some("https://i.pximg.net/avatar-42.jpg"));
+        assert!(first.more);
+        assert!(!creator_page(artist_body(12), 2).unwrap().more);
+        assert!(creator_page(artist_body(12), 3).unwrap().creators.is_empty());
+        assert!(creator_page(serde_json::json!({ "page": { "userIds": [], "total": 0 }, "users": [] }), 1).unwrap().creators.is_empty());
+        assert!(creator_page(serde_json::json!({}), 1).is_err());
+        let mut missing = artist_body(12);
+        missing["users"] = serde_json::json!([]);
+        assert!(creator_page(missing, 1).is_err());
+    }
+
+    #[tokio::test]
+    async fn names_require_login_but_numeric_later_pages_do_not_request_again() {
+        let net = Net::new(&crate::settings::ProxySettings::default()).unwrap();
+        let error = search_creators(&net, None, &CreatorQuery::Name("花咲ちゆ".into()), 1).await.unwrap_err();
+        assert!(matches!(error, AppError::PixivCreatorSignIn));
+        assert_eq!(serde_json::to_value(error).unwrap()["code"], "credentials_missing");
+        assert!(search_creators(&net, None, &CreatorQuery::Id(22675109), 2).await.unwrap().creators.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "需要网络，手动运行"]
+    async fn discovers_pixiv_creator_by_id_without_login() {
+        let net = Net::new(&crate::settings::ProxySettings::default()).unwrap();
+        let page = search_creators(&net, None, &CreatorQuery::Id(22675109), 1).await.unwrap();
+        assert_eq!(page.creators.len(), 1);
+        assert_eq!(page.creators[0].id, "22675109");
+        assert_eq!(page.creators[0].name, "花咲ちゆ＠お仕事募集中");
+        assert!(page.creators[0].avatar_url.is_some());
+        assert!(!page.more);
+        let (works, _) = search(&net, None, &normalize_input("22675109"), &Page::Number(1)).await.unwrap();
+        assert_eq!(split_id(works[0].id).0, 22675109);
+        assert_ne!(works[0].tags.artist, [page.creators[0].name.clone()]);
     }
 
     #[test]

@@ -140,6 +140,20 @@ export interface SearchPage {
   localFilter: string;
   /** 这一页里已在图库中的帖子 id。 */
   owned: number[];
+  creators?: PixivCreator[];
+  creatorError?: SearchError | null;
+  artworkError?: SearchError | null;
+}
+
+export interface PixivCreator {
+  id: string;
+  name: string;
+  avatarUrl: string | null;
+}
+
+export interface SearchError {
+  code: string;
+  message: string;
 }
 
 export function searchRemote(params: SearchParams): Promise<SearchPage> {

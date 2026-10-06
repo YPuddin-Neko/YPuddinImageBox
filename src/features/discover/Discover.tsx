@@ -7,6 +7,7 @@ import { PostGrid, visibleCard } from "../../components/PostGrid";
 import type { View } from "../../components/Rail";
 import { MenuButton, MultiSelect, Select } from "../../components/Select";
 import { SelectionDock } from "../../components/SelectionDock";
+import { ShimmerImage } from "../../components/ShimmerImage";
 import { appendTag, cleanTag, TagInput } from "../../components/TagInput";
 import { Toast } from "../../components/Toast";
 import { usePicker } from "../../components/usePicker";
@@ -21,6 +22,7 @@ import {
   errorMessage,
   goldOnly,
   isFanboxFile,
+  imageSrc,
   postKey,
   postNumber,
   ratingOptions,
@@ -33,9 +35,11 @@ import {
   SOURCE_OPTIONS,
   SOURCES,
   type Post,
+  type PixivCreator,
   type Rating,
   type RemoteSort,
   type SearchParams,
+  type SearchError,
   type SiteStatus,
   type Source,
 } from "../../lib/ipc";
@@ -54,6 +58,7 @@ import { intervalOptions, subscriptionCreate, subscriptionPreview, subscriptionT
 import { useDownloads } from "../downloads/context";
 import { Inspector } from "./Inspector";
 import { ImageViewer } from "../../components/ImageViewer";
+import { mergePixivCreators, pixivCreatorQuery } from "./pixivCreators";
 
 interface Criteria {
   /** 来源里勾选的站点；两个以上时是聚合搜索。 */
@@ -67,12 +72,16 @@ interface Criteria {
 
 interface Results {
   posts: Post[];
+  cursor: string | null;
   /** 下一页的位置，没有更多时为 null。 */
   next: string | null;
   /** 各站点实际发出的查询、本地筛选的 tag 和出错情况；只搜一个站点时只有一项。 */
   sites: SiteStatus[];
   /** 聚合搜索的结果：卡片上标出每张图来自哪个站点。 */
   combined: boolean;
+  creators?: PixivCreator[];
+  creatorError?: SearchError | null;
+  artworkError?: SearchError | null;
 }
 
 type Count = number | null | "loading" | "failed";
@@ -162,7 +171,7 @@ async function searchPage(criteria: Criteria, cursor: string | null): Promise<{ 
       cursor,
     });
     return {
-      results: { posts: page.posts, next: page.next, sites: page.sites, combined: true },
+      results: { posts: page.posts, cursor, next: page.next, sites: page.sites, combined: true },
       owned: page.owned.map((post) => postKey({ source: post.source, id: post.postId })),
     };
   }
@@ -170,7 +179,10 @@ async function searchPage(criteria: Criteria, cursor: string | null): Promise<{ 
   const page = await searchRemote({ ...siteParams(criteria, source), cursor });
   const site: SiteStatus = { source, query: page.query, localFilter: page.localFilter, error: null, retry: false };
   return {
-    results: { posts: page.posts, next: page.next, sites: [site], combined: false },
+    results: {
+      posts: page.posts, cursor, next: page.next, sites: [site], combined: false,
+      creators: page.creators, creatorError: page.creatorError, artworkError: page.artworkError,
+    },
     owned: page.owned.map((id) => postKey({ source, id })),
   };
 }
@@ -307,7 +319,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
       const next = page.results;
       setResults((prev) => {
         if (first || !prev) return { ...next, posts: appendNew([], next.posts) };
-        return { ...next, posts: appendNew(prev.posts, next.posts), sites: mergeSites(prev.sites, next.sites) };
+        return {
+          ...next, posts: appendNew(prev.posts, next.posts), sites: mergeSites(prev.sites, next.sites),
+          creators: mergePixivCreators(prev.creators ?? [], next.creators ?? []),
+        };
       });
       setOwned((prev) => {
         const ownedNow = new Set(prev);
@@ -360,7 +375,8 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   }, [toast]);
 
   // 聚合搜索时有站点这一页没加载出来（网络问题），先不自动往下翻，免得一直重试，等用户点「重试」。
-  const paused = results?.sites.some((site) => site.error && site.retry) ?? false;
+  const paused = (results?.sites.some((site) => site.error && site.retry) ?? false)
+    || [results?.creatorError, results?.artworkError].some((issue) => issue && !isAccountError(issue.code));
 
   const loadMore = useCallback(() => {
     if (!results?.next || loading || error || paused) return;
@@ -369,6 +385,10 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   const retrySites = () => {
     if (results?.next) void run(committed.current, results.next);
+  };
+
+  const retryPixiv = () => {
+    if (results) void run(committed.current, results.cursor ?? "1");
   };
 
   useEffect(() => {
@@ -410,6 +430,17 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const changeSort = (next: RemoteSort) => {
     setSort(next);
     void run({ ...formCriteria(), sort: next }, null);
+  };
+
+  const openPixivCreator = (creator: PixivCreator) => {
+    const query = pixivCreatorQuery(creator);
+    const criteria = formCriteria();
+    const nextSort = remoteSorts(["pixiv"]).some((option) => option.value === criteria.sort) ? criteria.sort : "newest";
+    setTags(query);
+    setSources(["pixiv"]);
+    setPlatforms(["pixiv"]);
+    setSort(nextSort);
+    void run({ ...criteria, sources: ["pixiv"], platforms: ["pixiv"], tags: query, sort: nextSort }, null);
   };
 
   // 换来源时平台筛选回到全部；新选的站点不支持当前排序就回到默认顺序（几个站点一起搜时只能用都支持的排序）。
@@ -678,9 +709,8 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               label={t("搜索 tag")}
               flash={flash}
               placeholder={
-                // Pixiv 还能看画师的全部作品；几个站点一起搜时 user: 对别的站点另有意思，不提示。
                 sources.length === 1 && sources[0] === "pixiv"
-                  ? t("输入 tag、user:画师 ID，或粘贴画师、作品链接")
+                  ? t("输入标签、画师名字、ID 或 Pixiv 链接")
                   : sources.length === 1 && sources[0] === "kemono"
                     ? t("输入关键词，或 creator:服务/作者 ID，例如 creator:patreon/123456")
                     : sources.length === 1 && sources[0] === "fanbox"
@@ -831,7 +861,44 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                 )}
               </div>
             ))}
-          {results && posts.length === 0 && !results.next && !loading && !error && (
+          {results?.creatorError && (
+            <div className="notice-bar pixiv-search-notice" role="status">
+              <span>{isAccountError(results.creatorError.code)
+                ? results.creatorError.message
+                : t("画师：{message}", { message: results.creatorError.message })}</span>
+              <button type="button" className="btn sm" disabled={loading} onClick={() =>
+                isAccountError(results.creatorError?.code)
+                  ? onNavigate("settings", "accounts")
+                  : retryPixiv()
+              }>
+                {isAccountError(results.creatorError.code) ? t("登录 Pixiv") : t("重试")}
+              </button>
+            </div>
+          )}
+          {results?.artworkError && (
+            <div className="alert" role="alert">
+              <span>{t("作品：{message}", { message: results.artworkError.message })}</span>
+              <button type="button" className="btn" disabled={loading} onClick={retryPixiv}>{t("重试")}</button>
+            </div>
+          )}
+          {!!results?.creators?.length && (
+            <ul className="creator-list pixiv-creators" aria-label={t("画师")}>
+              {results.creators.map((creator) => (
+                <li key={creator.id}>
+                  <button type="button" className="creator-card" aria-label={t("查看 {name} 的作品", { name: creator.name })} onClick={() => openPixivCreator(creator)}>
+                    {creator.avatarUrl
+                      ? <ShimmerImage className="creator-avatar" src={imageSrc(creator.avatarUrl)} alt="" />
+                      : <span className="creator-avatar creator-avatar-placeholder"><Icon name="user" size={20} /></span>}
+                    <span className="creator-info">
+                      <span className="creator-name" title={creator.name}>{creator.name}</span>
+                      <span className="creator-meta">{t("画师")} · {creator.id}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {results && posts.length === 0 && !results.creators?.length && !results.creatorError && !results.artworkError && !results.next && !loading && !error && (
             <p className="hint">
               {sources.length === 1 && sources[0] === "fanbox" ? t("没有找到可访问的图片或附件。") : committed.current.sort === "popular"
                 ? t("没有找到符合条件的图片。「近期热门」只包含最近两天上传的图，可以换个排序再试。")

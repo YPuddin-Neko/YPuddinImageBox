@@ -120,9 +120,77 @@ async fn search_site(state: &AppState, params: &SearchParams, page_size: u32) ->
 
 #[tauri::command]
 pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> Result<SearchPage, AppError> {
-    let found = search_site(&state, &params, PAGE_SIZE).await?;
-    let owned = state.library.owned(&found.posts).await?.into_iter().map(|(_, post_id)| post_id).collect();
-    Ok(SearchPage { posts: found.posts, next: found.next, query: found.query, local_filter: found.local_filter, owned })
+    let creators = (params.source == Source::Pixiv).then(|| pixiv::creator_query(&params.tags)).flatten();
+    let mut result = if let Some(query) = creators {
+        let page = params.cursor.as_deref().and_then(|cursor| cursor.parse().ok()).unwrap_or(1u32).max(1);
+        let accounts = state.accounts.get();
+        let (artworks, creators) = tokio::join!(
+            search_site(&state, &params, PAGE_SIZE),
+            pixiv::search_creators(&state.net, accounts.pixiv.as_ref(), &query, page),
+        );
+        let (query, local_filter) = site_plan(&state, &params);
+        merge_pixiv_search(artworks, creators, page, query, local_filter)?
+    } else {
+        let found = search_site(&state, &params, PAGE_SIZE).await?;
+        SearchPage {
+            posts: found.posts,
+            next: found.next,
+            query: found.query,
+            local_filter: found.local_filter,
+            owned: Vec::new(),
+            creators: Vec::new(),
+            creator_error: None,
+            artwork_error: None,
+        }
+    };
+    result.owned = state.library.owned(&result.posts).await?.into_iter().map(|(_, post_id)| post_id).collect();
+    Ok(result)
+}
+
+fn merge_pixiv_search(
+    artworks: Result<SiteResults, AppError>,
+    creators: Result<pixiv::CreatorPage, AppError>,
+    page: u32,
+    query: String,
+    local_filter: String,
+) -> Result<SearchPage, AppError> {
+    let missing = |error: &AppError| matches!(error, AppError::Http { site: "Pixiv", status: 404 });
+    let artworks = match artworks {
+        Err(error) if missing(&error) => Ok(SiteResults {
+            posts: Vec::new(), next: None, query: query.clone(), local_filter: local_filter.clone(), reached: None,
+        }),
+        other => other,
+    };
+    let creators = match creators {
+        Err(error) if missing(&error) => Ok(pixiv::CreatorPage::default()),
+        other => other,
+    };
+    if artworks.is_err() && creators.is_err() {
+        return Err(artworks.err().expect("both searches failed"));
+    }
+    let mut result = SearchPage {
+        posts: Vec::new(), next: None, query, local_filter, owned: Vec::new(), creators: Vec::new(),
+        creator_error: None, artwork_error: None,
+    };
+    match artworks {
+        Ok(found) => {
+            result.posts = found.posts;
+            result.next = found.next;
+            result.query = found.query;
+            result.local_filter = found.local_filter;
+        }
+        Err(error) => result.artwork_error = Some(error),
+    }
+    match creators {
+        Ok(found) => {
+            result.creators = found.creators;
+            if found.more {
+                result.next = Some(page.saturating_add(1).to_string());
+            }
+        }
+        Err(error) => result.creator_error = Some(error),
+    }
+    Ok(result)
 }
 
 /// 聚合搜索：同样的 tag、分级和排序，同时搜几个站点。
@@ -661,7 +729,7 @@ pub async fn subscription_preview(
     state: State<'_, AppState>,
     params: SearchParams,
 ) -> Result<SubscriptionPreview, AppError> {
-    let plan = filter::plan_query(params.source, &params.tags, &params.ratings, tag_limit(&state, params.source))?;
+    let plan = filter::plan_query(params.source, &params.normalized_tags(), &params.ratings, tag_limit(&state, params.source))?;
     Ok(SubscriptionPreview { query: plan.server_query, local_filter: plan.local.to_query() })
 }
 
@@ -675,7 +743,8 @@ pub async fn subscription_create(
     download_existing: bool,
     max_posts: Option<u32>,
 ) -> Result<Subscription, AppError> {
-    let plan = filter::plan_query(params.source, &params.tags, &params.ratings, tag_limit(&state, params.source))?;
+    let tags = params.normalized_tags();
+    let plan = filter::plan_query(params.source, &tags, &params.ratings, tag_limit(&state, params.source))?;
     let query = plan.server_query.clone();
     if sources::has_custom_order(&query) {
         return Err(AppError::InvalidInput(tr!(
@@ -703,7 +772,7 @@ pub async fn subscription_create(
         })
         .await?;
     if download_existing {
-        let full = sources::build_query(params.source, &params.tags, &params.ratings);
+        let full = sources::build_query(params.source, &tags, &params.ratings);
         let local = plan.local.to_query();
         state
             .downloader
@@ -1513,6 +1582,68 @@ mod tests {
     use crate::settings::Settings;
     use crate::sources::AccountStore;
     use crate::storage::{Defaults, Storage};
+
+    fn pixiv_artwork_page(next: Option<&str>) -> SiteResults {
+        SiteResults { posts: Vec::new(), next: next.map(str::to_string), query: "scenery rating:general".into(), local_filter: String::new(), reached: None }
+    }
+
+    fn pixiv_creator_page(more: bool) -> pixiv::CreatorPage {
+        pixiv::CreatorPage {
+            creators: vec![pixiv::PixivCreator { id: "22675109".into(), name: "花咲ちゆ＠お仕事募集中".into(), avatar_url: None }],
+            more,
+        }
+    }
+
+    #[test]
+    fn pixiv_discovery_continues_while_either_result_has_more() {
+        for (artwork_next, creator_more, expected) in [(Some("2"), false, Some("2")), (None, true, Some("2")), (Some("2"), true, Some("2")), (None, false, None)] {
+            let page = merge_pixiv_search(Ok(pixiv_artwork_page(artwork_next)), Ok(pixiv_creator_page(creator_more)), 1, String::new(), String::new()).unwrap();
+            assert_eq!(page.next.as_deref(), expected);
+            assert_eq!(page.creators[0].id, "22675109");
+            assert!(page.creator_error.is_none() && page.artwork_error.is_none());
+        }
+    }
+
+    #[test]
+    fn pixiv_discovery_keeps_a_work_and_an_unrelated_artist_with_the_same_number() {
+        let mut artworks = pixiv_artwork_page(None);
+        artworks.posts.push(serde_json::from_value(serde_json::json!({
+            "source": "pixiv", "id": 22675109000_u64, "width": 800, "height": 600,
+            "score": 0, "fileExt": "", "postUrl": "https://www.pixiv.net/artworks/22675109",
+            "tags": { "artist": ["やんちゃなモグラ"], "copyright": [], "character": [], "general": [], "meta": [] }
+        })).unwrap());
+        let page = merge_pixiv_search(Ok(artworks), Ok(pixiv_creator_page(false)), 1, "22675109".into(), String::new()).unwrap();
+        assert_eq!(page.posts[0].id, 22675109000);
+        assert_eq!(page.creators[0].id, "22675109");
+        assert_ne!(page.posts[0].tags.artist[0], page.creators[0].name);
+    }
+
+    #[test]
+    fn pixiv_discovery_retains_partial_errors_and_the_successful_result() {
+        let page = merge_pixiv_search(Ok(pixiv_artwork_page(Some("2"))), Err(AppError::PixivCreatorSignIn), 1, String::new(), String::new()).unwrap();
+        assert!(matches!(page.creator_error, Some(AppError::PixivCreatorSignIn)));
+        assert_eq!(page.next.as_deref(), Some("2"));
+        assert_eq!(page.query, "scenery rating:general");
+        let page = merge_pixiv_search(Err(AppError::Challenged("Pixiv")), Ok(pixiv_creator_page(false)), 1, "22675109".into(), String::new()).unwrap();
+        assert!(matches!(page.artwork_error, Some(AppError::Challenged("Pixiv"))));
+        assert_eq!(page.creators.len(), 1);
+        assert_eq!(page.query, "22675109");
+        let error = merge_pixiv_search(Err(AppError::Http { site: "Pixiv", status: 503 }), Err(AppError::PixivCreatorSignIn), 1, String::new(), String::new()).unwrap_err();
+        assert!(matches!(error, AppError::Http { status: 503, .. }));
+    }
+
+    #[test]
+    fn pixiv_discovery_only_treats_explicit_missing_resources_as_no_match() {
+        let missing = || AppError::Http { site: "Pixiv", status: 404 };
+        let page = merge_pixiv_search(Err(missing()), Ok(pixiv_creator_page(false)), 1, "22675109".into(), String::new()).unwrap();
+        assert_eq!(page.creators.len(), 1);
+        assert!(page.artwork_error.is_none());
+        let page = merge_pixiv_search(Err(missing()), Err(missing()), 1, String::new(), String::new()).unwrap();
+        assert!(page.posts.is_empty() && page.creators.is_empty());
+        assert!(page.artwork_error.is_none() && page.creator_error.is_none());
+        let page = merge_pixiv_search(Ok(pixiv_artwork_page(None)), Err(AppError::Upstream { site: "Pixiv", message: "not found or inaccessible".into() }), 1, String::new(), String::new()).unwrap();
+        assert!(matches!(page.creator_error, Some(AppError::Upstream { .. })));
+    }
 
     #[test]
     fn query_job_titles_accept_creator_names_and_preserve_legacy_fallbacks() {

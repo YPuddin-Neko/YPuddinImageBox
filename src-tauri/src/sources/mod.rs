@@ -423,10 +423,15 @@ pub struct SearchParams {
 }
 
 impl SearchParams {
+    pub fn normalized_tags(&self) -> String {
+        if self.source == Source::Pixiv { pixiv::normalize_input(&self.tags) } else { self.tags.clone() }
+    }
+
     /// 用户输入的 tag 加上所选排序的条件。选了排序时以选项为准，输入框里手写的 order: / sort: 不再发给站点。
     pub fn tags_with_sort(&self) -> Result<String, AppError> {
-        let Some(term) = self.sort.term(self.source)? else { return Ok(self.tags.clone()) };
-        let mut words: Vec<&str> = self.tags.split_whitespace().filter(|tag| !is_sort_tag(tag)).collect();
+        let tags = self.normalized_tags();
+        let Some(term) = self.sort.term(self.source)? else { return Ok(tags) };
+        let mut words: Vec<&str> = tags.split_whitespace().filter(|tag| !is_sort_tag(tag)).collect();
         words.push(term);
         Ok(words.join(" "))
     }
@@ -437,7 +442,7 @@ impl SearchParams {
         if self.sort == Sort::Popular {
             self.tags_with_sort()
         } else {
-            Ok(self.tags.clone())
+            Ok(self.normalized_tags())
         }
     }
 }
@@ -448,7 +453,7 @@ fn is_sort_tag(tag: &str) -> bool {
     tag.starts_with("order:") || tag.starts_with("sort:")
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchPage {
     pub posts: Vec<Post>,
@@ -460,6 +465,9 @@ pub struct SearchPage {
     pub local_filter: String,
     /// 这一页里已在图库中的帖子 id。
     pub owned: Vec<u64>,
+    pub creators: Vec<pixiv::PixivCreator>,
+    pub creator_error: Option<AppError>,
+    pub artwork_error: Option<AppError>,
 }
 
 /// 翻页参数。Danbooru 按默认顺序（新到旧）时用「id 小于某值」翻页：
@@ -792,6 +800,24 @@ mod tests {
         // 计数不带排序，近期热门除外（它同时限定了时间范围）。
         assert_eq!(params(Source::Danbooru, "sky", Sort::Score).tags_for_count().unwrap(), "sky");
         assert_eq!(params(Source::Danbooru, "sky", Sort::Popular).tags_for_count().unwrap(), "sky order:rank");
+    }
+
+    #[test]
+    fn pixiv_numeric_inputs_are_explicit_before_building_new_query_plans() {
+        let params = SearchParams {
+            source: Source::Pixiv, tags: "22675109".into(), ratings: vec![Rating::General], sort: Sort::Newest, cursor: None,
+        };
+        assert_eq!(params.tags_with_sort().unwrap(), "id:22675109");
+        assert_eq!(params.tags_for_count().unwrap(), "id:22675109");
+        let subscription = filter::plan_query(params.source, &params.normalized_tags(), &params.ratings, None).unwrap();
+        assert_eq!(subscription.server_query, "id:22675109 rating:general");
+        let oldest = SearchParams { sort: Sort::Oldest, ..params.clone() };
+        assert_eq!(oldest.tags_with_sort().unwrap(), "id:22675109 order:date");
+        assert_eq!(oldest.tags_for_count().unwrap(), "id:22675109");
+        let other = SearchParams { source: Source::Danbooru, ..params };
+        assert_eq!(other.normalized_tags(), "22675109");
+        assert_eq!(other.tags_with_sort().unwrap(), "22675109");
+        assert_eq!(other.tags_for_count().unwrap(), "22675109");
     }
 
     #[test]

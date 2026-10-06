@@ -11,6 +11,7 @@ pub enum AppError {
     /// 站点自己返回的错误说明，原样显示。
     Upstream { site: &'static str, message: String },
     CredentialsMissing(&'static str),
+    PixivCreatorSignIn,
     /// 看自己的收藏要先登录这个站点。
     FavoritesSignIn(&'static str),
     Parse { site: &'static str, detail: String },
@@ -47,6 +48,9 @@ impl std::fmt::Display for AppError {
             }
             AppError::CredentialsMissing(site) => {
                 tr!("{site} 需要账号和 API Key", "{site} requires an account and an API key")
+            }
+            AppError::PixivCreatorSignIn => {
+                tr!("按画师名字搜索需要先登录 Pixiv", "Sign in to Pixiv to search by artist name")
             }
             AppError::FavoritesSignIn(site) => tr!(
                 "看 {site} 的收藏要先在「设置 → 账号」里登录 {site}",
@@ -92,7 +96,7 @@ impl AppError {
             AppError::TagLimit { .. } => "tag_limit",
             AppError::Upstream { .. } => "upstream",
             // 界面按这个 code 显示「填写账号」「登录」按钮，两种情况处理一样。
-            AppError::CredentialsMissing(_) | AppError::FavoritesSignIn(_) => "credentials_missing",
+            AppError::CredentialsMissing(_) | AppError::FavoritesSignIn(_) | AppError::PixivCreatorSignIn => "credentials_missing",
             AppError::Parse { .. } => "parse",
             AppError::Storage(_) => "storage",
             AppError::Database(_) => "database",

@@ -1719,6 +1719,21 @@ code {
   border-radius: 50%;
 }
 
+.pixiv-creators {
+  margin-bottom: 18px;
+}
+
+.creator-avatar-placeholder {
+  display: grid;
+  place-items: center;
+  background: var(--chip);
+  color: var(--fg-2);
+}
+
+.pixiv-search-notice {
+  margin-bottom: 12px;
+}
+
 .creator-info {
   display: flex;
   flex-direction: column;
