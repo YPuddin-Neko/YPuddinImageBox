@@ -15,7 +15,7 @@ import { EVENTS, type SavedPayload } from "../../lib/downloads";
 import { useTauriEvent } from "../../lib/events";
 import { formatCount } from "../../lib/format";
 import { hasMod, spaceForButton, useHotkeys } from "../../lib/hotkeys";
-import { collapsedTitle, t, tx } from "../../lib/i18n";
+import { collapsedTitle, t } from "../../lib/i18n";
 import { errorMessage, isFanboxFile, postKey, postNumber, ratingOptions, RATINGS, type Rating, type Source } from "../../lib/ipc";
 import {
   libraryDelete,
@@ -503,17 +503,7 @@ export function LibraryGrid({
           </>
         }
       >
-        <ul className="dialog-options">
-          <li>
-            {tx(deleting?.some(isFanboxFile) ? "{title}：文件移到{trash}，还能从那里找回；图库记录一起删除。" : "{title}：图片文件移到{trash}，还能从那里找回；图库记录和缩略图一起删除。", {
-              title: <b>{t("移到{trash}", { trash: trashLabel() })}</b>,
-              trash: trashLabel(),
-            })}
-          </li>
-          <li>
-            {tx("{title}：文件留在原处，只删除图库记录。", { title: <b>{t("只从图库移除")}</b> })}
-          </li>
-        </ul>
+        <p className="dialog-copy">{t("仅从图库移除时，保留本地文件。")}</p>
       </Dialog>
     </div>
   );

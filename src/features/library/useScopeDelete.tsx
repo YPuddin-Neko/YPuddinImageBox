@@ -4,7 +4,7 @@ import { Dialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { Toast, useToast } from "../../components/Toast";
 import { formatCount } from "../../lib/format";
-import { t, tx } from "../../lib/i18n";
+import { t } from "../../lib/i18n";
 import { errorMessage } from "../../lib/ipc";
 import { libraryDelete, libraryDeletePreview, type LibraryDeletePreview, type LibraryDeleteScope } from "../../lib/library";
 import { trashLabel } from "../../lib/platform";
@@ -136,22 +136,17 @@ export function useScopeDelete(onDeleted: () => void) {
       </>}
     >
       {!preview ? <p className="dialog-copy">{t("正在读取…")}</p> : shared ? <>
-        <p className="dialog-copy">{t("其中 {n} 项也出现在其他分组中，删除后会从这些分组一并移除。", { n: formatCount(preview.sharedCount) })}</p>
+        <p className="dialog-copy">{t("其中 {n} 项也会从其他分组移除。", { n: formatCount(preview.sharedCount) })}</p>
         <p className="dialog-copy scope-delete-names">{t("受影响的分组：{names}", { names: preview.otherGroups.join(t("、::list")) })}</p>
         {preview.otherGroupCount > preview.otherGroups.length && <p className="dialog-copy">{t("另有 {n} 个分组。", { n: formatCount(preview.otherGroupCount - preview.otherGroups.length) })}</p>}
         <p className="dialog-copy">{t(pending?.keepFiles
-          ? "将从图库移除「{name}」中的 {n} 项，文件留在原处。"
-          : "将把「{name}」中的 {n} 项移到{trash}，并删除图库记录。", {
+          ? "「{name}」共 {n} 项，保留本地文件。"
+          : "「{name}」共 {n} 项，移到{trash}。", {
           name: pending?.title ?? "", n: formatCount(preview.posts.length), trash: trashLabel(),
         })}</p>
       </> : <>
         <p className="dialog-copy">{t("共 {n} 项", { n: formatCount(preview.posts.length) })}</p>
-        <ul className="dialog-options">
-          <li>{tx("{title}：文件移到{trash}，还能从那里找回；图库记录一起删除。", {
-            title: <b>{t("移到{trash}", { trash: trashLabel() })}</b>, trash: trashLabel(),
-          })}</li>
-          <li>{tx("{title}：文件留在原处，只删除图库记录。", { title: <b>{t("只从图库移除")}</b> })}</li>
-        </ul>
+        <p className="dialog-copy">{t("仅从图库移除时，保留本地文件。")}</p>
       </>}
     </Dialog>
   </>;
