@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="design/icon/app-icon-macos.png" width="200" alt="YPuddinImageBox">
+<img src="assets/icons/app-icon-macos.png" width="200" alt="YPuddinImageBox">
 
 <h1>YPuddinImageBox</h1>
 

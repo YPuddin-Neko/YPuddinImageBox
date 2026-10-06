@@ -1,6 +1,6 @@
 # 开发备忘
 
-安装、启动和构建见 [README](../README.md#开发)，界面设计稿和图标原图在 `design/`。
+安装、启动和构建见 [README](../README.md#开发)，图标原图在 `assets/icons/`。
 
 ## 前端回归测试
 
@@ -34,11 +34,11 @@ cargo test --release --lib thumbs::tests::speed -- --ignored --nocapture   # 缩
 
 ## 图标
 
-原图放在 `design/icon/`：`app-icon.png` 铺满画布，用于 Windows；`app-icon-macos.png` 按 macOS 图标规范四周留白并带投影。换图后重新生成：
+原图放在 `assets/icons/`：`app-icon.png` 铺满画布，用于 Windows；`app-icon-macos.png` 按 macOS 图标规范四周留白并带投影。换图后重新生成：
 
 ```bash
-pnpm tauri icon design/icon/app-icon.png -o /tmp/ibx-icons
-pnpm tauri icon design/icon/app-icon-macos.png -o /tmp/ibx-icons-mac
+pnpm tauri icon assets/icons/app-icon.png -o /tmp/ibx-icons
+pnpm tauri icon assets/icons/app-icon-macos.png -o /tmp/ibx-icons-mac
 ```
 
 把 `/tmp/ibx-icons` 中与 `src-tauri/icons/` 同名的文件复制过去（不需要 `android/`、`ios/`），`icon.icns` 改用 `/tmp/ibx-icons-mac` 里的。界面左上角的 `src/assets/app-icon.png` 是 128px 的缩小版。
