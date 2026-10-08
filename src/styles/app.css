@@ -2813,12 +2813,21 @@ kbd {
   height: 100%;
 }
 
+.x-capture-page > .page-head,
+.x-capture-page > .page-block {
+  width: auto;
+  max-width: none;
+  margin-left: 20px;
+  margin-right: 20px;
+}
+
 .x-capture-results {
   padding: 4px 20px 28px;
 }
 
 .x-capture-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
   margin-top: 20px;

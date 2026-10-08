@@ -504,7 +504,7 @@
   "例如 artist 或 @artist": "For example, artist or @artist",
   "开始采集": "Start capture",
   "关闭采集窗口": "Close capture window",
-  "采集窗口会使用自己的登录状态，登录 X 后打开用户的 Media 页面；只收集图片，视频暂不加入图库。": "The capture window keeps its own sign-in state and opens the user's Media page on X. Images are collected; videos aren't added yet.",
+  "采集窗口使用独立登录状态。切到图片视图后，点击「开始自动下拉」；只收集图片，视频暂不加入图库。": "The capture window has its own sign-in state. Switch to photos, then click \"Start auto-scroll\". Only images are collected; videos aren't added yet.",
   "X 媒体窗口已打开，页面滚动时会自动收集图片": "The X media window is open. Images are collected as the page scrolls.",
   "已收集 {n} 张图片": "Collected {n} {n|image|images}",
   "还没有收集到图片": "No images collected yet",

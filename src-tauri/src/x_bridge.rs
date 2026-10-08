@@ -17,10 +17,30 @@ use crate::sources::{self, Post, Source};
 pub const WINDOW: &str = "x-capture";
 
 /// 采集窗口这次打开是为了采什么；换目标时（例如收藏页打开喜欢）窗口不关，只换这里。
-static CAPTURE: Mutex<Option<Capture>> = Mutex::new(None);
+#[derive(Clone)]
+struct CaptureSession {
+    capture: Capture,
+    page: String,
+}
 
-pub fn set_capture(capture: Capture) {
-    *CAPTURE.lock().unwrap_or_else(PoisonError::into_inner) = Some(capture);
+static CAPTURE: Mutex<Option<CaptureSession>> = Mutex::new(None);
+
+pub fn set_capture(capture: Capture, page: &str) {
+    *CAPTURE.lock().unwrap_or_else(PoisonError::into_inner) = Some(CaptureSession { capture, page: page.to_string() });
+}
+
+pub fn configure_window<R: Runtime>(window: &WebviewWindow<R>) {
+    let session = CAPTURE.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let Some(session) = session else { return };
+    let config = serde_json::json!({
+        "page": session.page,
+        "start": tr!("开始自动下拉", "Start auto-scroll"),
+        "pause": tr!("暂停自动下拉", "Pause auto-scroll"),
+    });
+    let script = format!("window.__IMAGEBOX_X_CAPTURE__?.configure({config});");
+    if let Err(err) = window.eval(&script) {
+        log::debug!("X 采集窗口控制未就绪：{err}");
+    }
 }
 
 /// X 登录页要用到的第三方页面：Google、Apple 登录（按钮本身就是 accounts.google.com 的框架），
@@ -77,7 +97,7 @@ pub async fn bridge_response<R: Runtime>(
         )));
     }
     let query = payload.path.rsplit('/').next().unwrap_or_default();
-    let capture = CAPTURE.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let capture = CAPTURE.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|session| session.capture.clone());
     let Some(capture) = capture.filter(|capture| capture.accepts(&payload.page)) else {
         log::debug!("X 采集：{} 不是这次要采的页面，跳过 {query}", payload.page);
         return Ok(());
@@ -106,63 +126,4 @@ pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// 2026 年 9 月 X 换了新网页（Relay）：请求地址是 `api.x.com/graphql/{id}/{查询名}`，查询名也换了一套，
 /// 而且 fetch 传进来的是 URL 对象不是字符串。所以不按查询名挑，只看是不是 GraphQL、响应里有没有图片地址，
 /// 归到哪里由 Rust 按采集窗口停在哪个页面决定。
-pub const INIT_SCRIPT: &str = r#"
-(() => {
-  if (!/^(https?:\/\/)(x\.com|[^/]+\.x\.com|twitter\.com|[^/]+\.twitter\.com)\//.test(location.href)) return;
-  const graphql = /\/graphql\/[^/]+\/[^/]+$/;
-  const urlOf = (input) => {
-    try {
-      return new URL(input instanceof Request ? input.url : String(input), location.href);
-    } catch (_) {
-      return null;
-    }
-  };
-  const sent = new Set();
-  const send = (url, body) => {
-    try {
-      if (!url || !graphql.test(url.pathname) || !body || body.indexOf('media_url_https') < 0) return;
-      const key = url.pathname + ':' + body.length + ':' + body.slice(0, 32);
-      if (sent.has(key)) return;
-      sent.add(key);
-      if (sent.size > 300) sent.delete(sent.values().next().value);
-      const invoke = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
-      if (typeof invoke === 'function') {
-        invoke('plugin:x|bridge_response', { payload: { path: url.pathname, page: location.pathname, body } }).catch(() => {});
-      }
-    } catch (_) {}
-  };
-
-  const originalOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url) {
-    const request = this;
-    const parsed = urlOf(url);
-    if (parsed && graphql.test(parsed.pathname)) {
-      request.addEventListener('load', () => {
-        if (request.status === 200 && typeof request.responseText === 'string') send(parsed, request.responseText);
-      });
-    }
-    return originalOpen.apply(this, arguments);
-  };
-
-  const originalFetch = window.fetch;
-  window.fetch = async function(input) {
-    const response = await originalFetch.apply(this, arguments);
-    const parsed = urlOf(input);
-    if (parsed && graphql.test(parsed.pathname) && response.ok) {
-      response.clone().text().then(body => send(parsed, body)).catch(() => {});
-    }
-    return response;
-  };
-
-  let lastHeight = 0;
-  let stable = 0;
-  const scrollTimer = setInterval(() => {
-    if (document.visibilityState === 'hidden') return;
-    const height = document.documentElement.scrollHeight;
-    window.scrollTo(0, height);
-    stable = height === lastHeight ? stable + 1 : 0;
-    lastHeight = height;
-    if (stable >= 12) clearInterval(scrollTimer);
-  }, 1500);
-})();
-"#;
+pub const INIT_SCRIPT: &str = include_str!("x_capture.js");

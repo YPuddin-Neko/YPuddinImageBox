@@ -1266,8 +1266,9 @@ pub async fn x_capture_open(
         XTarget::Media => Capture::Media(username.trim().trim_start_matches('@').to_string()),
         XTarget::Likes => Capture::Likes,
         XTarget::Bookmarks => Capture::Bookmarks,
-    });
+    }, url.path());
     if let Some(window) = app.get_webview_window(x_bridge::WINDOW) {
+        x_bridge::configure_window(&window);
         let _ = window.set_focus();
         window.navigate(url).map_err(|err| AppError::Internal(err.to_string()))?;
         return Ok(PopupOpen { proxy_applied: false, proxy_fallback: false });
@@ -1277,6 +1278,13 @@ pub async fn x_capture_open(
             .title(tr!("X 媒体采集", "X media capture"))
             .inner_size(1100.0, 760.0)
             .initialization_script(x_bridge::INIT_SCRIPT)
+            .on_page_load(|window, payload| {
+                if payload.event() == tauri::webview::PageLoadEvent::Finished
+                    && payload.url().host_str().is_some_and(|host| Source::for_host(host) == Some(Source::X))
+                {
+                    x_bridge::configure_window(&window);
+                }
+            })
             .on_navigation(x_bridge::allows_navigation)
             // 用 Google、Apple 登录时弹出的登录窗口；不放行的话点了按钮没有反应。
             .on_new_window(|url, _| {

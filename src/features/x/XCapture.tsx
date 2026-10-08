@@ -116,7 +116,7 @@ export function XCapture({ active }: { active: boolean }) {
         </form>
 
         <p className="x-capture-help page-block">
-          {t("采集窗口会使用自己的登录状态，登录 X 后打开用户的 Media 页面；只收集图片，视频暂不加入图库。")}
+          {t("采集窗口使用独立登录状态。切到图片视图后，点击「开始自动下拉」；只收集图片，视频暂不加入图库。")}
         </p>
 
         {posts.length > 0 ? (
