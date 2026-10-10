@@ -6,6 +6,7 @@ use crate::i18n::tr;
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     Network(#[from] reqwest::Error),
+    NotFound { site: &'static str, message: Option<String> },
     Http { site: &'static str, status: u16 },
     TagLimit { site: &'static str, limit: u32 },
     /// 站点自己返回的错误说明，原样显示。
@@ -33,6 +34,8 @@ impl std::fmt::Display for AppError {
                 let detail = crate::net::network_detail(err);
                 tr!("网络请求失败：{detail}", "Network request failed: {detail}")
             }
+            AppError::NotFound { site, message: Some(message) } => tr!("{site}：{message}", "{site}: {message}"),
+            AppError::NotFound { site, message: None } => tr!("{site} 返回 HTTP 404", "{site} returned HTTP 404"),
             AppError::Http { site, status } => tr!("{site} 返回 HTTP {status}", "{site} returned HTTP {status}"),
             AppError::TagLimit { site, limit } => tr!(
                 "{site} 一次最多搜索 {limit} 个 tag，排除项和 order: 也计入",
@@ -86,13 +89,14 @@ impl std::fmt::Display for AppError {
 impl AppError {
     /// 网络或站点临时出了问题，过一会儿再试可能就好了；账号、条件不对的错误再试也没用。
     pub fn is_transient(&self) -> bool {
-        matches!(self, AppError::Network(_) | AppError::Http { .. } | AppError::Parse { .. } | AppError::Challenged(_))
+        matches!(self, AppError::Network(_) | AppError::Http { status: 408 | 425 | 429 | 500..=599, .. } | AppError::Parse { .. } | AppError::Challenged(_))
     }
 
     fn code(&self) -> &'static str {
         match self {
             AppError::Network(_) => "network",
             AppError::Http { .. } => "http",
+            AppError::NotFound { .. } => "not_found",
             AppError::TagLimit { .. } => "tag_limit",
             AppError::Upstream { .. } => "upstream",
             // 界面按这个 code 显示「填写账号」「登录」按钮，两种情况处理一样。

@@ -46,7 +46,7 @@ function safeName(name: string): string {
 
 function render(template: string, values: Record<string, string>): string | null {
   const rendered = template.replace(/\{([^{}]+)\}/g, (token, name: string) =>
-    values[name] === undefined ? token : safeName(values[name]));
+    Object.prototype.hasOwnProperty.call(values, name) ? safeName(values[name]) : token);
   return /[{}]/.test(rendered) ? null : safeName(rendered.replace(/^[-_ ]+|[-_ ]+$/g, ""));
 }
 

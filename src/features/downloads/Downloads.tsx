@@ -123,7 +123,7 @@ function NoteList({ source, notes }: { source: Source; notes: Notes | undefined 
     <ul className="job-notes">
       {notes.map((note) => (
         <li key={`${note.postId}-${note.status}`}>
-          <span className="mono">#{postNumber({ source, id: note.postId })}</span>
+          <span className="mono">#{postNumber({ source, id: note.postId, postUrl: note.postUrl ?? undefined, fileUrl: note.fileUrl, downloadIndex: note.downloadIndex })}</span>
           <span className={`note-status ${note.status}`}>{note.status === "failed" ? t("失败") : t("跳过")}</span>
           <span>{note.note ?? "—"}</span>
         </li>

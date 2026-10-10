@@ -28,6 +28,14 @@ test("incomplete or unsafe templates do not produce a misleading path preview", 
   }
 });
 
+test("prototype names are unknown variables in every template field", () => {
+  for (const token of ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) {
+    for (const field of ["folderTemplate", "imageTemplate", "attachmentTemplate"]) {
+      assert.equal(fanboxDownloadExamples(settings({ [field]: `{${token}}` }), "/saved"), null);
+    }
+  }
+});
+
 test("previews use the downloader's safe punctuation and reserved filename rules", () => {
   const result = fanboxDownloadExamples(settings({ folderTemplate: "{user}/ sketches: {title}?", imageTemplate: "CON", attachmentTemplate: "{name}~" }), "/Pictures/fanbox");
   assert.equal(result.image, "/Pictures/fanbox/Artist/sketches： October sketches？/_CON.jpg");

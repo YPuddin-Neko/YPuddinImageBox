@@ -80,6 +80,7 @@ pub type EventSink = Arc<dyn Fn(Event) + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stop {
+    Yield,
     Pause,
     Cancel,
     Remove,
@@ -393,6 +394,7 @@ impl Downloader {
                 Ok(pending) if pending > 0 => self.library.transition(id, &running, JobStatus::Queued, None).await,
                 _ => self.library.transition(id, &running, JobStatus::Done, None).await,
             },
+            Ok(Some(Stop::Yield)) => self.library.transition(id, &running, JobStatus::Queued, None).await,
             Ok(Some(Stop::Pause)) => self.library.transition(id, &running, JobStatus::Paused, None).await,
             Ok(Some(Stop::Cancel)) => self.library.transition(id, &running, JobStatus::Canceled, None).await,
             Ok(Some(Stop::Remove)) => {
@@ -430,6 +432,7 @@ impl Downloader {
         mut job: JobInfo,
         mut stop: watch::Receiver<Option<Stop>>,
     ) -> Result<Option<Stop>, AppError> {
+        let mut fetched_fanbox_batch = false;
         let mut queue: VecDeque<JobItem> = VecDeque::new();
         let mut last_seq = -1;
         let mut tasks: JoinSet<Outcome> = JoinSet::new();
@@ -451,14 +454,17 @@ impl Downloader {
                 queue.extend(items);
             }
 
-            if queue.is_empty() && job.kind == JobKind::Query {
+            if queue.is_empty() && job.kind == JobKind::Query && (!fetched_fanbox_batch || tasks.is_empty()) {
                 if let Some(cursor) = job.cursor.clone() {
+                    if fetched_fanbox_batch && tasks.is_empty() { return Ok(Some(Stop::Yield)); }
                     let fetched = tokio::select! {
                         biased;
                         _ = stop.changed() => continue,
                         fetched = self.fetch_page(&job, &cursor) => fetched?,
                     };
                     job = fetched;
+                    fetched_fanbox_batch = job.source == Source::Fanbox
+                        && (job.subscription_id.is_some() || cursor.starts_with("fanbox:"));
                     self.emit(Event::Job(job.clone()));
                     continue;
                 }
@@ -507,6 +513,9 @@ impl Downloader {
 
     /// 按条件下载：取下一页并追加到任务里，返回更新后的任务。
     async fn fetch_page(&self, job: &JobInfo, cursor: &str) -> Result<JobInfo, AppError> {
+        if job.source == Source::Fanbox && (job.subscription_id.is_some() || cursor.starts_with("fanbox:")) {
+            return self.fetch_fanbox_subscription(job, cursor).await;
+        }
         let query = job.query.as_deref().unwrap_or_default();
         let page = Page::parse(cursor).unwrap_or(Page::Number(1));
         let limit = job.source.max_page_size();
@@ -517,6 +526,15 @@ impl Downloader {
         // 未登录时站点会从结果里隐去部分帖子，一页不满不代表翻完了，取到空页才算。
         // 按 id 翻页时要靠这一页的 id 定下一页，一张都没留下就只能停；按页码翻的接着翻下一页。
         let mut exhausted = fetched == 0 || (bounds.is_none() && !matches!(page, Page::Number(_)));
+        if job.source == Source::Pixiv {
+            if let Some(sub_id) = job.subscription_id {
+                if let Some(since) = self.library.subscription_min_posted_at(sub_id).await? {
+                    posts.retain(|post| post.created_at.as_deref()
+                        .and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok())
+                        .is_some_and(|date| date.timestamp_millis() >= since));
+                }
+            }
+        }
         // 翻页位置按站点返回的整页算，本地筛选只决定哪些帖子进任务。
         if let Some(filter) = job.local_filter.as_deref().map(LocalFilter::parse) {
             posts.retain(|post| filter.matches(post));
@@ -530,6 +548,36 @@ impl Downloader {
         }
         let next = (!exhausted).then(|| page.next(job.source, query, bounds).to_param());
         Ok(self.library.append_items(job.id, &posts, next, bounds.map(|(_, max)| max)).await?)
+    }
+
+    async fn fetch_fanbox_subscription(&self, job: &JobInfo, cursor: &str) -> Result<JobInfo, AppError> {
+        let sub = match job.subscription_id {
+            Some(id) => self.library.subscription(id).await?,
+            None => None,
+        };
+        let mut state = match &sub {
+            Some(sub) => self.library.fanbox_subscription_state(sub.id).await?
+                .unwrap_or_else(|| fanbox::SubscriptionState::legacy(sub.last_seen_id as u64, sub.created_at)),
+            None => fanbox::SubscriptionState::default(),
+        };
+        let accounts = self.accounts.get();
+        let query = job.query.as_deref().unwrap_or_default();
+        let mut work = if let Some(ids) = fanbox_cursor_ids(cursor)? {
+            ids
+        } else if sub.is_some() {
+            fanbox::subscription_discover(&self.net, accounts.fanbox.as_ref(), query, &mut state).await?
+        } else {
+            Vec::new()
+        };
+        let remaining = work.split_off(work.len().min(fanbox::PAGE_SIZE as usize));
+        let mut posts = fanbox::subscription_batch(&self.net, accounts.fanbox.as_ref(), query, &mut state, &work).await?;
+        if let Some(filter) = job.local_filter.as_deref().map(LocalFilter::parse) {
+            posts.retain(|post| filter.matches(post));
+        }
+        let next = if remaining.is_empty() { None } else {
+            Some(format!("fanbox:{}", serde_json::to_string(&remaining).map_err(|e| AppError::Internal(e.to_string()))?))
+        };
+        Ok(self.library.append_items_with_fanbox_state(job.id, &posts, next, Some(state.watermark()), sub.as_ref().map(|_| &state)).await?)
     }
 
     // ---------- 单张图 ----------
@@ -581,10 +629,20 @@ impl Downloader {
 
     /// 下载一个文件（其他站点的一个帖子，或 Pixiv 作品的一页）。
     async fn save_file(&self, post: &Post) -> Result<Outcome, AppError> {
+        if post.source == Source::Fanbox {
+            for path in self.library.fanbox_resource_paths(post).await? {
+                if exists(&path).await { return Ok(Outcome::Skipped(note_owned())); }
+            }
+        }
+        let migrated;
+        let post = if post.source == Source::Fanbox && post.id < (1u64 << 62) && !fanbox::is_cover(post) && self.library.resource_conflicts(post).await? {
+            migrated = Post { id: fanbox::legacy_resource_id(post)?, download_index: Some(fanbox::display_index(post)), ..post.clone() };
+            &migrated
+        } else { post };
         if self.library.resource_conflicts(post).await? {
             return Ok(Outcome::Failed(tr!(
-                "这篇投稿的封面与已下载的正文编号冲突",
-                "This post's cover ID conflicts with a downloaded content image"
+                "这项资源的编号与已下载文件冲突",
+                "This resource ID conflicts with a downloaded file"
             )));
         }
         if let Some(path) = self.library.local_path(post.source, post.id).await? {
@@ -608,9 +666,11 @@ impl Downloader {
         }
 
         let gate = self.images_gate.read().await;
-        let root = read(&self.storage).path(StorageKind::Images);
+        let storage = read(&self.storage).clone();
+        let root = storage.path(StorageKind::Images);
         let target = if post.source == Source::Fanbox {
             let settings = self.fanbox_settings.read().unwrap_or_else(PoisonError::into_inner);
+            settings.validate_storage(&storage)?;
             fanbox_target_path(&root, post, &ext, &chrono::Local, &settings)
         } else {
             target_path(&root, post, &ext)
@@ -644,6 +704,12 @@ impl Downloader {
         }
         Ok(Outcome::Saved)
     }
+}
+
+fn fanbox_cursor_ids(cursor: &str) -> Result<Option<Vec<u64>>, AppError> {
+    cursor.strip_prefix("fanbox:")
+        .map(|serialized| serde_json::from_str(serialized).map_err(|e| AppError::Internal(e.to_string())))
+        .transpose()
 }
 
 /// 只读文件头得到宽高，不解码整张图。
@@ -707,7 +773,7 @@ pub fn target_path(root: &Path, post: &Post, ext: &str) -> PathBuf {
 fn fanbox_target_path(
     root: &Path, post: &Post, ext: &str, timezone: &impl chrono::TimeZone, settings: &FanboxDownloadSettings,
 ) -> PathBuf {
-    let (id, index) = fanbox::split_id(post.id);
+    let id = fanbox::post_id(post);
     let mut dir = settings.directory.clone().unwrap_or_else(|| root.join("fanbox"));
     let date = post.created_at.as_deref()
         .and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok())
@@ -718,7 +784,7 @@ fn fanbox_target_path(
         url.path_segments()?.next()?.strip_prefix('@').map(str::to_string)
     }).unwrap_or_default();
     let user = post.tags.artist.first().map(String::as_str).filter(|name| !name.trim().is_empty()).unwrap_or(&creator);
-    let filename_index = post.download_index.unwrap_or_else(|| if fanbox::is_cover(post) { 0 } else { index as u32 + 1 });
+    let filename_index = fanbox::display_index(post);
     let filename_index = format!("{filename_index:03}");
     let url_name = Url::parse(post.file_url.as_deref().unwrap_or_default()).ok()
         .and_then(|url| url.path_segments()?.next_back().map(|s| percent_encoding::percent_decode_str(s).decode_utf8_lossy().into_owned()));
@@ -1150,6 +1216,56 @@ mod tests {
         h.library.save_post(&p, &path, 1).await.unwrap();
         assert!(matches!(h.downloader.save(&p).await.unwrap(), Outcome::Skipped(_)));
         assert_eq!(h.library.local_path(p.source, p.id).await.unwrap(), Some(path));
+    }
+
+    #[tokio::test]
+    async fn detached_fanbox_subscription_jobs_keep_bounded_cursors_and_finish_without_rescanning() {
+        for status in [JobStatus::Queued, JobStatus::Paused] {
+            let h = harness().await;
+            let sub = h.library.create_subscription(crate::library::NewSubscription {
+                source: Source::Fanbox, tags: "creator:artist", ratings: &[], query: "creator:artist",
+                interval_minutes: 60, last_seen_id: 42_999, local_filter: None,
+            }).await.unwrap();
+            let job = h.library.start_subscription_check(&sub).await.unwrap();
+            h.library.append_items(job.id, &[], Some("fanbox:[49,50]".into()), Some(50_999)).await.unwrap();
+            if status == JobStatus::Paused {
+                h.library.transition(job.id, &[JobStatus::Queued], status, None).await.unwrap();
+            }
+            h.library.delete_subscription(sub.id).await.unwrap();
+            let detached = h.library.job(job.id).await.unwrap().unwrap();
+            assert_eq!(detached.subscription_id, None);
+            assert_eq!(detached.status, status);
+            assert_eq!(fanbox_cursor_ids(detached.cursor.as_deref().unwrap()).unwrap(), Some(vec![49, 50]));
+            // 游标损坏时保留错误，不改为作者第一页。
+            assert!(h.downloader.fetch_page(&detached, "fanbox:invalid").await.is_err());
+            // 剩余投稿处理完后的空尾游标直接结束，不发起索引请求。
+            let done = h.downloader.fetch_page(&detached, "fanbox:[]").await.unwrap();
+            assert!(done.cursor.is_none());
+            assert_eq!(done.total, Some(0));
+            assert!(h.library.fanbox_subscription_state(sub.id).await.unwrap().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn fanbox_stable_resources_reuse_legacy_files_without_confusing_inserted_images() {
+        let h = harness().await;
+        let mut original = post(42_000, "png", Some("https://downloads.fanbox.cc/images/post/42/old.png"));
+        original.source = Source::Fanbox;
+        original.post_url = "https://www.fanbox.cc/@artist/posts/42".into();
+        let path = h._dir.path().join("old.png");
+        tokio::fs::write(&path, b"previous image").await.unwrap();
+        h.library.save_post(&original, &path, 1).await.unwrap();
+        let moved = Post { id: (1u64 << 62) + 42, download_index: Some(2), ..original.clone() };
+        assert!(matches!(h.downloader.save(&moved).await.unwrap(), Outcome::Skipped(_)));
+        let inserted = Post { id: (1u64 << 62) + 43, file_url: Some("https://downloads.fanbox.cc/images/post/42/new.png".into()), ..original.clone() };
+        assert!(h.library.fanbox_resource_paths(&inserted).await.unwrap().is_empty());
+        assert!(!h.library.owned(&[inserted.clone()]).await.unwrap().contains(&(Source::Fanbox, inserted.id)));
+        assert!(h.library.owned(&[moved.clone()]).await.unwrap().contains(&(Source::Fanbox, moved.id)));
+        // 新版先完成时，旧队列同一资源仍按地址跳过。
+        h.library.remove_posts(&[(Source::Fanbox, original.id)]).await.unwrap();
+        h.library.save_post(&moved, &path, 2).await.unwrap();
+        assert!(matches!(h.downloader.save(&original).await.unwrap(), Outcome::Skipped(_)));
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"previous image");
     }
 
     #[tokio::test]

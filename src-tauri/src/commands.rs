@@ -120,7 +120,7 @@ async fn search_site(state: &AppState, params: &SearchParams, page_size: u32) ->
 
 #[tauri::command]
 pub async fn search_remote(state: State<'_, AppState>, params: SearchParams) -> Result<SearchPage, AppError> {
-    let creators = (params.source == Source::Pixiv).then(|| pixiv::creator_query(&params.tags)).flatten();
+    let creators = (params.source == Source::Pixiv && params.pixiv_input).then(|| pixiv::creator_query(&params.tags)).flatten();
     let mut result = if let Some(query) = creators {
         let page = params.cursor.as_deref().and_then(|cursor| cursor.parse().ok()).unwrap_or(1u32).max(1);
         let accounts = state.accounts.get();
@@ -154,7 +154,7 @@ fn merge_pixiv_search(
     query: String,
     local_filter: String,
 ) -> Result<SearchPage, AppError> {
-    let missing = |error: &AppError| matches!(error, AppError::Http { site: "Pixiv", status: 404 });
+    let missing = |error: &AppError| matches!(error, AppError::NotFound { site: "Pixiv", .. } | AppError::Http { site: "Pixiv", status: 404 });
     let artworks = match artworks {
         Err(error) if missing(&error) => Ok(SiteResults {
             posts: Vec::new(), next: None, query: query.clone(), local_filter: local_filter.clone(), reached: None,
@@ -198,6 +198,8 @@ fn merge_pixiv_search(
 #[serde(rename_all = "camelCase")]
 pub struct SitesSearchParams {
     pub sources: Vec<Source>,
+    #[serde(default)]
+    pub pixiv_input: bool,
     #[serde(default)]
     pub tags: String,
     #[serde(default)]
@@ -275,6 +277,7 @@ async fn combined_search(state: &AppState, params: SitesSearchParams) -> Result<
         .into_iter()
         .map(|site| SearchParams {
             source: site.source,
+            pixiv_input: params.pixiv_input,
             tags: params.tags.clone(),
             ratings: params.ratings.clone(),
             sort: params.sort,
@@ -439,8 +442,8 @@ pub async fn clear_finished_jobs(state: State<'_, AppState>) -> Result<(), AppEr
 }
 
 #[tauri::command]
-pub async fn library_open_file(app: AppHandle, state: State<'_, AppState>, source: Source, id: u64) -> Result<(), AppError> {
-    let path = state.library.local_path(source, id).await?
+pub async fn library_open_file(app: AppHandle, state: State<'_, AppState>, source: Source, id: crate::post_id::PostId) -> Result<(), AppError> {
+    let path = state.library.local_path(source, id.0).await?
         .ok_or_else(|| AppError::InvalidInput(tr!("图库里没有这个文件", "This file is not in the library")))?;
     if !path.is_file() {
         return Err(AppError::InvalidInput(tr!("文件已移动或删除", "The file was moved or deleted")));
@@ -566,13 +569,14 @@ pub async fn library_import(
     if paths.is_empty() {
         return Err(AppError::InvalidInput(tr!("没有选择图片", "No images selected")));
     }
+    let _gate = state.images_gate.read().await;
     let root = state.storage().path(StorageKind::Images);
     let (files, skipped) = blocking(move || import_files(paths.into_iter().map(PathBuf::from).collect(), root, classify)).await?;
     let mut imported = 0;
     for file in files {
         let id = file.post.id;
         state.library.save_post(&file.post, &file.path, crate::library::now_ms()).await?;
-        let _ = app.emit("library-changed", serde_json::json!({ "source": "custom", "postId": id }));
+        let _ = app.emit("library-changed", PostRef { source: Source::Custom, post_id: id });
         imported += 1;
     }
     Ok(ImportOutcome { imported, skipped })
@@ -596,12 +600,14 @@ pub async fn library_delete_preview(
 #[serde(rename_all = "camelCase")]
 pub struct PostRef {
     source: Source,
+    #[serde(with = "crate::post_id")]
     post_id: u64,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteFailure {
+    #[serde(with = "crate::post_id")]
     post_id: u64,
     message: String,
 }
@@ -611,6 +617,19 @@ pub struct DeleteFailure {
 pub struct DeleteOutcome {
     removed: Vec<PostRef>,
     failed: Vec<DeleteFailure>,
+}
+
+async fn resolve_delete_targets(library: &crate::library::Library, posts: Vec<PostRef>) -> Result<(Vec<(PostRef, PathBuf)>, Vec<DeleteFailure>), AppError> {
+    let mut targets = Vec::with_capacity(posts.len());
+    let mut failed = Vec::new();
+    for post in posts {
+        if let Some(path) = library.local_path(post.source, post.post_id).await? {
+            targets.push((post, path));
+        } else {
+            failed.push(DeleteFailure { post_id: post.post_id, message: tr!("图库里没有这个文件", "This file is not in the library") });
+        }
+    }
+    Ok((targets, failed))
 }
 
 /// 从图库删除。`keep_files` 为 false 时先把图片移到废纸篓（回收站），移不走的保留记录并报告原因；
@@ -624,16 +643,11 @@ pub async fn library_delete(
 ) -> Result<DeleteOutcome, AppError> {
     // 和移动图片位置互斥，免得删到一半文件被搬走。
     let _gate = state.images_gate.read().await;
-    let mut targets = Vec::with_capacity(posts.len());
-    for post in posts {
-        if let Some(path) = state.library.local_path(post.source, post.post_id).await? {
-            targets.push((post, path));
-        }
-    }
+    let (targets, failures) = resolve_delete_targets(&state.library, posts).await?;
     let cache = state.storage().path(StorageKind::Cache);
     let (removed, failed) = blocking(move || {
         let mut removed = Vec::new();
-        let mut failed = Vec::new();
+        let mut failed = failures;
         for (post, path) in targets {
             let result = if keep_files { Ok(()) } else { storage::move_to_trash(&path) };
             match result {
@@ -687,6 +701,8 @@ pub async fn saved_searches_list(state: State<'_, AppState>) -> Result<Vec<Saved
 pub struct SavedSearchParams {
     pub sources: Vec<Source>,
     #[serde(default)]
+    pub pixiv_input: bool,
+    #[serde(default)]
     pub tags: String,
     #[serde(default)]
     pub ratings: Vec<Rating>,
@@ -706,7 +722,7 @@ pub async fn saved_search_add(
     for source in &params.sources {
         params.sort.term(*source)?;
     }
-    state.library.add_saved_search(&params.sources, &params.tags, &params.ratings, params.sort).await?;
+    state.library.add_saved_search_input(&params.sources, &params.tags, &params.ratings, params.sort, params.pixiv_input).await?;
     Ok(state.library.saved_searches().await?)
 }
 
@@ -729,7 +745,8 @@ pub async fn subscription_preview(
     state: State<'_, AppState>,
     params: SearchParams,
 ) -> Result<SubscriptionPreview, AppError> {
-    let plan = filter::plan_query(params.source, &params.normalized_tags(), &params.ratings, tag_limit(&state, params.source))?;
+    if params.source == Source::Pixiv { pixiv::validate_subscription(&params.tags)?; }
+    let plan = filter::plan_query(params.source, &params.tags, &params.ratings, tag_limit(&state, params.source))?;
     Ok(SubscriptionPreview { query: plan.server_query, local_filter: plan.local.to_query() })
 }
 
@@ -743,7 +760,8 @@ pub async fn subscription_create(
     download_existing: bool,
     max_posts: Option<u32>,
 ) -> Result<Subscription, AppError> {
-    let tags = params.normalized_tags();
+    if params.source == Source::Pixiv { pixiv::validate_subscription(&params.tags)?; }
+    let tags = params.tags.clone();
     let plan = filter::plan_query(params.source, &tags, &params.ratings, tag_limit(&state, params.source))?;
     let query = plan.server_query.clone();
     if sources::has_custom_order(&query) {
@@ -757,11 +775,18 @@ pub async fn subscription_create(
     }
     // 顺便验证条件能搜（tag 数量、账号），出错直接提示，不建订阅。
     let accounts = state.accounts.get();
-    let (posts, _) = sources::fetch(&state.net, &accounts, params.source, &query, &Page::Number(1), 1).await?;
-    let newest = posts.iter().map(|post| post.id as i64).max().unwrap_or(0);
+    let fanbox_state = if params.source == Source::Fanbox {
+        Some(fanbox::subscription_baseline(&state.net, accounts.fanbox.as_ref(), &query).await?)
+    } else { None };
+    let newest = if let Some(baseline) = &fanbox_state {
+        baseline.watermark() as i64
+    } else {
+        let (posts, _) = sources::fetch(&state.net, &accounts, params.source, &query, &Page::Number(1), 1).await?;
+        posts.iter().map(|post| post.id as i64).max().unwrap_or(0)
+    };
     let sub = state
         .library
-        .create_subscription(NewSubscription {
+        .create_subscription_with_fanbox_state(NewSubscription {
             source: params.source,
             tags: &params.tags.split_whitespace().collect::<Vec<_>>().join(" "),
             ratings: &params.ratings,
@@ -769,7 +794,7 @@ pub async fn subscription_create(
             interval_minutes: i64::from(interval_minutes),
             last_seen_id: newest,
             local_filter: Some(&plan.local.to_query()),
-        })
+        }, fanbox_state.as_ref())
         .await?;
     if download_existing {
         let full = sources::build_query(params.source, &tags, &params.ratings);
@@ -1454,7 +1479,7 @@ pub fn proxy_save(app: AppHandle, state: State<'_, AppState>, proxy: ProxySettin
     state.net.apply_proxy(&proxy)?;
     state.update_settings(|settings| settings.proxy = proxy.clone())?;
     // WebView 的代理只能在创建窗口时设置；关掉弹出窗口，下次打开时用新代理。
-    for label in [LoginSite::PIXIV.window, LoginSite::KEMONO.window, x_bridge::WINDOW] {
+    for label in [LoginSite::PIXIV.window, LoginSite::KEMONO.window, LoginSite::FANBOX.window, x_bridge::WINDOW] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.close();
         }
@@ -1493,14 +1518,15 @@ pub fn fanbox_download_info(state: State<'_, AppState>) -> FanboxDownloadInfo {
 }
 
 fn save_fanbox_download_settings(state: &AppState, settings: FanboxDownloadSettings) -> Result<FanboxDownloadInfo, AppError> {
-    let settings = settings.normalized()?;
+    let settings = settings.normalized_for_storage(&state.storage())?;
     state.update_settings(|current| current.fanbox_download = settings.clone())?;
     state.downloader.set_fanbox_settings(settings);
     Ok(fanbox_download_status(state))
 }
 
 #[tauri::command]
-pub fn fanbox_download_save(state: State<'_, AppState>, settings: FanboxDownloadSettings) -> Result<FanboxDownloadInfo, AppError> {
+pub async fn fanbox_download_save(state: State<'_, AppState>, settings: FanboxDownloadSettings) -> Result<FanboxDownloadInfo, AppError> {
+    let _gate = state.images_gate.write().await;
     save_fanbox_download_settings(&state, settings)
 }
 
@@ -1526,12 +1552,35 @@ pub async fn storage_change(
     path: Option<String>,
     mode: ChangeMode,
 ) -> Result<ChangeOutcome, AppError> {
-    // 移动图片期间暂停保存新下载的图（进行中的几张先存完），免得新图落进正在搬走的目录。
+    change_storage(&state, kind, path, mode).await
+}
+
+async fn change_storage(state: &AppState, kind: StorageKind, path: Option<String>, mode: ChangeMode) -> Result<ChangeOutcome, AppError> {
+    // 等待正在保存的原文件写完，再修改或清理它们可能使用的位置。
     let _gate = match kind {
-        StorageKind::Images => Some(state.images_gate.write().await),
+        StorageKind::Images | StorageKind::Cache => Some(state.images_gate.write().await),
         _ => None,
     };
     let plan = state.storage().plan(kind, path.map(PathBuf::from), mode)?;
+    let fanbox = state.settings().fanbox_download.clone();
+    let fanbox_after = if kind == StorageKind::Images {
+        let (from, to) = plan.locations();
+        Some(fanbox.after_images_change(from, to, mode == ChangeMode::Move))
+    } else {
+        None
+    };
+    if kind == StorageKind::Cache {
+        let images = state.storage().path(StorageKind::Images);
+        let (from, to) = plan.locations();
+        fanbox.validate_cache_path(&images, from)?;
+        fanbox.validate_cache_path(&images, to)?;
+        if state.library.has_originals_under(from).await? || state.library.has_originals_under(to).await? {
+            return Err(AppError::InvalidInput(tr!(
+                "缓存位置包含图库原文件，无法移动或清空",
+                "The cache location contains library originals and cannot be moved or cleared"
+            )));
+        }
+    }
     // 移动在锁外进行：搬大量图片时，图片协议仍能照常读取当前位置。
     let plan = if kind.applies_on_restart() {
         plan
@@ -1546,6 +1595,10 @@ pub async fn storage_change(
     if kind == StorageKind::Images {
         if let Some((from, to)) = plan.moved() {
             state.library.rebase_paths(from, to).await?;
+        }
+        if let Some(settings) = fanbox_after.filter(|settings| settings != &fanbox) {
+            state.update_settings(|current| current.fanbox_download = settings.clone())?;
+            state.downloader.set_fanbox_settings(settings);
         }
     }
     Ok(ChangeOutcome { applied, info })
@@ -1772,6 +1825,100 @@ mod tests {
         assert_eq!(*state.settings(), Settings::default());
     }
 
+    #[tokio::test]
+    async fn fanbox_default_location_follows_image_moves_and_reopens_as_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path()).await;
+        let old = state.storage().path(StorageKind::Images);
+        let settings = FanboxDownloadSettings { directory: Some(old.join("fanbox")), ..FanboxDownloadSettings::default() };
+        assert!(save_fanbox_download_settings(&state, settings.clone()).unwrap().settings.directory.is_none());
+        // 复现旧版本已保存的固定默认路径。
+        state.update_settings(|current| current.fanbox_download = settings.clone()).unwrap();
+        state.downloader.set_fanbox_settings(settings);
+        std::fs::create_dir_all(old.join("fanbox/artist")).unwrap();
+        std::fs::write(old.join("fanbox/artist/original.png"), b"original").unwrap();
+        let target = dir.path().join("new-images");
+        change_storage(&state, StorageKind::Images, Some(target.display().to_string()), ChangeMode::Move).await.unwrap();
+        assert_eq!(std::fs::read(target.join("fanbox/artist/original.png")).unwrap(), b"original");
+        assert!(state.settings().fanbox_download.directory.is_none());
+        assert!(Settings::load(&dir.path().join("data")).fanbox_download.directory.is_none());
+        assert_eq!(fanbox_download_status(&state).default_directory, target.join("fanbox"));
+    }
+
+    #[tokio::test]
+    async fn fanbox_and_cache_changes_reject_overlap_without_touching_originals() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path()).await;
+        let cache = state.storage().path(StorageKind::Cache);
+        for path in [cache.clone(), cache.join("downloads"), dir.path().to_path_buf(), cache.join("new/../downloads")] {
+            let invalid = FanboxDownloadSettings { directory: Some(path), ..FanboxDownloadSettings::default() };
+            assert!(save_fanbox_download_settings(&state, invalid).is_err());
+        }
+        let archive = dir.path().join("fanbox-archive");
+        let settings = FanboxDownloadSettings { directory: Some(archive.clone()), ..FanboxDownloadSettings::default() };
+        save_fanbox_download_settings(&state, settings).unwrap();
+        for mode in [ChangeMode::Move, ChangeMode::Leave] {
+            assert!(change_storage(&state, StorageKind::Cache, Some(archive.display().to_string()), mode).await.is_err());
+            assert_eq!(state.storage().path(StorageKind::Cache), cache);
+        }
+        let original = cache.join("old-fanbox/original.png");
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&original, b"saved original").unwrap();
+        let post: Post = serde_json::from_value(serde_json::json!({
+            "source": "fanbox", "id": 42000, "width": 1, "height": 1, "score": 0,
+            "fileExt": "png", "postUrl": "https://www.fanbox.cc/@artist/posts/42", "tags": sources::PostTags::default()
+        })).unwrap();
+        state.library.save_post(&post, &original, 1).await.unwrap();
+        for mode in [ChangeMode::Move, ChangeMode::Leave] {
+            assert!(change_storage(&state, StorageKind::Cache, Some(dir.path().join("new-cache").display().to_string()), mode).await.is_err());
+            assert_eq!(std::fs::read(&original).unwrap(), b"saved original");
+            assert_eq!(state.library.local_path(Source::Fanbox, 42000).await.unwrap(), Some(original.clone()));
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_large_custom_ids_roundtrip_through_single_and_group_delete_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state(dir.path()).await;
+        let database = dir.path().join("legacy-library");
+        state.library = Library::open(&database).await.unwrap();
+        let ids = [4_611_686_018_427_387_907_u64, 4_611_686_018_427_387_908_u64];
+        for id in ids {
+            let post: Post = serde_json::from_value(serde_json::json!({
+                "source": "custom", "id": id, "width": 1, "height": 1, "score": 0,
+                "fileExt": "png", "postUrl": "file:///original.png", "tags": sources::PostTags { artist: vec!["Existing import".into()], ..sources::PostTags::default() }
+            })).unwrap();
+            state.library.save_post(&post, &dir.path().join(format!("{id}.png")), 1).await.unwrap();
+        }
+        state.library = Library::open(&database).await.unwrap();
+        let listed = state.library.list(&LibraryQuery::default()).await.unwrap();
+        let payload = serde_json::to_value(&listed.posts[0]).unwrap();
+        assert!(payload["id"].is_string());
+        let single: PostRef = serde_json::from_value(serde_json::json!({ "source": payload["source"], "postId": payload["id"] })).unwrap();
+        assert!(ids.contains(&single.post_id));
+        assert!(state.library.local_path(single.source, single.post_id).await.unwrap().is_some());
+        let (targets, failed) = resolve_delete_targets(&state.library, vec![single]).await.unwrap();
+        assert_eq!(targets.len(), 1);
+        assert!(failed.is_empty());
+        assert_eq!(state.library.remove_posts(&[(single.source, single.post_id)]).await.unwrap(), 1);
+        let (targets, failed) = resolve_delete_targets(&state.library, vec![single]).await.unwrap();
+        assert!(targets.is_empty());
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].post_id, single.post_id);
+        let preview = state.library.delete_preview(&crate::library::LibraryDeleteScope {
+            source: Source::Custom,
+            group: Some(crate::library::LibraryDeleteGroup { kind: crate::library::GroupKind::Artist, name: "Existing import".into() }),
+        }).await.unwrap();
+        let json = serde_json::to_value(preview).unwrap();
+        let remaining: Vec<PostRef> = serde_json::from_value(json["posts"].clone()).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_ne!(remaining[0].post_id, single.post_id);
+        assert_eq!(state.library.remove_posts(&remaining.iter().map(|post| (post.source, post.post_id)).collect::<Vec<_>>()).await.unwrap(), 1);
+        assert_eq!(state.library.list(&LibraryQuery::default()).await.unwrap().total, 0);
+        let legacy: PostRef = serde_json::from_str(r#"{"source":"custom","postId":42}"#).unwrap();
+        assert_eq!(legacy.post_id, 42);
+    }
+
     #[test]
     fn imports_images_into_custom_folder() {
         let root = tempfile::tempdir().unwrap();
@@ -1797,6 +1944,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = state(dir.path()).await;
         let params = |cursor| SitesSearchParams {
+            pixiv_input: false,
             sources: Source::REMOTE.to_vec(),
             tags: "scenery".into(),
             ratings: vec![Rating::General],

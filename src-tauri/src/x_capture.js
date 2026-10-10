@@ -32,10 +32,11 @@
     render();
   };
   const tick = () => {
-    if (disposed || suspended || !onTarget() || location.href !== runningUrl || document.visibilityState === "hidden") {
+    if (disposed || suspended || !onTarget() || location.href !== runningUrl) {
       pause();
       return;
     }
+    if (document.visibilityState === "hidden") return;
     const height = document.documentElement.scrollHeight;
     window.scrollTo(0, height);
     stable = height === lastHeight ? stable + 1 : 0;
@@ -91,15 +92,15 @@
   listen(window, "popstate", navigated);
   listen(window, "hashchange", navigated);
   listen(document, "DOMContentLoaded", observe);
-  listen(document, "visibilitychange", () => {
-    if (document.visibilityState === "hidden") pause();
-  });
   const userInteraction = (event) => {
     if (!event.composedPath().includes(host)) pause();
   };
   // 筛选可能只更新同一路径；用户操作页面时先把滚动交还给用户。
   listen(document, "pointerdown", userInteraction, true);
-  listen(document, "keydown", userInteraction, true);
+  listen(document, "keydown", (event) => {
+    if (["Meta", "Control", "Alt", "Shift", "CapsLock"].includes(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
+    userInteraction(event);
+  }, true);
   listen(document, "wheel", (event) => {
     if (event.deltaY < 0) pause();
   }, { passive: true });

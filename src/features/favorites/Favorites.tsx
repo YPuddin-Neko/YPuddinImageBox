@@ -133,7 +133,8 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const [queued, setQueued] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ message: string; link?: boolean } | null>(null);
-  const [bulk, setBulk] = useState<{ params: SearchParams; count: Count; max: string; title?: string } | null>(null);
+  const [bulk, setBulk] = useState<{ params: SearchParams; count: Count; max: string; title?: string; origin: string; creator: boolean } | null>(null);
+  const bulkRequest = useRef(0);
   /** 按平台、类型和账号区分作者列表；点开作者时看他的帖子。 */
   const [creatorList, setCreatorList] = useState<{ key: string; items: FavoriteCreator[] } | null>(null);
   const [creator, setCreator] = useState<FavoriteCreator | null>(null);
@@ -144,6 +145,10 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   /** 已经加载过的条件，回到这一页时不再重新加载。 */
   const loadedKey = useRef<string | null>(null);
   const loadedCreatorsKey = useRef<string | null>(null);
+  const savedCreatorsDirty = useRef(false);
+  const creatorsBusy = useRef(false);
+  const creatorsRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [creatorRevision, setCreatorRevision] = useState(0);
   const sentinel = useRef<HTMLDivElement>(null);
   const center = useRef<HTMLDivElement>(null);
 
@@ -182,7 +187,13 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const missing = new Set(posts.filter((post) => localRecord(post)?.missing).map(postKey));
   missing.forEach((key) => displayedOwned.delete(key));
   const hasMore = fanboxAuthor ? archive.hasMore : !!results?.next;
-  const { picked, pickedPosts, toggle: togglePick, clear: clearPicks, pickAll } = usePicker(posts);
+  const { picked: requestedPicks, pickedPosts, toggle: togglePick, clear: clearPicks, pickAll, forget } = usePicker(posts);
+  const picked = new Set(pickedPosts.map(postKey));
+  useEffect(() => {
+    if (loading) return;
+    const available = new Set(posts.map(postKey));
+    forget([...requestedPicks].filter((key) => !available.has(key)));
+  }, [posts, loading, requestedPicks, forget]);
 
   // 每次回到这一页都重新读一遍账号：可能刚在设置里登录或退出。
   useEffect(() => {
@@ -221,6 +232,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   useEffect(() => {
     if (fanboxAuthor || !paramsKey || !params) {
       requestId.current++;
+      creatorsBusy.current = false;
       loadedKey.current = null;
       loadedCreatorsKey.current = null;
       setResults(null);
@@ -238,6 +250,8 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const loadCreators = useCallback(async () => {
     const id = ++requestId.current;
     loadedCreatorsKey.current = creatorsKey;
+    creatorsBusy.current = true;
+    if (savedCreators) savedCreatorsDirty.current = false;
     setLoading(true);
     setError(null);
     try {
@@ -246,7 +260,10 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
     } catch (err) {
       if (id === requestId.current) setError({ message: errorMessage(err), code: errorCode(err) });
     } finally {
-      if (id === requestId.current) setLoading(false);
+      if (id === requestId.current) {
+        creatorsBusy.current = false;
+        setLoading(false);
+      }
     }
   }, [site, savedCreators, creatorMode, creatorsKey]);
 
@@ -255,6 +272,23 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
       void loadCreators();
     }
   }, [active, showCreators, savedCreators, account, creators, creatorsKey, loadCreators]);
+
+  const invalidateSavedCreators = () => {
+    savedCreatorsDirty.current = true;
+    if (!active || !savedCreators || !showCreators || creatorsRefreshTimer.current !== null) return;
+    creatorsRefreshTimer.current = setTimeout(() => {
+      creatorsRefreshTimer.current = null;
+      setCreatorRevision((revision) => revision + 1);
+    }, 500);
+  };
+
+  useEffect(() => {
+    if (active && savedCreators && showCreators && savedCreatorsDirty.current && !creatorsBusy.current) void loadCreators();
+  }, [active, savedCreators, showCreators, creatorRevision, remoteLoading, loadCreators]);
+  useEffect(() => () => {
+    if (creatorsRefreshTimer.current !== null) clearTimeout(creatorsRefreshTimer.current);
+    creatorsRefreshTimer.current = null;
+  }, [active, creatorsKey, showCreators]);
 
   const loadMore = useCallback(() => {
     if (fanboxAuthor) {
@@ -283,8 +317,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
 
   useTauriEvent<PostRef[]>(EVENTS.libraryRemoved, (removed) => {
     if (removed.some((post) => post.source === "fanbox")) {
-      loadedCreatorsKey.current = null;
-      if (savedCreators) setCreatorList(null);
+      invalidateSavedCreators();
     }
     setOwned((prev) => {
       const next = new Set(prev);
@@ -295,8 +328,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
 
   useTauriEvent<SavedPayload>(EVENTS.librarySaved, (saved) => {
     if (saved.source === "fanbox") {
-      loadedCreatorsKey.current = null;
-      if (savedCreators) setCreatorList(null);
+      invalidateSavedCreators();
     }
     const key = postKey({ source: saved.source, id: saved.postId });
     setOwned((prev) => new Set(prev).add(key));
@@ -325,6 +357,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const changeSite = (next: FavoriteSite) => {
     requestId.current++;
     loadedCreatorsKey.current = null;
+    creatorsBusy.current = false;
     setLoading(false);
     setSite(next);
     setCreator(null);
@@ -337,6 +370,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
   const changeMode = (next: FavoriteMode) => {
     requestId.current++;
     loadedCreatorsKey.current = null;
+    creatorsBusy.current = false;
     setLoading(false);
     setModes((prev) => ({ ...prev, [site]: next }));
     setCreator(null);
@@ -397,10 +431,12 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
 
   const openBulk = () => {
     if (!params) return;
-    setBulk({ params, count: "loading", max: "", title: creator?.name || creator?.id });
+    const id = ++bulkRequest.current;
+    const title = creator?.name || creator?.id;
+    setBulk({ params, count: "loading", max: "", title, origin: title || who || "", creator: creator !== null });
     countRemote(params).then(
-      (count) => setBulk((current) => current && { ...current, count }),
-      () => setBulk((current) => current && { ...current, count: "failed" }),
+      (count) => { if (id === bulkRequest.current) setBulk((current) => current && { ...current, count }); },
+      () => { if (id === bulkRequest.current) setBulk((current) => current && { ...current, count: "failed" }); },
     );
   };
 
@@ -781,7 +817,7 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
 
       <Dialog
         open={bulk !== null}
-        title={creator ? t(fileUnits ? "下载这位作者的图片和附件？" : "下载这位作者的全部帖子？") : t("下载全部收藏？")}
+        title={bulk?.creator ? t(bulk.params.source === "fanbox" ? "下载这位作者的图片和附件？" : "下载这位作者的全部帖子？") : t("下载全部收藏？")}
         onClose={() => setBulk(null)}
         actions={
           <>
@@ -799,9 +835,9 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
           <>
             <dl className="dialog-paths">
               <dt>{t("来源")}</dt>
-              <dd>{who ? `${SOURCE_LABEL[site]} · ${who}` : SOURCE_LABEL[site]}</dd>
+              <dd>{bulk.origin ? `${SOURCE_LABEL[bulk.params.source]} · ${bulk.origin}` : SOURCE_LABEL[bulk.params.source]}</dd>
               <dt>{t("数量")}</dt>
-              <dd>{countText(bulk.count, site)}</dd>
+              <dd>{countText(bulk.count, bulk.params.source as FavoriteSite)}</dd>
               <dt>
                 <label htmlFor="favorites-bulk-max">{t("上限")}</label>
               </dt>
@@ -820,11 +856,11 @@ export function Favorites({ active, onNavigate }: { active: boolean; onNavigate:
                     setBulk((current) => current && { ...current, max });
                   }}
                 />
-                <span>{t(fileUnits ? "项，留空表示全部下载" : "张，留空表示全部下载")}</span>
+                <span>{t(bulk.params.source === "fanbox" ? "项，留空表示全部下载" : "张，留空表示全部下载")}</span>
               </dd>
             </dl>
             <p className="dialog-note">
-              {t(fileUnits ? "已在图库里的文件会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。" : "已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。")}
+              {t(bulk.params.source === "fanbox" ? "已在图库里的文件会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。" : "已在图库里的图会自动跳过。下载在后台进行，可以随时在「下载」里暂停或取消。")}
             </p>
           </>
         )}

@@ -3,6 +3,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { t, type Msg } from "./i18n";
 
 export type Source = "danbooru" | "gelbooru" | "e621" | "rule34" | "kemono" | "yandere" | "pixiv" | "fanbox" | "x" | "custom";
+export type PostId = number | string;
 export type Rating = "general" | "sensitive" | "questionable" | "explicit";
 
 export const RATINGS: Rating[] = ["general", "sensitive", "questionable", "explicit"];
@@ -32,11 +33,13 @@ export const SOURCE_LABEL: Record<Source, string> = {
 /** 可直接请求接口的来源；X 使用单独的浏览器采集窗口。 */
 export const SOURCES: Source[] = ["danbooru", "gelbooru", "e621", "rule34", "kemono", "yandere", "pixiv", "fanbox"];
 export const SOURCE_OPTIONS = SOURCES.map((value) => ({ value, label: SOURCE_LABEL[value] }));
+/** 聚合标签搜索的默认来源；FANBOX 只接受作者和投稿查询。 */
+export const TAG_SEARCH_SOURCES = SOURCES.filter((source) => source !== "fanbox");
 
 /** 几个站点的名字：全部站点时写「全部平台」，否则按固定顺序写站点名。 */
 export function sourcesLabel(sources: Source[]): string {
   const chosen = SOURCES.filter((source) => sources.includes(source));
-  if (chosen.length === SOURCES.length) return t("全部平台");
+  if (chosen.length === SOURCES.length || (chosen.length === TAG_SEARCH_SOURCES.length && TAG_SEARCH_SOURCES.every((source) => chosen.includes(source)))) return t("全部平台");
   return chosen.map((source) => SOURCE_LABEL[source]).join(t("、::list"));
 }
 
@@ -98,7 +101,7 @@ export interface PostTags {
 
 export interface Post {
   source: Source;
-  id: number;
+  id: PostId;
   md5: string | null;
   width: number;
   height: number;
@@ -121,6 +124,7 @@ export interface Post {
 }
 
 export interface SearchParams {
+  pixivInput?: boolean;
   source: Source;
   tags: string;
   ratings: Rating[];
@@ -139,7 +143,7 @@ export interface SearchPage {
   /** 超出 tag 上限、在本地筛选的 tag；没有时为空字符串。 */
   localFilter: string;
   /** 这一页里已在图库中的帖子 id。 */
-  owned: number[];
+  owned: PostId[];
   creators?: PixivCreator[];
   creatorError?: SearchError | null;
   artworkError?: SearchError | null;
@@ -171,6 +175,7 @@ export interface SiteStatus {
 }
 
 export interface SitesSearchParams {
+  pixivInput?: boolean;
   sources: Source[];
   tags: string;
   ratings: Rating[];
@@ -186,7 +191,7 @@ export interface SitesPage {
   /** 这一页搜了的站点；有图在等着显示的站点这一页不用搜，不在里面。 */
   sites: SiteStatus[];
   /** 这一页里已在图库中的帖子。 */
-  owned: { source: Source; postId: number }[];
+  owned: { source: Source; postId: PostId }[];
 }
 
 /** 聚合搜索：同样的条件同时搜几个站点，按所选排序合成一列。 */
@@ -206,25 +211,25 @@ const GOLD_ONLY_TAGS = ["loli", "shota", "toddlercon"];
 export const goldOnly = (post: Post) =>
   post.source === "danbooru" && post.tags.general.some((tag) => GOLD_ONLY_TAGS.includes(tag));
 
-/** Pixiv、FANBOX 的图片 id 是「帖子 id × 1000 + 页码」，页码从 0 开始。 */
-const PAGE_FACTOR = 1000;
-/** Kemono 的帖子 id 是「服务序号 × 10¹³ + 帖子 id × 1000 + 第几张」（和 Rust 端的 `kemono::split_id` 一致）。 */
-const KEMONO_SERVICE_FACTOR = 10_000_000_000_000;
-
-/**
- * 界面上显示的编号（前面的 # 由文案自己写），和 Rust 端的 `Post::label` 一致：
- * Pixiv、FANBOX、Kemono 显示帖子 id，第二页（张）起再写页码。`grouped` 时数字带千位分隔（详情面板的标题用）。
- */
-export function postNumber(post: Pick<Post, "source" | "id"> & Partial<Pick<Post, "fileUrl">>, { grouped = false } = {}): string {
-  if (post.source === "x") return `x-${post.id.toString(16).padStart(16, "0")}`;
-  const [id, page] =
-    post.source === "pixiv" || post.source === "fanbox"
-      ? [Math.floor(post.id / PAGE_FACTOR), post.id % PAGE_FACTOR]
-      : post.source === "kemono"
-        ? [Math.floor((post.id % KEMONO_SERVICE_FACTOR) / 1000), post.id % 1000]
-        : [post.id, 0];
-  const number = grouped ? id.toLocaleString("en-US") : String(id);
-  if (post.source === "fanbox" && page === 999) {
+/** 界面编号与下载资源的内部身份分开；FANBOX 使用投稿链接和下载顺序。 */
+export function postNumber(post: Pick<Post, "source" | "id"> & Partial<Pick<Post, "fileUrl" | "postUrl" | "downloadIndex">>, { grouped = false } = {}): string {
+  const raw = BigInt(post.id);
+  if (post.source === "x") return `x-${raw.toString(16).padStart(16, "0")}`;
+  let id = raw;
+  let page = 0;
+  if (post.source === "pixiv") {
+    id = raw / 1000n;
+    page = Number(raw % 1000n);
+  } else if (post.source === "kemono") {
+    id = raw % 10_000_000_000_000n / 1000n;
+    page = Number(raw % 1000n);
+  } else if (post.source === "fanbox") {
+    const match = post.postUrl?.match(/\/posts\/(\d+)(?:[/?#]|$)/);
+    id = match ? BigInt(match[1]) : raw / 1000n;
+    page = post.downloadIndex == null ? Number(raw % 1000n) : Math.max(0, post.downloadIndex - 1);
+  }
+  const number = grouped ? id.toLocaleString("en-US") : id.toString();
+  if (post.source === "fanbox" && (post.downloadIndex === 0 || raw % 1000n === 999n)) {
     if (!("fileUrl" in post)) return number;
     try {
       const url = new URL(post.fileUrl ?? "");

@@ -185,24 +185,25 @@ test("login, other users, status pages and wrong collection paths cannot start s
   }
 });
 
-test("hidden windows pause and need explicit restart after visibility returns", () => {
+test("modifier keys and switching apps retain the chosen scroll state", () => {
   const b = browser();
   b.configure();
   b.button().emit("click");
+  for (const key of ["Meta", "Control", "Alt", "Shift", "CapsLock"]) b.document.emit("keydown", { key });
+  b.document.emit("keydown", { key: "Tab", metaKey: true });
+  assert.equal(b.timers.size, 1);
+  b.tick();
+  assert.equal(b.scrolls.length, 1);
   b.document.visibilityState = "hidden";
   b.document.emit("visibilitychange");
-  b.tick();
-  assert.equal(b.timers.size, 0);
-  b.button().emit("click");
-  assert.equal(b.timers.size, 0);
+  b.tick(20);
+  assert.equal(b.timers.size, 1);
+  assert.equal(b.scrolls.length, 1);
   b.document.visibilityState = "visible";
   b.document.emit("visibilitychange");
   b.tick();
-  assert.equal(b.scrolls.length, 0);
-  b.button().emit("click");
-  b.document.visibilityState = "hidden";
-  b.tick();
-  assert.equal(b.scrolls.length, 0);
+  assert.equal(b.scrolls.length, 2);
+  b.document.emit("keydown", { key: "ArrowUp" });
   assert.equal(b.timers.size, 0);
 });
 

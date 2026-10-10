@@ -61,7 +61,7 @@ pub struct PendingChange {
     pub mode: ChangeMode,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StorageFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -155,6 +155,7 @@ pub struct StorageInfo {
     pub last_error: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct Storage {
     file: PathBuf,
     defaults: Defaults,
@@ -173,6 +174,10 @@ pub struct ChangePlan {
 }
 
 impl ChangePlan {
+    pub fn locations(&self) -> (&Path, &Path) {
+        (&self.from, &self.to)
+    }
+
     /// 按计划移动或清理旧位置里的内容。可能耗时较长，不要在持锁时调用。
     pub fn execute(&self) -> Result<(), StorageError> {
         apply_move(self.kind, &self.from, &self.to, self.mode)
@@ -221,6 +226,13 @@ impl Storage {
 
     pub fn path(&self, kind: StorageKind) -> PathBuf {
         self.configured(kind).cloned().unwrap_or_else(|| self.default_path(kind))
+    }
+
+    pub fn locations(&self, kind: StorageKind) -> Vec<PathBuf> {
+        let mut paths = vec![self.path(kind)];
+        paths.extend(self.state.pending.iter().filter(|change| change.kind == kind)
+            .map(|change| change.to.clone().unwrap_or_else(|| self.default_path(kind))));
+        paths
     }
 
     pub fn is_default(&self, kind: StorageKind) -> bool {
@@ -436,23 +448,28 @@ fn has_entries(dir: &Path) -> bool {
     fs::read_dir(dir).map(|mut entries| entries.next().is_some()).unwrap_or(false)
 }
 
-/// 取最近一个已存在的上级目录做规范化，再拼回其余部分，
-/// 这样还不存在的新位置也能和现有目录正确比较（符号链接、大小写、`..`）。
+/// 解析已存在部分的符号链接，并折叠尚未创建部分的 `..`，用于比较存储位置。
 pub fn normalize(path: &Path) -> PathBuf {
-    let mut existing = path;
-    let mut rest = Vec::new();
-    loop {
-        if let Ok(canonical) = fs::canonicalize(existing) {
-            return rest.iter().rev().fold(canonical, |acc, part| acc.join(part));
-        }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                rest.push(name.to_os_string());
-                existing = parent;
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => { normalized.pop(); }
+            component => {
+                normalized.push(component.as_os_str());
+                if let Ok(canonical) = fs::canonicalize(&normalized) { normalized = canonical; }
             }
-            _ => return path.to_path_buf(),
         }
     }
+    normalized
+}
+
+pub fn paths_overlap(first: &Path, second: &Path) -> bool {
+    let (first, second) = (normalize(first), normalize(second));
+    first.starts_with(&second) || second.starts_with(&first)
 }
 
 /// 把 `from` 里的内容移到 `to`。同一磁盘直接重命名；跨磁盘时复制并核对大小后再删除源文件。
@@ -570,6 +587,26 @@ mod tests {
         let f = fixture();
         assert_eq!(f.storage.path(StorageKind::Database), f.base.join("app/data/database"));
         assert!(StorageKind::ALL.iter().all(|&k| f.storage.is_default(k)));
+    }
+
+    #[test]
+    fn overlap_normalizes_missing_paths_and_parent_components() {
+        let f = fixture();
+        let cache = f.storage.path(StorageKind::Cache);
+        assert!(paths_overlap(&cache, &cache.join("missing/../downloads")));
+        assert_eq!(normalize(&cache.join("missing/../downloads")), normalize(&cache).join("downloads"));
+        assert!(!paths_overlap(&cache, &f.base.join("cache/image-cache-sibling")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overlap_follows_symlinks_even_when_the_destination_does_not_exist() {
+        let f = fixture();
+        let cache = f.storage.path(StorageKind::Cache);
+        let alias = f.base.join("alias");
+        std::os::unix::fs::symlink(&cache, &alias).unwrap();
+        assert!(paths_overlap(&cache, &alias.join("missing/../downloads")));
+        assert_eq!(normalize(&alias.join("../other")), normalize(cache.parent().unwrap()).join("other"));
     }
 
     #[test]

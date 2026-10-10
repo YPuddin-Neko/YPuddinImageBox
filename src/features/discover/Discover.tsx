@@ -33,6 +33,7 @@ import {
   searchSites,
   SOURCE_LABEL,
   SOURCE_OPTIONS,
+  TAG_SEARCH_SOURCES,
   SOURCES,
   type Post,
   type PixivCreator,
@@ -61,6 +62,7 @@ import { ImageViewer } from "../../components/ImageViewer";
 import { hasPixivIdCollision, mergePixivCreators, pixivCreatorQuery } from "./pixivCreators";
 
 interface Criteria {
+  pixivInput: boolean;
   /** 来源里勾选的站点；两个以上时是聚合搜索。 */
   sources: Source[];
   /** 聚合搜索时平台筛选留下的站点（来源里勾选的一部分）；只搜一个站点时不用。 */
@@ -123,6 +125,7 @@ interface SubscribeDraft {
 }
 
 const DEFAULT_CRITERIA: Criteria = {
+  pixivInput: true,
   sources: ["danbooru"],
   platforms: ["danbooru"],
   tags: "",
@@ -146,6 +149,7 @@ function countText(count: Count, source?: Source): string {
 /** 发给只认一个站点的接口（统计张数、下载全部结果、订阅）的条件。 */
 const siteParams = (criteria: Criteria, source: Source): SearchParams => ({
   source,
+  pixivInput: criteria.pixivInput,
   tags: criteria.tags,
   ratings: criteria.ratings,
   sort: criteria.sort,
@@ -167,6 +171,7 @@ async function searchPage(criteria: Criteria, cursor: string | null): Promise<{ 
   if (isCombined(criteria)) {
     const page = await searchSites({
       sources,
+      pixivInput: criteria.pixivInput,
       tags: criteria.tags,
       ratings: criteria.ratings,
       sort: criteria.sort,
@@ -278,6 +283,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   const [sources, setSources] = useState<Source[]>(DEFAULT_CRITERIA.sources);
   const [platforms, setPlatforms] = useState<Source[]>(DEFAULT_CRITERIA.platforms);
   const [tags, setTags] = useState(DEFAULT_CRITERIA.tags);
+  const [pixivInput, setPixivInput] = useState(DEFAULT_CRITERIA.pixivInput);
   /** 刚从详情里点进搜索框的 tag，胶囊闪一下。 */
   const [flash, setFlash] = useState<{ tag: string; at: number } | null>(null);
   const [ratings, setRatings] = useState<Rating[]>(DEFAULT_CRITERIA.ratings);
@@ -413,7 +419,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
   }, [loadMore, active]);
 
   /** 搜索框和筛选行里现在的条件（输入框里的字还没提交也算）。 */
-  const formCriteria = (): Criteria => ({ sources, platforms, tags, ratings, sort });
+  const formCriteria = (): Criteria => ({ sources, platforms, tags, ratings, sort, pixivInput });
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -488,6 +494,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
         setSaved(
           await savedSearchAdd({
             sources: searchSources(criteria),
+            pixivInput: criteria.pixivInput,
             tags: criteria.tags,
             ratings: criteria.ratings,
             sort: criteria.sort,
@@ -502,12 +509,14 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
 
   const applySaved = (item: SavedSearch) => {
     const criteria: Criteria = {
+      pixivInput: item.pixivInput ?? false,
       sources: item.sources,
       platforms: item.sources,
       tags: item.tags,
       ratings: item.ratings.length ? item.ratings : RATINGS,
       sort: item.sort,
     };
+    setPixivInput(criteria.pixivInput);
     setSources(criteria.sources);
     setPlatforms(criteria.platforms);
     setTags(criteria.tags);
@@ -716,6 +725,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
               className="search-source"
               name={t("来源")}
               allLabel={t("全部平台")}
+              allValues={TAG_SEARCH_SOURCES}
               values={sources}
               options={SOURCE_OPTIONS}
               sizers={[t("全部平台"), ...SOURCE_OPTIONS.map((option) => option.label)]}
@@ -735,7 +745,7 @@ export function Discover({ active, onNavigate }: { active: boolean; onNavigate: 
                       : t("输入 tag，空格分隔，例如 scenery sky")
               }
               value={tags}
-              onChange={setTags}
+              onChange={(value) => { setTags(value); setPixivInput(true); }}
             />
             <MenuButton
               className="search-bookmark"

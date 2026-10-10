@@ -1,6 +1,7 @@
 //! FANBOX 的作者投稿、图片与附件。每项资源独立入库，付费权限由站点当前会话决定。
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use sha2::{Digest, Sha256};
 
 use reqwest::header::{HeaderValue, ACCEPT, COOKIE, ORIGIN, REFERER, USER_AGENT};
 use reqwest::RequestBuilder;
@@ -115,13 +116,31 @@ fn cover_url(raw: &str, post_id: u64) -> Option<Url> {
     Some(url)
 }
 
-/// 第 1000 项也可能是旧版保存的正文，需同时核对封面地址。
+/// 旧版编号携带投稿号，新版资源编号只标识资源；投稿号从站点链接读取。
+pub fn post_id(post: &Post) -> u64 {
+    target_of(&post.post_url).and_then(|target| match target { Target::Post(id) => Some(id), _ => None })
+        .unwrap_or_else(|| split_id(post.id).0)
+}
+
+pub fn display_index(post: &Post) -> u32 {
+    post.download_index.unwrap_or_else(|| if is_cover(post) { 0 } else { split_id(post.id).1 + 1 })
+}
+
 pub fn is_cover(post: &Post) -> bool {
-    let (post_id, index) = split_id(post.id);
     post.source == Source::Fanbox
-        && index == COVER_INDEX as u32
-        && post.id <= MAX_SAFE_INTEGER
-        && post.file_url.as_deref().and_then(|url| cover_url(url, post_id)).is_some()
+        && (post.id >= (1u64 << 62) || split_id(post.id).1 == COVER_INDEX as u32)
+        && post.file_url.as_deref().and_then(|url| cover_url(url, post_id(post))).is_some()
+}
+
+pub fn legacy_resource_id(post: &Post) -> Result<u64, AppError> {
+    resource_id(post_id(post), "legacy-url", post.file_url.as_deref().ok_or_else(|| parse_error("missing resource URL"))?)
+}
+
+fn resource_id(post: u64, kind: &str, key: &str) -> Result<u64, AppError> {
+    if key.is_empty() { return Err(parse_error("missing resource ID")); }
+    let digest = Sha256::digest(format!("fanbox:{post}:{kind}:{key}").as_bytes());
+    let hash = u64::from_be_bytes(digest[..8].try_into().expect("SHA-256 prefix"));
+    Ok((1u64 << 62) | (hash & ((1u64 << 62) - 1)))
 }
 
 fn request(
@@ -420,6 +439,10 @@ async fn post(net: &Net, credentials: Option<&Credentials>, id: u64) -> Result<V
     Ok(value)
 }
 
+fn global_error(error: &AppError) -> bool {
+    matches!(error, AppError::BadCredentials { .. } | AppError::Challenged(_) | AppError::Http { status: 429, .. })
+}
+
 fn matches_rating(post: &Post, ratings: &[Rating]) -> bool {
     ratings.is_empty() || post.rating.is_some_and(|rating| ratings.contains(&rating))
 }
@@ -449,14 +472,7 @@ pub async fn search(
             } else {
                 ids.len()
             };
-            let mut posts = Vec::new();
-            for id in ids {
-                posts.extend(
-                    post_items(&post(net, credentials, id).await?, false)?
-                        .into_iter()
-                        .filter(|post| matches_rating(post, &query.ratings)),
-                );
-            }
+            let posts = load_creator_page(&ids, &query.ratings, |id| post(net, credentials, id)).await?;
             Ok((posts, fetched))
         }
         (Target::Creator(creator), Page::After(after)) => {
@@ -466,53 +482,154 @@ pub async fn search(
     }
 }
 
-async fn creator_after(
-    net: &Net,
-    credentials: Option<&Credentials>,
-    creator: &str,
-    after: u64,
-    ratings: &[Rating],
-) -> Result<(Vec<Post>, usize), AppError> {
-    let urls = creator_pages(net, credentials, creator).await?;
-    let mut ids = BTreeSet::new();
-    // 分页按发布时间排列，置顶和延后发布会打乱 ID 顺序；扫描全部索引后再按 ID 取最早的一批。
-    for url in urls {
-        ids.extend(
-            listed_ids(get(net, credentials, url).await?)?
-                .into_iter()
-                .filter(|id| *id >= split_id(after).0),
-        );
+async fn load_creator_page<F, Fut>(ids: &[u64], ratings: &[Rating], mut load: F) -> Result<Vec<Post>, AppError>
+where F: FnMut(u64) -> Fut, Fut: std::future::Future<Output = Result<Value, AppError>> {
+    let mut posts = Vec::new();
+    for &id in ids {
+        match load(id).await.and_then(|value| post_items(&value, false)) {
+            Ok(items) => posts.extend(items.into_iter().filter(|post| matches_rating(post, ratings))),
+            Err(error) if global_error(&error) => return Err(error),
+            Err(error) => log::warn!("FANBOX 投稿 {id} 读取失败：{error}"),
+        }
     }
-    collect_after(ids, after, ratings, |id| post(net, credentials, id)).await
+    Ok(posts)
 }
 
-async fn collect_after<F, Fut>(
-    ids: BTreeSet<u64>,
-    after: u64,
-    ratings: &[Rating],
-    mut load: F,
-) -> Result<(Vec<Post>, usize), AppError>
-where
-    F: FnMut(u64) -> Fut,
-    Fut: std::future::Future<Output = Result<Value, AppError>>,
-{
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SubscriptionState {
+    pub high_water: u64,
+    pub published_water: Option<i64>,
+    #[serde(default)]
+    pub boundary_ids: BTreeSet<u64>,
+    #[serde(default)]
+    pub pending: Vec<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct ListedPost {
+    id: u64,
+    published: Option<i64>,
+}
+
+fn listed_posts(body: Value) -> Result<Vec<ListedPost>, AppError> {
+    let values = body.get("posts").unwrap_or(&body).as_array().ok_or_else(|| parse_error("missing posts array"))?;
     let mut posts = Vec::new();
-    let mut complete_posts = 0;
-    for id in ids {
-        let newer: Vec<Post> = post_items(&load(id).await?, false)?
-            .into_iter()
-            .filter(|post| post.id > after && matches_rating(post, ratings))
-            .collect();
-        if !newer.is_empty() {
-            posts.extend(newer);
-            complete_posts += 1;
-            if complete_posts >= PAGE_SIZE as usize {
-                break;
+    let mut seen = HashSet::new();
+    for value in values {
+        let id = value.get("id").and_then(number).ok_or_else(|| parse_error("missing post ID"))?;
+        image_id(id, 0)?;
+        if seen.insert(id) {
+            posts.push(ListedPost {
+                id,
+                published: value.get("publishedDatetime").and_then(Value::as_str).and_then(super::timestamp::parse),
+            });
+        }
+    }
+    Ok(posts)
+}
+
+impl SubscriptionState {
+    pub fn legacy(after: u64, created_at: i64) -> Self {
+        // 旧订阅没有记录受限投稿，首次升级检查回看订阅建立之后的索引。
+        Self { high_water: split_id(after).0, published_water: Some(created_at), ..Self::default() }
+    }
+
+    pub fn watermark(&self) -> u64 { self.high_water.saturating_mul(PAGE_FACTOR).saturating_add(COVER_INDEX as u64) }
+
+    fn newer(&self, post: &ListedPost) -> bool {
+        match (post.published, self.published_water) {
+            (Some(date), Some(water)) => date > water || (date == water && !self.boundary_ids.contains(&post.id)),
+            _ => post.id > self.high_water,
+        }
+    }
+
+    fn observe(&mut self, posts: &[ListedPost]) {
+        for post in posts {
+            self.high_water = self.high_water.max(post.id);
+            if let Some(date) = post.published {
+                if self.published_water.is_none_or(|water| date > water) {
+                    self.published_water = Some(date);
+                    self.boundary_ids.clear();
+                }
+                if self.published_water == Some(date) { self.boundary_ids.insert(post.id); }
             }
         }
     }
-    posts.sort_unstable_by_key(|post| post.id);
-    Ok((posts, complete_posts))
+}
+
+pub async fn subscription_baseline(net: &Net, credentials: Option<&Credentials>, query: &str) -> Result<SubscriptionState, AppError> {
+    let query = parse_query(query)?;
+    let Target::Creator(creator) = &query.target else {
+        return Err(AppError::InvalidInput(tr!("请订阅 FANBOX 作者", "Subscribe to a FANBOX creator")));
+    };
+    let urls = creator_pages(net, credentials, creator).await?;
+    let mut state = SubscriptionState::default();
+    if let Some(url) = urls.first() {
+        state.observe(&listed_posts(get(net, credentials, url.clone()).await?)?);
+    }
+    Ok(state)
+}
+
+async fn discover<F, Fut>(state: &mut SubscriptionState, urls: Vec<Url>, mut load: F) -> Result<Vec<u64>, AppError>
+where F: FnMut(Url) -> Fut, Fut: std::future::Future<Output = Result<Value, AppError>> {
+    let previous = state.clone();
+    let mut discovered = BTreeSet::new();
+    for url in urls {
+        let posts = listed_posts(load(url).await?)?;
+        let newer: Vec<_> = posts.iter().filter(|post| previous.newer(post)).map(|post| post.id).collect();
+        state.observe(&posts);
+        if newer.is_empty() { break; }
+        discovered.extend(newer);
+    }
+    Ok(discovered.into_iter().collect())
+}
+
+pub async fn subscription_discover(net: &Net, credentials: Option<&Credentials>, query: &str, state: &mut SubscriptionState) -> Result<Vec<u64>, AppError> {
+    let query = parse_query(query)?;
+    let Target::Creator(creator) = query.target else { return Err(parse_error("subscription requires a creator")); };
+    let urls = creator_pages(net, credentials, &creator).await?;
+    let fresh = discover(state, urls, |url| get(net, credentials, url)).await?;
+    let mut seen: HashSet<u64> = state.pending.iter().copied().collect();
+    // 每次检查都重试一轮未能读取的投稿，新投稿不受失败项阻塞。
+    let mut work = state.pending.clone();
+    for id in fresh {
+        if seen.insert(id) { state.pending.push(id); work.push(id); }
+    }
+    Ok(work)
+}
+
+async fn load_subscription_batch<F, Fut>(state: &mut SubscriptionState, ids: &[u64], ratings: &[Rating], mut load: F) -> Result<Vec<Post>, AppError>
+where F: FnMut(u64) -> Fut, Fut: std::future::Future<Output = Result<Value, AppError>> {
+    let mut posts = Vec::new();
+    for &id in ids {
+        match load(id).await.and_then(|value| {
+            if value.get("body").is_none_or(Value::is_null) || value.get("isRestricted").and_then(Value::as_bool) == Some(true) {
+                return Err(restricted());
+            }
+            post_items(&value, false)
+        }) {
+            Ok(items) => {
+                posts.extend(items.into_iter().filter(|post| matches_rating(post, ratings)));
+                state.pending.retain(|pending| *pending != id);
+            }
+            Err(error) if global_error(&error) => return Err(error),
+            Err(error) => log::warn!("FANBOX 投稿 {id} 留待下次检查：{error}"),
+        }
+    }
+    Ok(posts)
+}
+
+pub async fn subscription_batch(net: &Net, credentials: Option<&Credentials>, query: &str, state: &mut SubscriptionState, ids: &[u64]) -> Result<Vec<Post>, AppError> {
+    let query = parse_query(query)?;
+    load_subscription_batch(state, ids, &query.ratings, |id| post(net, credentials, id)).await
+}
+
+async fn creator_after(net: &Net, credentials: Option<&Credentials>, creator: &str, after: u64, ratings: &[Rating]) -> Result<(Vec<Post>, usize), AppError> {
+    let query = format!("creator:{creator}");
+    let mut state = SubscriptionState { high_water: split_id(after).0, ..SubscriptionState::default() };
+    let work = subscription_discover(net, credentials, &query, &mut state).await?;
+    let posts = load_subscription_batch(&mut state, &work, ratings, |id| post(net, credentials, id)).await?;
+    Ok((posts, work.len()))
 }
 
 #[derive(Clone, Copy)]
@@ -658,7 +775,7 @@ fn post_items(value: &Value, single_post: bool) -> Result<Vec<Post>, AppError> {
     }
     let mut image_index = 0;
     let mut file_index = list.iter().filter(|media| matches!(media, Media::Image(_))).count();
-    for (index, media) in list.into_iter().enumerate() {
+    for media in list {
         let (item, is_image, name_index) = match media {
             Media::Image(item) => {
                 image_index += 1;
@@ -728,9 +845,11 @@ fn post_items(value: &Value, single_post: bool) -> Result<Vec<Post>, AppError> {
                 format!("{name}{suffix}")
             })
         };
+        let resource = resource_id(id, if is_image { "image" } else { "file" }, item.get("id").and_then(Value::as_str).ok_or_else(|| parse_error("missing resource ID"))?)?;
+        if posts.iter().any(|post| post.id == resource) { continue; }
         posts.push(Post {
             source: Source::Fanbox,
-            id: image_id(id, index)?,
+            id: resource,
             md5: None,
             width: dimension("width")?,
             height: dimension("height")?,
@@ -1179,7 +1298,7 @@ mod tests {
         let result = post_items(&value, true).unwrap();
         assert_eq!(
             result.iter().map(|p| p.id).collect::<Vec<_>>(),
-            vec![42000, 42001]
+            vec![resource_id(42, "image", "a").unwrap(), resource_id(42, "image", "b").unwrap()]
         );
         assert!(result
             .iter()
@@ -1217,7 +1336,7 @@ mod tests {
         let existing = post_items(&value, true).unwrap();
         value["coverImageUrl"] = json!(cover(42));
         let posts = post_items(&value, true).unwrap();
-        assert_eq!(posts.iter().map(|post| post.id).collect::<Vec<_>>(), [42999, 42000, 42001]);
+        assert_eq!(posts.iter().map(|post| post.id).collect::<Vec<_>>(), [42999, existing[0].id, existing[1].id]);
         assert_eq!(posts.iter().map(|post| post.download_index).collect::<Vec<_>>(), [Some(0), Some(1), Some(2)]);
         assert!(is_cover(&posts[0]));
         assert!(!is_cover(&posts[1]));
@@ -1234,17 +1353,17 @@ mod tests {
     #[test]
     fn covers_keep_the_existing_total_resource_limit_and_legacy_slot_identity() {
         let mut value = raw();
-        value["body"]["images"] = Value::Array(vec![image("a"); 1000]);
+        value["body"]["images"] = Value::Array((0..1000).map(|id| image(&id.to_string())).collect());
         let existing = post_items(&value, true).unwrap();
-        assert_eq!(existing.last().unwrap().id, 42999);
+        assert_eq!(existing.last().unwrap().id, resource_id(42, "image", "999").unwrap());
         assert!(!is_cover(existing.last().unwrap()));
         value["coverImageUrl"] = json!(cover(42));
         assert!(post_items(&value, true).is_err());
-        value["body"]["images"] = Value::Array(vec![image("a"); 999]);
+        value["body"]["images"] = Value::Array((0..999).map(|id| image(&id.to_string())).collect());
         let posts = post_items(&value, true).unwrap();
         assert_eq!(posts.len(), 1000);
         assert_eq!(posts.iter().map(|post| post.id).collect::<HashSet<_>>().len(), 1000);
-        assert_eq!(posts.last().unwrap().id, 42998);
+        assert_eq!(posts.last().unwrap().id, resource_id(42, "image", "998").unwrap());
     }
 
     #[test]
@@ -1308,7 +1427,7 @@ mod tests {
         let posts = post_items(&value, true).unwrap();
         assert_eq!(
             posts.iter().map(|post| post.id).collect::<Vec<_>>(),
-            vec![42000, 42001, 42002]
+            ["a", "b", "c"].map(|key| resource_id(42, "file", key).unwrap()).to_vec()
         );
         assert_eq!(posts[0].file_name.as_deref(), Some("sketches.zip"));
         assert_eq!(posts[1].file_name.as_deref(), Some("sketches.zip"));
@@ -1355,7 +1474,7 @@ mod tests {
             }
         });
         let posts = post_items(&value, true).unwrap();
-        assert_eq!(posts.iter().map(|post| post.id).collect::<Vec<_>>(), [42000, 42001, 42002, 42003, 42004, 42005]);
+        assert_eq!(posts.iter().map(|post| post.id).collect::<Vec<_>>(), [("file", "preview"), ("image", "b"), ("file", "archive"), ("image", "a"), ("file", "webp"), ("file", "avif")].map(|(kind, key)| resource_id(42, kind, key).unwrap()));
         assert_eq!(posts.iter().map(|post| post.download_index).collect::<Vec<_>>(), [Some(3), Some(1), Some(4), Some(2), Some(5), Some(6)]);
         assert_eq!(posts[0].file_name.as_deref(), Some("Original preview.png"));
         assert!(posts[1].file_name.is_none());
@@ -1382,7 +1501,7 @@ mod tests {
         );
         assert_eq!(
             posts.iter().map(|post| post.id).collect::<Vec<_>>(),
-            vec![42000, 42001, 42002, 42003]
+            [("file", "z"), ("image", "b"), ("file", "p"), ("image", "a")].map(|(kind, key)| resource_id(42, kind, key).unwrap()).to_vec()
         );
         assert!(posts[1].file_name.is_none() && posts[1].thumb_url.is_some());
         assert_eq!(posts[1].title.as_deref(), Some("October sketches"));
@@ -1561,70 +1680,89 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subscription_batches_keep_oldest_complete_posts_after_filtered_items() {
-        let load = |id| {
-            let mut value = raw();
-            value["id"] = json!(id);
-            if id <= 12 {
-                value["body"] = Value::Null;
-            } else if id <= 24 {
-                value["type"] = json!("text");
-                value["body"] = json!({"text":"no images"});
-            } else if id <= 36 {
-                value["hasAdultContent"] = json!(true);
-            } else {
-                value["type"] = json!("article");
-                value["body"] = json!({"blocks":[{"type":"image","imageId":"a"},{"type":"file","fileId":"z"}],"imageMap":{"a":image("a")},"fileMap":{"z":attachment("z","Archive","zip")}});
-            }
-            std::future::ready(Ok(value))
-        };
-        let ids: BTreeSet<u64> = (1..=60).rev().collect();
-        let (first, count) = collect_after(ids.clone(), 1000, &[Rating::General], load)
-            .await
-            .unwrap();
-        assert_eq!(count, 10);
-        assert_eq!(first.len(), 20);
-        assert_eq!(first.first().unwrap().id, 37000);
-        assert_eq!(first.last().unwrap().id, 46001);
-        assert_eq!(first[1].file_name.as_deref(), Some("Archive.zip"));
-        let (next, _) = collect_after(
-            ids.clone(),
-            first.last().unwrap().id,
-            &[Rating::General],
-            load,
-        )
-        .await
-        .unwrap();
-        assert_eq!(next.first().unwrap().id, 47000);
-        let (recovered, _) = collect_after(ids, 46000, &[Rating::General], load)
-            .await
-            .unwrap();
-        assert_eq!(recovered.first().unwrap().id, 46001);
-        assert_eq!(recovered[1].id, 47000);
+    async fn creator_page_skips_a_broken_post_but_reports_expired_login() {
+        let posts = load_creator_page(&[41, 42, 43], &[], |id| {
+            let mut value = raw(); value["id"] = json!(id);
+            std::future::ready(if id == 42 { Err(parse_error("broken image")) } else { Ok(value) })
+        }).await.unwrap();
+        assert_eq!(posts.iter().map(post_id).collect::<Vec<_>>(), [41, 41, 43, 43]);
+        let error = load_creator_page(&[42], &[], |_| std::future::ready(Err(AppError::BadCredentials { site: SITE }))).await.unwrap_err();
+        assert!(matches!(error, AppError::BadCredentials { .. }));
+        let mut state = SubscriptionState { pending: vec![42], ..Default::default() };
+        assert!(load_subscription_batch(&mut state, &[42], &[], |_| std::future::ready(Err(AppError::BadCredentials { site: SITE }))).await.is_err());
+        assert_eq!(state.pending, [42]);
+    }
+
+    #[test]
+    fn resource_identity_survives_insertion_and_reordering() {
+        let mut value = raw();
+        let original = post_items(&value, true).unwrap();
+        value["body"]["images"] = json!([image("new"), image("b"), image("a")]);
+        let edited = post_items(&value, true).unwrap();
+        assert_eq!(original[0].id, edited[2].id);
+        assert_eq!(original[1].id, edited[1].id);
+        assert!(!original.iter().any(|post| post.id == edited[0].id));
+        assert_eq!(edited[2].download_index, Some(3));
+        assert_eq!(post_id(&edited[2]), 42);
+        assert!(edited.iter().all(|post| post.id >= (1u64 << 62) && post.id <= i64::MAX as u64));
+    }
+
+    #[test]
+    fn subscription_baseline_uses_raw_index_even_when_all_posts_are_hidden_or_filtered() {
+        let items = listed_posts(json!([{"id":"90","isRestricted":true}, {"id":"89","hasAdultContent":true}])).unwrap();
+        let mut state = SubscriptionState::default();
+        state.observe(&items);
+        assert_eq!(state.watermark(), 90_999);
+        assert!(state.pending.is_empty());
+        assert!(!state.newer(&ListedPost { id: 89, published: None }));
+        assert!(state.newer(&ListedPost { id: 91, published: None }));
     }
 
     #[tokio::test]
-    async fn subscriptions_sort_covers_after_complete_bodies_without_losing_recovered_items() {
-        let load = |id| {
-            let mut value = raw();
-            value["id"] = json!(id);
-            value["coverImageUrl"] = json!(cover(id));
-            std::future::ready(Ok(value))
-        };
-        let ids = (42..=53).collect::<BTreeSet<_>>();
-        let (first, count) = collect_after(ids.clone(), 41999, &[], load).await.unwrap();
-        assert_eq!(count, 10);
-        assert_eq!(first.len(), 30);
-        assert_eq!(first.iter().take(3).map(|post| post.id).collect::<Vec<_>>(), [42000, 42001, 42999]);
-        assert!(first.windows(2).all(|pair| pair[0].id < pair[1].id));
-        assert_eq!(first.last().unwrap().id, 51999);
-        let (second, count) = collect_after(ids.clone(), 51999, &[], load).await.unwrap();
-        assert_eq!(count, 2);
-        assert_eq!(second.iter().map(|post| post.id).collect::<Vec<_>>(), [52000, 52001, 52999, 53000, 53001, 53999]);
-        let (recovered, _) = collect_after(ids, 42000, &[], load).await.unwrap();
-        assert_eq!(recovered[0].id, 42001);
-        assert_eq!(recovered[1].id, 42999);
-        assert_eq!(recovered[2].id, 43000);
+    async fn subscriptions_stop_at_old_indexes_and_find_delayed_publications() {
+        let mut state = SubscriptionState { high_water: 100, published_water: Some(1000), boundary_ids: [100].into(), pending: vec![] };
+        let pages: Vec<_> = (0..100).map(|n| Url::parse(&format!("https://api.fanbox.cc/page{n}")).unwrap()).collect();
+        let mut requests = 0;
+        let work = discover(&mut state, pages, |_| {
+            requests += 1;
+            let posts = match requests {
+                1 => json!([{"id":"101"}, {"id":"90","publishedDatetime":"1970-01-01T00:00:02Z"}]),
+                _ => json!([{"id":"100","publishedDatetime":"1970-01-01T00:00:01Z"}]),
+            };
+            std::future::ready(Ok(posts))
+        }).await.unwrap();
+        assert_eq!(requests, 2);
+        assert_eq!(work, [90, 101]);
+        assert_eq!(state.high_water, 101);
+        assert!(!state.newer(&ListedPost { id: 999, published: Some(1000) }));
+        let mut requests = 0;
+        let urls = vec![Url::parse("https://api.fanbox.cc/first").unwrap(), Url::parse("https://api.fanbox.cc/second").unwrap()];
+        assert!(discover(&mut state, urls, |_| {
+            requests += 1;
+            std::future::ready(Ok(json!([{"id":"101"},{"id":"90","publishedDatetime":"1970-01-01T00:00:02Z"}])))
+        }).await.unwrap().is_empty());
+        assert_eq!(requests, 1);
+    }
+
+    #[tokio::test]
+    async fn subscription_errors_and_locked_posts_are_retried_after_other_posts_advance() {
+        let mut state = SubscriptionState { high_water: 44, pending: vec![42, 43, 44], ..SubscriptionState::default() };
+        let posts = load_subscription_batch(&mut state, &[42, 43, 44], &[], |id| {
+            let mut value = raw(); value["id"] = json!(id);
+            if id == 42 { value["body"] = Value::Null; }
+            std::future::ready(if id == 43 { Err(parse_error("bad post")) } else { Ok(value) })
+        }).await.unwrap();
+        assert_eq!(posts.len(), 2);
+        assert!(posts.iter().all(|post| post_id(post) == 44));
+        assert_eq!(state.pending, [42, 43]);
+        // 模拟重启后恢复权限，仍会补上水位之前的两篇投稿。
+        let mut reloaded: SubscriptionState = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        let posts = load_subscription_batch(&mut reloaded, &[42, 43], &[], |id| {
+            let mut value = raw(); value["id"] = json!(id); std::future::ready(Ok(value))
+        }).await.unwrap();
+        assert_eq!(posts.len(), 4);
+        assert!(reloaded.pending.is_empty());
+        assert_eq!(reloaded.high_water, 44);
     }
 
     #[tokio::test]

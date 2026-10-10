@@ -13,6 +13,14 @@ export function useCreatorFeed(active: boolean, creator: string | null, ratings:
   const key = creator ? JSON.stringify([creator, ratings, onlineKey]) : null;
   const [state, setState] = useState<{ key: string | null; data: CreatorFeedSnapshot; loading: boolean }>({ key: null, data: EMPTY, loading: false });
   const current = useRef<{ key: string; feed: CreatorFeed } | null>(null);
+  const localDirty = useRef(false);
+
+  const refreshLocal = useCallback((entry: { key: string; feed: CreatorFeed }) => {
+    localDirty.current = false;
+    void entry.feed.refreshLocal((data) => {
+      if (current.current === entry) setState((prev) => ({ ...prev, data }));
+    });
+  }, []);
 
   const read = useCallback(async (entry: { key: string; feed: CreatorFeed }) => {
     setState((prev) => ({ key: entry.key, data: prev.key === entry.key ? prev.data : EMPTY, loading: true }));
@@ -39,24 +47,26 @@ export function useCreatorFeed(active: boolean, creator: string | null, ratings:
       onlineKey ? (cursor) => searchRemote({ source: "fanbox", tags: `creator:${creator}`, ratings, sort: "newest", cursor }) : null,
     ) };
     current.current = entry;
+    localDirty.current = false;
     void read(entry);
   }, [key, read]);
 
   useEffect(() => {
-    if (active && key) refresh();
-    else current.current = null;
-    return () => { current.current = null; };
-  }, [active, key, refresh]);
+    if (!active) return;
+    if (!key) current.current = null;
+    else if (current.current?.key !== key) refresh();
+    else if (localDirty.current) refreshLocal(current.current);
+  }, [active, key, refresh, refreshLocal]);
+  useEffect(() => () => { current.current = null; }, []);
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshLater = () => {
+    localDirty.current = true;
     if (!active || !key) return;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       const entry = current.current;
-      if (entry) void entry.feed.refreshLocal((data) => {
-        if (current.current === entry) setState((prev) => ({ ...prev, data }));
-      });
+      if (entry) refreshLocal(entry);
     }, 500);
   };
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, [key, active]);

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { formatCount } from "./format";
 import { t, type Msg } from "./i18n";
-import type { Post, Rating, Source } from "./ipc";
+import type { Post, PostId, Rating, Source } from "./ipc";
 
 /** 图库里的一张图。thumbUrl / sampleUrl 指向本地路由，照常用 imageSrc 加载。 */
 export interface LocalPost extends Post {
@@ -14,7 +14,7 @@ export interface LocalPost extends Post {
 
 export interface PostRef {
   source: Source;
-  postId: number;
+  postId: PostId;
 }
 
 export const libraryOpenFile = (post: PostRef) =>
@@ -22,7 +22,7 @@ export const libraryOpenFile = (post: PostRef) =>
 
 export interface DeleteOutcome {
   removed: PostRef[];
-  failed: { postId: number; message: string }[];
+  failed: { postId: PostId; message: string }[];
 }
 
 export interface ImportOutcome {
@@ -77,7 +77,7 @@ export const libraryList = (query: LibraryQuery) => invoke<LibraryPage>("library
 /** 文件夹、分组卡片上扇形展开的封面，按下载时间从新到旧。 */
 export interface Cover {
   source: Source;
-  postId: number;
+  postId: PostId;
   width: number;
   height: number;
   thumbUrl: string;

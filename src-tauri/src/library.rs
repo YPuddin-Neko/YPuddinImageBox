@@ -45,6 +45,7 @@ pub struct LocalPost {
 #[serde(rename_all = "camelCase")]
 pub struct SavedSearch {
     pub id: i64,
+    pub pixiv_input: bool,
     /// 搜哪些站点，按固定顺序；有两个以上时是聚合搜索。
     pub sources: Vec<Source>,
     pub tags: String,
@@ -139,6 +140,7 @@ impl LibraryPage {
 #[serde(rename_all = "camelCase")]
 pub struct Cover {
     pub source: Source,
+    #[serde(with = "crate::post_id")]
     pub post_id: u64,
     pub width: u32,
     pub height: u32,
@@ -248,6 +250,7 @@ pub struct LibraryDeleteGroup {
 #[serde(rename_all = "camelCase")]
 pub struct LibraryDeletePost {
     pub source: Source,
+    #[serde(with = "crate::post_id")]
     pub post_id: u64,
 }
 
@@ -401,7 +404,11 @@ pub struct JobItem {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemNote {
-    pub post_id: i64,
+    #[serde(with = "crate::post_id")]
+    pub post_id: u64,
+    pub post_url: Option<String>,
+    pub file_url: Option<String>,
+    pub download_index: Option<u32>,
     pub status: &'static str,
     pub note: Option<String>,
 }
@@ -532,8 +539,9 @@ fn valid_fanbox_creator(id: &str) -> bool {
 
 fn saved_fanbox_creator(post_url: &str, resource_id: i64) -> Option<&str> {
     let (creator, post_id) = post_url.strip_prefix(fanbox::REFERER_URL)?.strip_prefix('@')?.split_once("/posts/")?;
-    (resource_id >= 1000 && valid_fanbox_creator(creator) && post_id == (resource_id / 1000).to_string())
-        .then_some(creator)
+    let valid_post = post_id.parse::<u64>().ok().is_some_and(|id| id > 0 && id.to_string() == post_id);
+    (resource_id >= 1000 && valid_fanbox_creator(creator) && valid_post
+        && (resource_id >= (1i64 << 62) || post_id == (resource_id / 1000).to_string())).then_some(creator)
 }
 
 const SUBSCRIPTION_COLUMNS: &str = "s.id, s.source, s.tags, s.ratings, s.query, s.enabled, s.interval_minutes, \
@@ -619,20 +627,21 @@ impl Library {
         Ok(path.map(PathBuf::from))
     }
 
+    /// 旧编号按资源位置生成，跨版本去重必须核对站点资源地址。
+    pub async fn fanbox_resource_paths(&self, post: &Post) -> Result<Vec<PathBuf>, sqlx::Error> {
+        let paths: Vec<String> = sqlx::query_scalar(
+            "SELECT local_path FROM posts WHERE source = 'fanbox' AND post_url = ? AND file_url = ?",
+        ).bind(&post.post_url).bind(&post.file_url).fetch_all(&self.pool).await?;
+        Ok(paths.into_iter().map(PathBuf::from).collect())
+    }
+
     /// FANBOX 封面和旧版第 1000 个正文资源共用编号，不能互相替换。
     pub async fn resource_conflicts(&self, post: &Post) -> Result<bool, sqlx::Error> {
-        if post.source != Source::Fanbox || fanbox::split_id(post.id).1 != 999 {
-            return Ok(false);
-        }
-        let existing: Option<Option<String>> =
-            sqlx::query_scalar("SELECT file_url FROM posts WHERE source = ? AND post_id = ?")
-                .bind(post.source.as_str())
-                .bind(post.id as i64)
-                .fetch_optional(&self.pool)
-                .await?;
-        let Some(file_url) = existing else { return Ok(false) };
-        let saved = Post { file_url, ..post.clone() };
-        Ok(fanbox::is_cover(post) != fanbox::is_cover(&saved))
+        if post.source != Source::Fanbox { return Ok(false); }
+        let existing: Option<(String, Option<String>)> =
+            sqlx::query_as("SELECT post_url, file_url FROM posts WHERE source = 'fanbox' AND post_id = ?")
+                .bind(post.id as i64).fetch_optional(&self.pool).await?;
+        Ok(existing.is_some_and(|(post_url, file_url)| post_url != post.post_url || file_url != post.file_url))
     }
 
     /// 图库里 md5 相同的其他帖子（同一张图在另一个站点或另一个帖子里）的本地路径。
@@ -689,8 +698,10 @@ impl Library {
             })
             .map(|post| (post.source, post.id))
             .collect();
-        for post in posts.iter().filter(|post| post.source == Source::Fanbox && fanbox::split_id(post.id).1 == 999) {
-            if owned.contains(&(post.source, post.id)) && self.resource_conflicts(post).await? {
+        for post in posts.iter().filter(|post| post.source == Source::Fanbox) {
+            if !self.fanbox_resource_paths(post).await?.is_empty() {
+                owned.insert((post.source, post.id));
+            } else if owned.contains(&(post.source, post.id)) && self.resource_conflicts(post).await? {
                 owned.remove(&(post.source, post.id));
             }
         }
@@ -804,9 +815,9 @@ impl Library {
         let total: i64 = count.build_query_scalar().fetch_one(&self.pool).await?;
 
         // 先只按排序取出这一页的 id，再取整行：排序时不用搬动几万行完整记录，热门 tag 这类结果多的查询快几倍。
-        // FANBOX 作者页和远程投稿流按资源编号归并，分页必须使用相同的顺序。
+        // FANBOX 作者页按投稿新到旧、稿内资源从前到后分页，与远程投稿流一致。
         let order = if query.fanbox_creator.is_some() && query.sort == LibrarySort::Newest {
-            "p.post_id DESC, p.id DESC"
+            "CAST(substr(p.post_url, instr(p.post_url, '/posts/') + 7) AS INTEGER) DESC, COALESCE(p.download_index, p.post_id % 1000 + 1) ASC, p.id ASC"
         } else {
             query.sort.order_by()
         };
@@ -1005,19 +1016,27 @@ impl Library {
             shared.push(" AND EXISTS (SELECT 1 FROM post_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.post_id = p.id AND t.category IN ('artist', 'copyright', 'character', 'general') AND t.name <> ")
                 .push_bind(group.name.clone()).push(")");
             preview.shared_count = shared.build_query_scalar().fetch_one(&mut *tx).await?;
+            // 从选中图片的关联 tag 聚合，避免每个 tag 都重新扫描该来源的全部图片。
             let mut others = QueryBuilder::<Sqlite>::new(
-                "SELECT t.name, COUNT(*) OVER () FROM tags t WHERE t.category IN ('artist', 'copyright', 'character', 'general') AND t.name <> ",
+                "SELECT name, COUNT(*) OVER () FROM (SELECT DISTINCT t.name FROM posts p \
+                 CROSS JOIN post_tags pt ON pt.post_id = p.id CROSS JOIN tags t ON t.id = pt.tag_id",
             );
-            others.push_bind(group.name.clone())
-                .push(" AND EXISTS (SELECT 1 FROM posts p");
             push_delete_scope(&mut others, scope);
-            others.push(" AND EXISTS (SELECT 1 FROM post_tags pt WHERE pt.post_id = p.id AND pt.tag_id = t.id)) ORDER BY t.name LIMIT 5");
+            others.push(" AND t.category IN ('artist', 'copyright', 'character', 'general') AND t.name <> ")
+                .push_bind(group.name.clone()).push(") ORDER BY name LIMIT 5");
             let rows: Vec<(String, i64)> = others.build_query_as().fetch_all(&mut *tx).await?;
             preview.other_group_count = rows.first().map_or(0, |row| row.1);
             preview.other_groups = rows.into_iter().map(|row| row.0).collect();
         }
         tx.commit().await?;
         Ok(preview)
+    }
+
+    /// 缓存位置不能迁移或清空落在其中的图库原文件，包括旧设置留下的文件。
+    pub async fn has_originals_under(&self, directory: &Path) -> Result<bool, sqlx::Error> {
+        let root = crate::storage::normalize(directory);
+        let paths: Vec<String> = sqlx::query_scalar("SELECT local_path FROM posts").fetch_all(&self.pool).await?;
+        Ok(paths.into_iter().any(|path| crate::storage::normalize(Path::new(&path)).starts_with(&root)))
     }
 
     /// 从图库删除记录（tag 关联随之删除），返回删掉的条数。不碰文件。
@@ -1057,6 +1076,11 @@ impl Library {
     // ---------- 订阅 ----------
 
     pub async fn create_subscription(&self, new: NewSubscription<'_>) -> Result<Subscription, sqlx::Error> {
+        self.create_subscription_with_fanbox_state(new, None).await
+    }
+
+    pub async fn create_subscription_with_fanbox_state(&self, new: NewSubscription<'_>, state: Option<&fanbox::SubscriptionState>) -> Result<Subscription, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
         let now = now_ms();
         let ratings: Vec<&str> = new.ratings.iter().map(|r| r.as_str()).collect();
         let id: i64 = sqlx::query_scalar(
@@ -1074,11 +1098,21 @@ impl Library {
         .bind(now)
         .bind(now)
         .bind(now)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
+        if let Some(state) = state {
+            sqlx::query("INSERT INTO fanbox_subscription_state (subscription_id, state) VALUES (?, ?)")
+                .bind(id).bind(serde_json::to_string(state).map_err(|e| db_err(e.to_string()))?).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
         self.subscription(id)
             .await?
             .ok_or_else(|| db_err(tr!("订阅写入后读取失败", "Couldn't read the subscription back after saving it")))
+    }
+
+    pub async fn subscription_min_posted_at(&self, id: i64) -> Result<Option<i64>, sqlx::Error> {
+        sqlx::query_scalar("SELECT min_posted_at FROM subscriptions WHERE id = ?")
+            .bind(id).fetch_optional(&self.pool).await.map(Option::flatten)
     }
 
     pub async fn subscription(&self, id: i64) -> Result<Option<Subscription>, sqlx::Error> {
@@ -1098,16 +1132,17 @@ impl Library {
 
     /// 收藏的搜索，后收藏的在前。
     pub async fn saved_searches(&self) -> Result<Vec<SavedSearch>, sqlx::Error> {
-        let rows: Vec<(i64, String, String, String, String, i64)> =
-            sqlx::query_as("SELECT id, source, tags, ratings, sort, created_at FROM saved_searches ORDER BY id DESC")
+        let rows: Vec<(i64, String, String, String, String, i64, bool)> =
+            sqlx::query_as("SELECT id, source, tags, ratings, sort, created_at, pixiv_input FROM saved_searches ORDER BY id DESC")
                 .fetch_all(&self.pool)
                 .await?;
         Ok(rows
             .into_iter()
-            .filter_map(|(id, source, tags, ratings, sort, created_at)| {
+            .filter_map(|(id, source, tags, ratings, sort, created_at, pixiv_input)| {
                 let sources = split_sources(&source);
                 (!sources.is_empty()).then(|| SavedSearch {
                     id,
+                    pixiv_input,
                     sources,
                     tags,
                     ratings: ratings.split(',').filter_map(Rating::parse).collect(),
@@ -1119,22 +1154,29 @@ impl Library {
     }
 
     /// 收藏一个搜索条件；同样的条件已经收藏过时什么也不做。
-    pub async fn add_saved_search(
+    #[cfg(test)]
+    pub async fn add_saved_search(&self, sources: &[Source], tags: &str, ratings: &[Rating], sort: Sort) -> Result<(), sqlx::Error> {
+        self.add_saved_search_input(sources, tags, ratings, sort, false).await
+    }
+
+    pub async fn add_saved_search_input(
         &self,
         sources: &[Source],
         tags: &str,
         ratings: &[Rating],
         sort: Sort,
+        pixiv_input: bool,
     ) -> Result<(), sqlx::Error> {
         let (tags, ratings) = normalize_search(tags, ratings);
         sqlx::query(
-            "INSERT OR IGNORE INTO saved_searches (source, tags, ratings, sort, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO saved_searches (source, tags, ratings, sort, created_at, pixiv_input) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(join_sources(sources))
         .bind(tags)
         .bind(ratings)
         .bind(sort.as_str())
         .bind(now_ms())
+        .bind(pixiv_input && sources.contains(&Source::Pixiv))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1178,6 +1220,12 @@ impl Library {
     pub async fn delete_subscription(&self, id: i64) -> Result<bool, sqlx::Error> {
         let result = sqlx::query("DELETE FROM subscriptions WHERE id = ?").bind(id).execute(&self.pool).await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn fanbox_subscription_state(&self, id: i64) -> Result<Option<fanbox::SubscriptionState>, sqlx::Error> {
+        let value: Option<String> = sqlx::query_scalar("SELECT state FROM fanbox_subscription_state WHERE subscription_id = ?")
+            .bind(id).fetch_optional(&self.pool).await?;
+        value.map(|data| serde_json::from_str(&data).map_err(|e| db_err(e.to_string()))).transpose()
     }
 
     /// 开始一次检查：建一个从「已处理到的 id」往新的方向翻页的下载任务，并清零上次的结果。
@@ -1295,7 +1343,7 @@ impl Library {
     pub async fn next_job(&self) -> Result<Option<JobInfo>, sqlx::Error> {
         let sql = format!(
             "SELECT {JOB_COLUMNS} FROM jobs WHERE status IN ('running', 'queued')
-             ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, id LIMIT 1"
+             ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, CASE WHEN source = 'fanbox' AND (subscription_id IS NOT NULL OR cursor LIKE 'fanbox:%') THEN updated_at ELSE created_at END, id LIMIT 1"
         );
         let row = sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_optional(&self.pool).await?;
         row.as_ref().map(job_from_row).transpose()
@@ -1346,7 +1394,18 @@ impl Library {
         cursor: Option<String>,
         seen_max: Option<u64>,
     ) -> Result<JobInfo, sqlx::Error> {
+        self.append_items_with_fanbox_state(job_id, posts, cursor, seen_max, None).await
+    }
+
+    pub async fn append_items_with_fanbox_state(
+        &self, job_id: i64, posts: &[Post], cursor: Option<String>, seen_max: Option<u64>,
+        fanbox_state: Option<&fanbox::SubscriptionState>,
+    ) -> Result<JobInfo, sqlx::Error> {
         let mut tx = self.pool.begin().await?;
+        if let Some(state) = fanbox_state {
+            sqlx::query("INSERT INTO fanbox_subscription_state (subscription_id, state) SELECT subscription_id, ? FROM jobs WHERE id = ? AND subscription_id IS NOT NULL ON CONFLICT(subscription_id) DO UPDATE SET state = excluded.state")
+                .bind(serde_json::to_string(state).map_err(|e| db_err(e.to_string()))?).bind(job_id).execute(&mut *tx).await?;
+        }
         let next_seq: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(seq) + 1, 0) FROM job_items WHERE job_id = ?")
             .bind(job_id)
             .fetch_one(&mut *tx)
@@ -1468,20 +1527,20 @@ impl Library {
 
     /// 失败和跳过的项，供任务详情显示原因。
     pub async fn item_notes(&self, job_id: i64) -> Result<Vec<ItemNote>, sqlx::Error> {
-        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
-            "SELECT post_id, status, note FROM job_items WHERE job_id = ? AND status IN ('failed', 'skipped') ORDER BY seq",
-        )
-        .bind(job_id)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|(post_id, status, note)| ItemNote {
-                post_id,
+        let rows: Vec<(i64, String, Option<String>, String)> = sqlx::query_as(
+            "SELECT post_id, status, note, data FROM job_items WHERE job_id = ? AND status IN ('failed', 'skipped') ORDER BY seq",
+        ).bind(job_id).fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|(post_id, status, note, data)| {
+            let post = serde_json::from_str::<Post>(&data).ok();
+            ItemNote {
+                post_id: post_id as u64,
+                post_url: post.as_ref().map(|post| post.post_url.clone()),
+                file_url: post.as_ref().and_then(|post| post.file_url.clone()),
+                download_index: post.and_then(|post| post.download_index),
                 status: ItemStatus::parse(&status).unwrap_or(ItemStatus::Failed).as_str(),
                 note,
-            })
-            .collect())
+            }
+        }).collect())
     }
 
     pub async fn delete_job(&self, id: i64) -> Result<bool, sqlx::Error> {
@@ -1541,7 +1600,7 @@ fn push_filter(query: &mut QueryBuilder<Sqlite>, filter: &LibraryQuery, tags: &T
             query
                 .push("p.source = 'fanbox' AND p.post_id >= 1000 AND p.post_url = ")
                 .push_bind(format!("{}@{creator}/posts/", fanbox::REFERER_URL))
-                .push(" || CAST(p.post_id / 1000 AS TEXT)");
+                .push(" || CASE WHEN p.post_id >= 4611686018427387904 THEN CAST(CAST(substr(p.post_url, instr(p.post_url, '/posts/') + 7) AS INTEGER) AS TEXT) ELSE CAST(p.post_id / 1000 AS TEXT) END AND CAST(substr(p.post_url, instr(p.post_url, '/posts/') + 7) AS INTEGER) > 0");
         } else {
             query.push("0");
         }
@@ -1672,6 +1731,10 @@ mod tests {
         // 插入次序和发布时间刻意与资源编号不同，作者页仍能和远程投稿流归并。
         for (id, name, downloaded) in [(93_000, "Old name", 1), (91_000, "Old name", 2), (93_999, "New name", 4)] {
             let mut item = fanbox_post(id, "author", name);
+            if id == 93_999 {
+                item.download_index = Some(0);
+                item.file_url = Some("https://pixiv.pximg.net/fanbox/public/images/post/93/cover/a.jpeg".into());
+            }
             item.created_at = Some(if id == 91_000 { "2026-10-05T00:00:00Z" } else { "2026-10-01T00:00:00Z" }.into());
             lib.save_post(&item, &image, downloaded).await.unwrap();
         }
@@ -1910,6 +1973,50 @@ mod tests {
         assert_eq!(ids(LibrarySort::Favorites).await, [3, 1, 2]);
         assert_eq!(ids(LibrarySort::Resolution).await, [2, 3, 1]);
         assert_eq!(ids(LibrarySort::Filesize).await, [2, 1, 3]);
+    }
+
+    #[tokio::test]
+    async fn saved_pixiv_search_modes_and_broken_numeric_subscriptions_migrate_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = SqlitePoolOptions::new().max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(dir.path().join(DB_FILE)).create_if_missing(true))
+            .await.unwrap();
+        let migrations = sqlx::migrate!("./migrations");
+        let previous = sqlx::migrate::Migrator::with_migrations(
+            migrations.iter().filter(|migration| migration.version < 11).cloned().collect(),
+        );
+        previous.run(&pool).await.unwrap();
+        sqlx::query("INSERT INTO saved_searches (source, tags, ratings, sort, created_at) VALUES ('pixiv', '2024', '', 'newest', 1)")
+            .execute(&pool).await.unwrap();
+        for (id, source, tags, query) in [
+            (1, "pixiv", "2024", "id:2024 rating:general"),
+            (2, "pixiv", "002024", "id:2024"),
+            (3, "pixiv", "2024", "2024 rating:general"),
+            (4, "pixiv", "id:2024", "id:2024 rating:general"),
+            (5, "danbooru", "2024", "id:2024 rating:general"),
+        ] {
+            sqlx::query("INSERT INTO subscriptions (id, source, tags, ratings, query, interval_minutes, created_at, updated_at) VALUES (?, ?, ?, '', ?, 60, 123456, 123456)")
+                .bind(id).bind(source).bind(tags).bind(query).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO jobs (kind, source, title, query, status, cursor, subscription_id, created_at, updated_at) VALUES ('query', 'pixiv', '2024', 'id:2024 rating:general', 'queued', 'a2024000', 1, 1, 1)")
+            .execute(&pool).await.unwrap();
+        pool.close().await;
+        let lib = Library::open(dir.path()).await.unwrap();
+        assert!(!lib.saved_searches().await.unwrap()[0].pixiv_input);
+        lib.add_saved_search_input(&[Source::Pixiv], "2024", &[], Sort::Newest, true).await.unwrap();
+        let saved = lib.saved_searches().await.unwrap();
+        assert_eq!(saved.len(), 2);
+        assert!(saved[0].pixiv_input);
+        assert!(!saved[1].pixiv_input);
+        assert_eq!(lib.subscription(1).await.unwrap().unwrap().query, "2024 rating:general");
+        assert_eq!(lib.subscription(2).await.unwrap().unwrap().query, "002024");
+        assert_eq!(lib.subscription_min_posted_at(1).await.unwrap(), Some(123456));
+        assert_eq!(lib.subscription_min_posted_at(2).await.unwrap(), Some(123456));
+        for id in [3, 4, 5] { assert_eq!(lib.subscription_min_posted_at(id).await.unwrap(), None); }
+        assert_eq!(lib.subscription(4).await.unwrap().unwrap().query, "id:2024 rating:general");
+        let job = lib.job(1).await.unwrap().unwrap();
+        assert_eq!(job.query.as_deref(), Some("2024 rating:general"));
+        assert_eq!(job.cursor.as_deref(), Some("a2024000"));
     }
 
     #[tokio::test]
@@ -2186,6 +2293,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_preview_scales_with_selected_post_tags_and_counts_distinct_groups() {
+        let lib = Library::in_memory().await;
+        sqlx::query("WITH RECURSIVE n(value) AS (VALUES(1) UNION ALL SELECT value + 1 FROM n WHERE value < 12000) \
+            INSERT INTO posts (source, post_id, width, height, file_ext, post_url, local_path, downloaded_at) \
+            SELECT 'custom', value, 1, 1, 'png', '', '/fixture/' || value || '.png', value FROM n")
+            .execute(&lib.pool).await.unwrap();
+        sqlx::query("INSERT INTO tags (id, name, category) VALUES (1, 'selected', 'artist')").execute(&lib.pool).await.unwrap();
+        sqlx::query("WITH RECURSIVE n(value) AS (VALUES(0) UNION ALL SELECT value + 1 FROM n WHERE value < 1599) \
+            INSERT INTO tags (id, name, category) SELECT value + 2, printf('tag-%04d', value), 'general' FROM n")
+            .execute(&lib.pool).await.unwrap();
+        sqlx::query("INSERT INTO post_tags SELECT id, 1 FROM posts WHERE id <= 600 UNION ALL \
+            SELECT id, 2 + id % 1600 FROM posts UNION ALL SELECT id, 2 + (id + 301) % 1600 FROM posts")
+            .execute(&lib.pool).await.unwrap();
+        let start = std::time::Instant::now();
+        let preview = lib.delete_preview(&LibraryDeleteScope {
+            source: Source::Custom,
+            group: Some(LibraryDeleteGroup { kind: GroupKind::Artist, name: "selected".into() }),
+        }).await.unwrap();
+        println!("delete_preview: 12000 posts, 1601 tags, 24600 links, 600 selected; {:?}", start.elapsed());
+        assert_eq!(preview.posts.len(), 600);
+        assert_eq!(preview.shared_count, 600);
+        assert_eq!(preview.other_group_count, 901);
+        assert_eq!(preview.other_groups, ["tag-0001", "tag-0002", "tag-0003", "tag-0004", "tag-0005"]);
+    }
+
+    #[tokio::test]
     async fn attachment_counts_and_dates_do_not_become_image_covers() {
         let lib = Library::in_memory().await;
         let make = |id, artist, ext: &str, name: Option<&str>| Post {
@@ -2366,6 +2499,69 @@ mod tests {
         // 删掉订阅后任务留着，只断开关联。
         assert!(lib.delete_subscription(sub.id).await.unwrap());
         assert_eq!(lib.job(job.id).await.unwrap().unwrap().subscription_id, None);
+    }
+
+    #[tokio::test]
+    async fn fanbox_subscription_creation_rolls_back_when_checkpoint_write_fails() {
+        let lib = Library::in_memory().await;
+        sqlx::raw_sql("CREATE TRIGGER reject_fanbox_checkpoint BEFORE INSERT ON fanbox_subscription_state BEGIN SELECT RAISE(ABORT, 'test write failure'); END;")
+            .execute(&lib.pool).await.unwrap();
+        let baseline = fanbox::SubscriptionState { high_water: 42, ..Default::default() };
+        let result = lib.create_subscription_with_fanbox_state(NewSubscription {
+            source: Source::Fanbox, tags: "creator:artist", ratings: &[], query: "creator:artist",
+            interval_minutes: 60, last_seen_id: baseline.watermark() as i64, local_filter: None,
+        }, Some(&baseline)).await;
+        assert!(result.is_err());
+        assert!(lib.subscriptions().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fanbox_stable_ids_keep_saved_creators_feed_order_and_failure_labels() {
+        let lib = Library::in_memory().await;
+        let body = Post { id: (1u64 << 62) + 51, download_index: Some(2), ..fanbox_post(42_001, "author", "Name") };
+        let first = Post { id: (1u64 << 62) + 900, download_index: Some(1), ..body.clone() };
+        let cover = Post { download_index: Some(0), ..fanbox_post(42_999, "author", "Name") };
+        let newer = Post { id: (1u64 << 62) + 1, download_index: Some(1), ..fanbox_post(43_000, "author", "Name") };
+        for item in [&body, &first, &cover, &newer] { lib.save_post(item, Path::new("/saved.png"), 1).await.unwrap(); }
+        let creators = lib.fanbox_creators().await.unwrap();
+        assert_eq!(creators.len(), 1);
+        assert_eq!(creators[0].id, "author");
+        let query = LibraryQuery { source: Some(Source::Fanbox), fanbox_creator: Some("author".into()), limit: 2, ..Default::default() };
+        let page = lib.list(&query).await.unwrap();
+        assert_eq!(page.posts.iter().map(|p| p.post.id).collect::<Vec<_>>(), [newer.id, cover.id]);
+        let page = lib.list(&LibraryQuery { offset: 2, ..query }).await.unwrap();
+        assert_eq!(page.posts.iter().map(|p| p.post.id).collect::<Vec<_>>(), [first.id, body.id]);
+        let job = lib.create_posts_job(Source::Fanbox, "Artist", &[body.clone()]).await.unwrap();
+        lib.finish_item(job.id, 0, ItemStatus::Failed, Some("failed")).await.unwrap();
+        let note = lib.item_notes(job.id).await.unwrap().remove(0);
+        assert_eq!(note.post_id, body.id);
+        assert_eq!(note.post_url.as_deref(), Some(body.post_url.as_str()));
+        assert_eq!(note.download_index, Some(2));
+    }
+
+    #[tokio::test]
+    async fn fanbox_subscription_checkpoint_keeps_pending_ids_and_yields_to_waiting_downloads() {
+        let lib = Library::in_memory().await;
+        let sub = lib.create_subscription(NewSubscription {
+            source: Source::Fanbox, tags: "creator:artist", ratings: &[], query: "creator:artist",
+            interval_minutes: 60, last_seen_id: 42_999, local_filter: None,
+        }).await.unwrap();
+        let check = lib.start_subscription_check(&sub).await.unwrap();
+        let other = lib.create_posts_job(Source::Danbooru, "manual download", &[post(Source::Danbooru, 1, PostTags::default())]).await.unwrap();
+        let state = fanbox::SubscriptionState { high_water: 50, pending: vec![44, 46, 49], ..Default::default() };
+        let image = post(Source::Fanbox, (1u64 << 62) + 123, PostTags::default());
+        let check = lib.append_items_with_fanbox_state(check.id, &[image], Some("fanbox:[49]".into()), Some(state.watermark()), Some(&state)).await.unwrap();
+        assert_eq!(check.cursor.as_deref(), Some("fanbox:[49]"));
+        assert_eq!(lib.fanbox_subscription_state(sub.id).await.unwrap().unwrap().pending, [44, 46, 49]);
+        assert_eq!(lib.subscription(sub.id).await.unwrap().unwrap().last_seen_id, 50_999);
+        assert_eq!(lib.pending_items(check.id, -1, 10).await.unwrap().len(), 1);
+        // 以确定时间模拟一批完成后重新入队，不依赖测试机器的时钟精度。
+        sqlx::query("UPDATE jobs SET created_at = 1, updated_at = CASE id WHEN ? THEN 3 ELSE 2 END").bind(check.id).execute(&lib.pool).await.unwrap();
+        assert_eq!(lib.next_job().await.unwrap().unwrap().id, other.id);
+        assert!(lib.delete_subscription(sub.id).await.unwrap());
+        assert!(lib.fanbox_subscription_state(sub.id).await.unwrap().is_none());
+        assert!(lib.job(check.id).await.unwrap().is_some());
+        assert_eq!(lib.next_job().await.unwrap().unwrap().id, other.id);
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@ import { ratingLabel, RATINGS, remoteSortLabel, SOURCES, sourcesLabel, type Rati
 /** 收藏的搜索条件。`ratings` 为空表示全选；`sources` 有两个以上时是聚合搜索。 */
 export interface SavedSearch {
   id: number;
+  pixivInput?: boolean;
   sources: Source[];
   tags: string;
   ratings: Rating[];
@@ -14,7 +15,7 @@ export interface SavedSearch {
 }
 
 export const savedSearchesList = () => invoke<SavedSearch[]>("saved_searches_list");
-export const savedSearchAdd = (params: { sources: Source[]; tags: string; ratings: Rating[]; sort: RemoteSort }) =>
+export const savedSearchAdd = (params: { sources: Source[]; tags: string; ratings: Rating[]; sort: RemoteSort; pixivInput?: boolean }) =>
   invoke<SavedSearch[]>("saved_search_add", { params });
 export const savedSearchRemove = (id: number) => invoke<SavedSearch[]>("saved_search_remove", { id });
 
@@ -30,11 +31,12 @@ const normalizedSources = (sources: Source[]) => SOURCES.filter((source) => sour
 /** 和收藏里的条件是否相同：tag 之间的空格、站点和分级的顺序都不影响。 */
 export function sameSearch(
   saved: SavedSearch,
-  criteria: { sources: Source[]; tags: string; ratings: Rating[]; sort: RemoteSort },
+  criteria: { sources: Source[]; tags: string; ratings: Rating[]; sort: RemoteSort; pixivInput?: boolean },
 ) {
   return (
     normalizedSources(saved.sources).join(",") === normalizedSources(criteria.sources).join(",") &&
     saved.sort === criteria.sort &&
+    (saved.pixivInput ?? false) === (!!criteria.pixivInput && criteria.sources.includes("pixiv")) &&
     saved.tags === criteria.tags.split(/\s+/).filter(Boolean).join(" ") &&
     normalizedRatings(saved.ratings).join(",") === normalizedRatings(criteria.ratings).join(",")
   );

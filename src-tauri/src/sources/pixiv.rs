@@ -115,6 +115,13 @@ fn parse_query(query: &str) -> Query {
     parsed
 }
 
+pub fn validate_subscription(query: &str) -> Result<(), AppError> {
+    if matches!(parse_query(query).target, Target::Work(_)) {
+        return Err(AppError::InvalidInput(tr!("单个作品无法订阅，请输入 tag 或画师链接", "A single artwork cannot be subscribed to. Enter tags or an artist URL")));
+    }
+    Ok(())
+}
+
 fn numeric_id(value: &str) -> Option<u64> {
     (!value.is_empty() && value.bytes().all(|c| c.is_ascii_digit())).then(|| value.parse().ok()).flatten()
 }
@@ -360,22 +367,25 @@ async fn get<T: DeserializeOwned>(net: &Net, credentials: Option<&Credentials>, 
     }
     let response = net.pixiv.send(request).await?;
     let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
-        return Err(AppError::Http { site: SITE, status: 404 });
-    }
     if net::challenged(&response) {
         let ray = response.headers().get("cf-ray").and_then(|value| value.to_str().ok()).unwrap_or("-");
         log::warn!("Pixiv 的请求被 Cloudflare 拦下：HTTP {}，cf-ray {ray}", status.as_u16());
         return Err(AppError::Challenged(SITE));
     }
     let bytes = response.bytes().await?;
-    // 出错时站点也会给 JSON 说明（例如作品已删除），有说明就显示说明。
-    let envelope = serde_json::from_slice::<Envelope>(&bytes);
+    decode_response(status, &bytes)
+}
+
+fn decode_response<T: DeserializeOwned>(status: reqwest::StatusCode, bytes: &[u8]) -> Result<T, AppError> {
+    let envelope = serde_json::from_slice::<Envelope>(bytes);
+    if status == reqwest::StatusCode::NOT_FOUND {
+        let message = envelope.as_ref().ok().map(|value| value.message.clone()).filter(|value| !value.is_empty());
+        return Err(AppError::NotFound { site: SITE, message });
+    }
     if let Ok(Envelope { error: true, message, .. }) = &envelope {
         return Err(AppError::Upstream { site: SITE, message: message.clone() });
     }
     if !status.is_success() {
-        // 不是站点的 JSON 说明（例如代理或防火墙给的网页），记下开头一段，方便查是谁拦的。
         let head = String::from_utf8_lossy(&bytes[..bytes.len().min(160)]).into_owned();
         log::warn!("Pixiv 返回 HTTP {}：{}", status.as_u16(), head.split_whitespace().collect::<Vec<_>>().join(" "));
         return Err(AppError::Http { site: SITE, status: status.as_u16() });
@@ -709,6 +719,25 @@ mod tests {
             "tags": ["初音ミク", "VOCALOID"], "userId": "4447171", "userName": "かーやんアート",
             "width": 2894, "height": 4093, "pageCount": pages, "createDate": "2026-09-28T22:50:15+09:00"
         })
+    }
+
+    #[test]
+    fn missing_artwork_preserves_site_reason_without_retrying() {
+        let body = br#"{"error":true,"message":"This work was deleted","body":null}"#;
+        let error = decode_response::<Value>(reqwest::StatusCode::NOT_FOUND, body).unwrap_err();
+        assert!(matches!(&error, AppError::NotFound { message: Some(message), .. } if message == "This work was deleted"));
+        assert!(!error.is_transient());
+        assert_eq!(serde_json::to_value(&error).unwrap()["code"], "not_found");
+        assert!(!decode_response::<Value>(reqwest::StatusCode::NOT_FOUND, b"<html>missing</html>").unwrap_err().is_transient());
+        assert!(decode_response::<Value>(reqwest::StatusCode::SERVICE_UNAVAILABLE, b"unavailable").unwrap_err().is_transient());
+    }
+
+    #[test]
+    fn numeric_tag_subscriptions_remain_tags_and_artwork_targets_are_rejected() {
+        assert!(validate_subscription("2024").is_ok());
+        assert!(validate_subscription("id:2024").is_err());
+        assert!(validate_subscription("https://www.pixiv.net/artworks/2024").is_err());
+        assert!(validate_subscription("https://www.pixiv.net/users/2024").is_ok());
     }
 
     #[test]

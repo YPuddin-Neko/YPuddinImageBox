@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import { t, type Msg } from "./i18n";
-import type { Post, SearchParams, Source } from "./ipc";
+import type { Post, PostId, SearchParams, Source } from "./ipc";
 
 export type JobKind = "posts" | "query";
 export type JobStatus = "queued" | "running" | "paused" | "done" | "failed" | "canceled";
@@ -30,7 +30,10 @@ export interface Job {
 }
 
 export interface ItemNote {
-  postId: number;
+  postId: PostId;
+  postUrl: string | null;
+  fileUrl: string | null;
+  downloadIndex: number | null;
   status: "failed" | "skipped";
   note: string | null;
 }
@@ -71,5 +74,5 @@ export const EVENTS = {
 
 export interface SavedPayload {
   source: Source;
-  postId: number;
+  postId: PostId;
 }

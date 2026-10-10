@@ -313,6 +313,7 @@ export function MultiSelect<T extends string | number>({
   onChange,
   allLabel,
   showAll = true,
+  allValues,
   sizers,
   ...common
 }: CommonProps & {
@@ -321,12 +322,15 @@ export function MultiSelect<T extends string | number>({
   onChange: (values: T[]) => void;
   allLabel: string;
   showAll?: boolean;
+  /** 一键选择的默认集合；其余选项仍可单独选择。 */
+  allValues?: T[];
   /** 按钮宽度按这些文字里最宽的算，勾选变化时不跳动。 */
   sizers?: string[];
 }) {
   const chosen = options.filter((option) => values.includes(option.value)).map((option) => option.value);
-  const all = chosen.length === 0 || chosen.length === options.length;
-  const effective = all ? options.map((option) => option.value) : chosen;
+  const defaults = options.filter((option) => !allValues || allValues.includes(option.value)).map((option) => option.value);
+  const effective = chosen.length === 0 ? defaults : chosen;
+  const all = effective.length === defaults.length && defaults.every((value) => effective.includes(value));
   const text = all && showAll
     ? allLabel
     : options
@@ -336,7 +340,7 @@ export function MultiSelect<T extends string | number>({
 
   const toggle = (key: string) => {
     if (key === ALL_KEY) {
-      if (!all) onChange(options.map((option) => option.value));
+      if (!all) onChange(defaults);
       return;
     }
     const option = options.find((o) => String(o.value) === key);

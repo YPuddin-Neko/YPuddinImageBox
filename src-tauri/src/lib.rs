@@ -6,6 +6,7 @@ mod keys;
 pub mod library;
 pub mod net;
 mod protocol;
+pub mod post_id;
 mod sealed;
 mod secrets;
 pub mod settings;
@@ -291,6 +292,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 #[serde(rename_all = "camelCase")]
 struct SavedPayload {
     source: Source,
+    #[serde(with = "crate::post_id")]
     post_id: u64,
 }
 

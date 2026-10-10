@@ -22,6 +22,6 @@ export function hasPixivIdCollision(
   const id = canonicalId(words[0]);
   if (!id || id === "0") return false;
   return creators.some((creator) => canonicalId(creator.id) === id)
-    && posts.some((post) => post.source === "pixiv" && Number.isSafeInteger(post.id) && post.id >= 0
-      && String(Math.floor(post.id / 1000)) === id);
+    && posts.some((post) => post.source === "pixiv" && (typeof post.id === "string" ? /^[0-9]+$/.test(post.id) : Number.isSafeInteger(post.id) && post.id >= 0)
+      && (BigInt(post.id) / 1000n).toString() === id);
 }

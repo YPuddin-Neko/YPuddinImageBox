@@ -79,6 +79,55 @@ impl Default for FanboxDownloadSettings {
 }
 
 impl FanboxDownloadSettings {
+    pub fn normalized_for_storage(self, storage: &crate::storage::Storage) -> Result<Self, AppError> {
+        let mut settings = self.normalized()?;
+        let default = storage.path(crate::storage::StorageKind::Images).join("fanbox");
+        if settings.directory.as_ref().is_some_and(|path| crate::storage::normalize(path) == crate::storage::normalize(&default)) {
+            settings.directory = None;
+        }
+        settings.validate_storage(storage)?;
+        Ok(settings)
+    }
+
+    pub fn validate_storage(&self, storage: &crate::storage::Storage) -> Result<(), AppError> {
+        self.validate()?;
+        let images = storage.path(crate::storage::StorageKind::Images);
+        for cache in storage.locations(crate::storage::StorageKind::Cache) {
+            self.validate_cache_path(&images, &cache)?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_cache_path(&self, images: &Path, cache: &Path) -> Result<(), AppError> {
+        let directory = self.directory.as_ref().filter(|path| !path.to_string_lossy().trim().is_empty())
+            .cloned().unwrap_or_else(|| images.join("fanbox"));
+        if crate::storage::paths_overlap(&directory, cache) {
+            return Err(AppError::InvalidInput(tr!(
+                "FANBOX 保存位置不能与缓存位置重叠",
+                "The FANBOX save location must not overlap the cache location"
+            )));
+        }
+        Ok(())
+    }
+
+    /// 旧版本可能把默认位置存成固定路径；图片位置改变时恢复跟随，随图片移动的自定义子目录一起改写。
+    pub fn after_images_change(&self, from: &Path, to: &Path, moving: bool) -> Self {
+        let mut settings = self.clone();
+        if let Some(directory) = &self.directory {
+            let default = crate::storage::normalize(&from.join("fanbox"));
+            let directory = crate::storage::normalize(directory);
+            let from = crate::storage::normalize(from);
+            if directory == default {
+                settings.directory = None;
+            } else if moving {
+                if let Ok(relative) = directory.strip_prefix(&from) {
+                    settings.directory = Some(to.join(relative));
+                }
+            }
+        }
+        settings
+    }
+
     pub fn normalized(mut self) -> Result<Self, AppError> {
         if self.directory.as_ref().is_some_and(|path| path.to_string_lossy().trim().is_empty()) {
             self.directory = None;

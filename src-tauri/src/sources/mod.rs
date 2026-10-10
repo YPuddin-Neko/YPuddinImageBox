@@ -343,6 +343,7 @@ impl PostTags {
 #[serde(rename_all = "camelCase")]
 pub struct Post {
     pub source: Source,
+    #[serde(with = "crate::post_id")]
     pub id: u64,
     pub md5: Option<String>,
     pub width: u32,
@@ -388,12 +389,13 @@ impl Post {
                 (post, index) => format!("#{post} p{}", index + 1),
             },
             Source::Fanbox if fanbox::is_cover(self) => {
-                let (post, _) = fanbox::split_id(self.id);
+                let post = fanbox::post_id(self);
                 crate::i18n::tr!("#{post} 封面", "#{post} Cover")
             }
-            Source::Fanbox => match fanbox::split_id(self.id) {
-                (post, 0) => format!("#{post}"),
-                (post, index) => format!("#{post} p{}", index + 1),
+            Source::Fanbox => {
+                let post = fanbox::post_id(self);
+                let index = fanbox::display_index(self);
+                if index <= 1 { format!("#{post}") } else { format!("#{post} p{index}") }
             },
             Source::X => format!("#{}", x::label_id(self.id)),
             _ => format!("#{}", self.id),
@@ -411,6 +413,8 @@ impl Post {
 pub struct SearchParams {
     pub source: Source,
     #[serde(default)]
+    pub pixiv_input: bool,
+    #[serde(default)]
     pub tags: String,
     #[serde(default)]
     pub ratings: Vec<Rating>,
@@ -424,7 +428,7 @@ pub struct SearchParams {
 
 impl SearchParams {
     pub fn normalized_tags(&self) -> String {
-        if self.source == Source::Pixiv { pixiv::normalize_input(&self.tags) } else { self.tags.clone() }
+        if self.source == Source::Pixiv && self.pixiv_input { pixiv::normalize_input(&self.tags) } else { self.tags.clone() }
     }
 
     /// 用户输入的 tag 加上所选排序的条件。选了排序时以选项为准，输入框里手写的 order: / sort: 不再发给站点。
@@ -464,6 +468,7 @@ pub struct SearchPage {
     /// 超出 tag 上限、在本地筛选的 tag（空格分隔，-tag 表示排除），没有时为空字符串。
     pub local_filter: String,
     /// 这一页里已在图库中的帖子 id。
+    #[serde(with = "crate::post_id::vec")]
     pub owned: Vec<u64>,
     pub creators: Vec<pixiv::PixivCreator>,
     pub creator_error: Option<AppError>,
@@ -787,7 +792,7 @@ mod tests {
 
     #[test]
     fn sort_adds_site_term_and_overrides_typed_order() {
-        let params = |source, tags: &str, sort| SearchParams { source, tags: tags.into(), ratings: vec![], sort, cursor: None };
+        let params = |source, tags: &str, sort| SearchParams { source, pixiv_input: false, tags: tags.into(), ratings: vec![], sort, cursor: None };
         assert_eq!(params(Source::Danbooru, "sky", Sort::Newest).tags_with_sort().unwrap(), "sky");
         // 默认顺序时照样用手写的排序；选了排序就以选项为准。
         assert_eq!(params(Source::Danbooru, "sky order:score", Sort::Newest).tags_with_sort().unwrap(), "sky order:score");
@@ -805,12 +810,15 @@ mod tests {
     #[test]
     fn pixiv_numeric_inputs_are_explicit_before_building_new_query_plans() {
         let params = SearchParams {
-            source: Source::Pixiv, tags: "22675109".into(), ratings: vec![Rating::General], sort: Sort::Newest, cursor: None,
+            source: Source::Pixiv, pixiv_input: true, tags: "22675109".into(), ratings: vec![Rating::General], sort: Sort::Newest, cursor: None,
         };
         assert_eq!(params.tags_with_sort().unwrap(), "id:22675109");
         assert_eq!(params.tags_for_count().unwrap(), "id:22675109");
-        let subscription = filter::plan_query(params.source, &params.normalized_tags(), &params.ratings, None).unwrap();
-        assert_eq!(subscription.server_query, "id:22675109 rating:general");
+        let subscription = filter::plan_query(params.source, &params.tags, &params.ratings, None).unwrap();
+        assert_eq!(subscription.server_query, "22675109 rating:general");
+        let saved = SearchParams { pixiv_input: false, ..params.clone() };
+        assert_eq!(saved.tags_with_sort().unwrap(), "22675109");
+        assert_eq!(saved.tags_for_count().unwrap(), "22675109");
         let oldest = SearchParams { sort: Sort::Oldest, ..params.clone() };
         assert_eq!(oldest.tags_with_sort().unwrap(), "id:22675109 order:date");
         assert_eq!(oldest.tags_for_count().unwrap(), "id:22675109");
